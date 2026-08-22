@@ -3,6 +3,10 @@ import { fixtureBridge } from "./fixtures";
 import { appReducer, clampSidebarWidth, initialState, presentError } from "./state";
 
 describe("app reducer", () => {
+  it("starts on the control-center view", () => {
+    expect(initialState.activeView).toBe("control-center");
+  });
+
   it("discards a stale response instead of changing the active project", async () => {
     const response = await fixtureBridge().bootstrap();
     const catalog = await fixtureBridge().catalog();

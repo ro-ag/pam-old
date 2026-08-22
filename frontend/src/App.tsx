@@ -40,8 +40,10 @@ import {
 } from "./components/Surfaces";
 import { ActivityView } from "./views/ActivityView";
 import { CallersView } from "./views/CallersView";
+import { ControlCenterView } from "./views/ControlCenterView";
 import { FlowsView } from "./views/FlowsView";
-import { OptionsView } from "./views/OptionsView";
+import { AccessView } from "./views/ProjectViews";
+import { SkillsView } from "./views/SkillsView";
 import { appReducer, initialState, presentError } from "./state";
 import {
   applyPamTheme,
@@ -115,7 +117,7 @@ function sameAuthority(left: CommandFence, right: CommandFence): boolean {
   return left.projectHandle === right.projectHandle && left.generation === right.generation;
 }
 
-export function App({ bridge, initialView = "activity", initialTheme, initialThemeMode }: AppProps) {
+export function App({ bridge, initialView = "control-center", initialTheme, initialThemeMode }: AppProps) {
   const [initialLayout] = useState(readInitialLayout);
   const [theme, setTheme] = useState<PamTheme>(() => initialTheme ?? readPersistedPamTheme(initialLayout.storage));
   const [themeMode, setThemeMode] = useState<PamThemeMode>(() => initialThemeMode ?? readPersistedPamThemeMode(initialLayout.storage));
@@ -330,7 +332,19 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
           return;
         }
         if (activeOverlay(effectiveOverlays)) return;
-        const view = event.key === "1" ? "activity" : event.key === "2" ? "callers" : event.key === "3" ? "flows" : event.key === "4" ? "options" : null;
+        const view = event.key === "1"
+          ? "control-center"
+          : event.key === "2"
+            ? "access"
+            : event.key === "3"
+              ? "skills"
+              : event.key === "4"
+                ? "flows"
+                : event.key === "5"
+                  ? "activity"
+                  : event.key === "6"
+                    ? "callers"
+                    : null;
         if (view) { event.preventDefault(); dispatch({ type: "navigate", view }); }
         if (event.key.toLowerCase() === "r") { event.preventDefault(); refresh(); }
       }
@@ -349,7 +363,8 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
     if (project.handle === data.project.handle) return;
     const operationId = nextOperationId();
     const pendingFence = { projectHandle: project.handle, generation: "", operationId };
-    void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`);
+    void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`)
+      .then((activated) => { if (activated) dispatch({ type: "navigate", view: "control-center" }); });
     if (mobileSidebarOpen) toggleSidebar();
   };
   const toggleDaemon = () => {
@@ -461,15 +476,29 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
     }
   };
   const commands: CommandPaletteCommand[] = [
-    { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘1" },
-    { id: "view-callers", label: "Open Callers", description: "Show registered callers and watched projects.", shortcut: "⌘2" },
-    { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘3" },
-    { id: "view-options", label: "Open Options", description: "Choose appearance and daemon lifecycle options.", shortcut: "⌘4" },
+    { id: "view-control-center", label: "Open Control Center", description: "Show the project's runs, requests, and outcomes.", shortcut: "⌘1" },
+    { id: "view-access", label: "Open Access", description: "Show the project's authorized capabilities.", shortcut: "⌘2" },
+    { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
+    { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
+    { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
+    { id: "view-callers", label: "Open Callers", description: "Show the callers registered with the daemon.", shortcut: "⌘6" },
     { id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." },
     { id: "refresh", label: "Refresh project", description: "Request current state from PAM.", shortcut: "⌘R" },
   ];
   const runCommand = (id: string) => {
-    const view = id === "view-activity" ? "activity" : id === "view-callers" ? "callers" : id === "view-flows" ? "flows" : id === "view-options" ? "options" : null;
+    const view = id === "view-control-center"
+      ? "control-center"
+      : id === "view-access"
+        ? "access"
+        : id === "view-skills"
+          ? "skills"
+          : id === "view-flows"
+            ? "flows"
+            : id === "view-activity"
+              ? "activity"
+              : id === "view-callers"
+                ? "callers"
+                : null;
     if (view) {
       dispatch({ type: "navigate", view });
       closeActiveOverlay();
@@ -498,6 +527,9 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
           collapsed={state.sidebarCollapsed}
           pending={pending}
           trapFocus={mobileSidebarOpen}
+          projectMenuOpen={effectiveOverlays.stack.some(({ kind }) => kind === "project")}
+          onProjectMenuOpenChange={setProjectMenuOpen}
+          onSelectProject={selectProject}
           onNavigate={(view) => { dispatch({ type: "navigate", view }); if (mobileSidebarOpen) toggleSidebar(); }}
           onToggleDaemon={toggleDaemon}
           onRestartDaemon={restartDaemon}
@@ -506,7 +538,7 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
         {mobileSidebarOpen && <button type="button" className="sidebar-scrim" aria-label="Close project sidebar" tabIndex={-1} onClick={toggleSidebar} />}
         <ResizeSeparator collapsed={state.sidebarCollapsed || compactViewport} width={state.sidebarWidth} viewportWidth={viewportWidth} onResizePreview={previewSidebarWidth} onResizeCommit={commitSidebarWidth} onToggle={toggleSidebar} />
         <section className="workspace" inert={mobileSidebarOpen || undefined} aria-hidden={mobileSidebarOpen || undefined}>
-          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} data={data} collapsed={state.sidebarCollapsed} pending={pending} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
+          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} data={data} collapsed={state.sidebarCollapsed} pending={pending} theme={theme} themeMode={themeMode} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
           <div className="workspace-body">
           {state.loadState === "recovering" && state.error && <div className="inline-recovery" role="alert"><WarningCircle size={18} /><span>{state.error}</span><button type="button" onClick={refresh}>Retry</button></div>}
           <AnimatePresence mode="wait" initial={false}>
@@ -518,23 +550,9 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.24, ease: [0.33, 1, 0.68, 1] }}
             >
-              {state.activeView === "activity" && (
-                <ActivityView
+              {state.activeView === "control-center" && (
+                <ControlCenterView
                   data={data}
-                  bridge={bridge}
-                  fence={state.activeFence}
-                  pending={pending}
-                  onStartDaemon={toggleDaemon}
-                />
-              )}
-              {state.activeView === "callers" && (
-                <CallersView
-                  data={data}
-                  bridge={bridge}
-                  fence={state.activeFence}
-                  projectMenuOpen={effectiveOverlays.stack.some(({ kind }) => kind === "project")}
-                  onProjectMenuOpenChange={setProjectMenuOpen}
-                  onSelectProject={selectProject}
                   onCopy={(brief) => void copyBrief(brief)}
                   onEvidence={(handle) => void loadEvidence(handle)}
                   onContinue={() => { dispatch({ type: "navigate", view: "flows" }); showToast("Flow workspace opened"); }}
@@ -546,18 +564,26 @@ export function App({ bridge, initialView = "activity", initialTheme, initialThe
                   registrationBusy={pending}
                 />
               )}
-              {state.activeView === "flows" && <FlowsView bridge={bridge} fence={state.activeFence} onError={showToast} onToast={showToast} />}
-              {state.activeView === "options" && (
-                <OptionsView
-                  theme={theme}
-                  themeMode={themeMode}
-                  onThemeChange={selectTheme}
-                  onThemeModeChange={selectThemeMode}
-                  daemon={data.daemon}
-                  pending={pending}
-                  onToggleDaemon={toggleDaemon}
-                  onRestartDaemon={restartDaemon}
+              {state.activeView === "access" && <AccessView data={data} />}
+              {state.activeView === "skills" && (
+                <SkillsView
+                  key={`${state.activeFence.projectHandle}:${state.activeFence.generation}`}
+                  bridge={bridge}
+                  fence={state.activeFence}
                 />
+              )}
+              {state.activeView === "flows" && <FlowsView bridge={bridge} fence={state.activeFence} onError={showToast} onToast={showToast} />}
+              {state.activeView === "activity" && (
+                <ActivityView
+                  data={data}
+                  bridge={bridge}
+                  fence={state.activeFence}
+                  pending={pending}
+                  onStartDaemon={toggleDaemon}
+                />
+              )}
+              {state.activeView === "callers" && (
+                <CallersView bridge={bridge} fence={state.activeFence} />
               )}
             </motion.div>
           </AnimatePresence>

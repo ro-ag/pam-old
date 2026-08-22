@@ -1,16 +1,8 @@
-import {
-  ArrowClockwise,
-  FolderOpen,
-  UserCircle,
-} from "@phosphor-icons/react";
+import { ArrowClockwise, UserCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { withOperation } from "../bridge";
-import { ProjectMenu } from "../components/Shell";
 import type { CallersDto, CommandFence, PamBridge } from "../domain";
-import type { AgentBriefView, ControlCenterView, ProjectView } from "../selectors";
 import { presentError } from "../state";
-import { AccessView, CurrentView } from "./ProjectViews";
 
 function formatDate(registeredAtMs: number): string {
   const date = new Date(registeredAtMs);
@@ -20,40 +12,11 @@ function formatDate(registeredAtMs: number): string {
 }
 
 export interface CallersViewProps {
-  data: ControlCenterView;
   bridge: PamBridge;
   fence: CommandFence;
-  projectMenuOpen: boolean;
-  onProjectMenuOpenChange: (open: boolean) => void;
-  onSelectProject: (project: ProjectView) => void;
-  onCopy: (brief: AgentBriefView) => void;
-  onEvidence: (handle: string) => void;
-  onContinue: () => void;
-  onOpenQueue: (returnFocusTarget?: HTMLElement) => void;
-  onOpenApproval: () => void;
-  onRecoverDaemon: () => void;
-  onRefresh: () => void;
-  onRegisterCaller: () => void;
-  registrationBusy: boolean;
 }
 
-export function CallersView({
-  data,
-  bridge,
-  fence,
-  projectMenuOpen,
-  onProjectMenuOpenChange,
-  onSelectProject,
-  onCopy,
-  onEvidence,
-  onContinue,
-  onOpenQueue,
-  onOpenApproval,
-  onRecoverDaemon,
-  onRefresh,
-  onRegisterCaller,
-  registrationBusy,
-}: CallersViewProps) {
+export function CallersView({ bridge, fence }: CallersViewProps) {
   const [callers, setCallers] = useState<CallersDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,7 +47,7 @@ export function CallersView({
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
-        <div><h1>Callers</h1><p>Who PAM listens to, and the projects they work in.</p></div>
+        <div><h1>Callers</h1><p>Who PAM listens to, at a glance.</p></div>
       </header>
       <section className="panel" aria-labelledby="callers-heading">
         <div className="panel-title">
@@ -126,50 +89,6 @@ export function CallersView({
           </div>
         )}
       </section>
-      <section className="panel" aria-labelledby="projects-heading">
-        <div className="panel-title">
-          <div><span className="eyebrow">Watched projects</span><h2 id="projects-heading">Projects</h2></div>
-          <FolderOpen size={22} aria-hidden="true" />
-        </div>
-        <div className="project-picker">
-          <ProjectMenu
-            active={data.project}
-            projects={data.catalog}
-            open={projectMenuOpen}
-            onOpenChange={onProjectMenuOpenChange}
-            onSelect={onSelectProject}
-          />
-          <p className="project-picker-location">{data.project.rootLabel}</p>
-        </div>
-      </section>
-      <Tabs className="panel project-detail" defaultSelectedKey="current">
-        <TabList className="flow-inspector-tabs" aria-label="Project detail">
-          <Tab id="current" className="flow-inspector-tab">Current</Tab>
-          <Tab id="access" className="flow-inspector-tab">Access</Tab>
-        </TabList>
-        <TabPanel id="current" className="project-detail-panel">
-          <CurrentView
-            data={data}
-            onCopy={onCopy}
-            onEvidence={onEvidence}
-            onContinue={onContinue}
-            onOpenQueue={onOpenQueue}
-            onOpenApproval={onOpenApproval}
-            onRecoverDaemon={onRecoverDaemon}
-            onRefresh={onRefresh}
-            onRegisterCaller={onRegisterCaller}
-            registrationBusy={registrationBusy}
-          />
-        </TabPanel>
-        <TabPanel id="access" className="project-detail-panel">
-          <AccessView
-            key={`${fence.projectHandle}:${fence.generation}`}
-            data={data}
-            bridge={bridge}
-            fence={fence}
-          />
-        </TabPanel>
-      </Tabs>
     </main>
   );
 }
