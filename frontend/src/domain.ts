@@ -197,6 +197,67 @@ export interface FlowSaveDataDto {
 
 export type FlowSaveDto = FencedResponse<FlowSaveDataDto>;
 
+// Mirrors the serde JSON of pam_flow::FlowDefinition exactly (snake_case fields,
+// tagged enums via "kind"/"type", snake_case variant values).
+export type FlowEffectJson = "read_only" | "stateful";
+export type FlowSemanticJson = "observe" | "verify" | "change";
+export type FlowApprovalJson = "none" | "required";
+
+export type FlowConditionJson =
+  | { kind: "always" }
+  | { kind: "succeeded"; step: string }
+  | { kind: "failed"; step: string };
+
+export interface FlowRetryJson {
+  max_attempts: number;
+  initial_backoff_ms: number;
+  max_backoff_ms: number;
+}
+
+export type FlowActionJson =
+  | { type: "command"; program: string; args: string[]; working_directory: string }
+  | { type: "connector"; connector: string; capability: string; resource: { kind: string; id: string } };
+
+export interface FlowStepJson {
+  id: string;
+  description: string;
+  depends_on: string[];
+  condition: FlowConditionJson;
+  retry: FlowRetryJson;
+  approval: FlowApprovalJson;
+  idempotency_key: string | null;
+  timeout_seconds: number;
+  effect: FlowEffectJson;
+  semantic: FlowSemanticJson | null;
+  action: FlowActionJson;
+}
+
+export interface FlowOutcomeJson {
+  solved: string;
+  changed: string;
+  verified: string;
+  unresolved: string;
+  blocked: string;
+}
+
+export interface FlowDefinitionJson {
+  schema_version: number;
+  id: string;
+  name: string;
+  description: string;
+  revision: number;
+  steps: FlowStepJson[];
+  outcome: FlowOutcomeJson;
+}
+
+export type FlowGraphDto =
+  | { status: "ok"; definition: FlowDefinitionJson }
+  | { status: "invalid"; failure: { detail: string } };
+
+export type FlowComposeDto =
+  | { status: "ok"; source: string }
+  | { status: "invalid"; failure: { detail: string } };
+
 export interface SkillArtifactDto {
   id: string;
   name: string;
@@ -415,6 +476,37 @@ export type ActivityDto =
   | { status: "ok"; events: ActivityEventDto[]; truncated: boolean }
   | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
 
+export interface ModelSummaryDto {
+  modelId: string;
+  sizeBytes: number;
+}
+
+export interface ModelFailureDto {
+  kind?: string;
+  code: string | null;
+  detail: string;
+  recovery: string | null;
+}
+
+export type ModelStatusDto =
+  | { status: "ok"; loaded: ModelSummaryDto | null; registered: ModelSummaryDto[] }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export interface ChatMessageDto {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface ModelUsageDto {
+  inputTokens: number;
+  sampledOutputTokens: number;
+  emittedOutputTokens: number;
+}
+
+export type ModelInferDto =
+  | { status: "ok"; model: string; text: string; finishReason: string; usage: ModelUsageDto }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface CallerDto {
   callerId: string;
   registeredAtMs: number;
@@ -431,6 +523,8 @@ export interface PamBridge {
   catalog(): Promise<CatalogDto>;
   daemonActivity(fence: CommandFence, limit?: number): Promise<ActivityDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
+  modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
+  modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
   startDaemon(fence: CommandFence): Promise<SnapshotDto>;
@@ -444,9 +538,13 @@ export interface PamBridge {
   loadSkillAudit(fence: CommandFence): Promise<SkillAuditDto>;
   runSkillAudit(fence: CommandFence): Promise<SkillAuditDto>;
   openFlow(fence: CommandFence, flowHandle: string): Promise<FlowDocumentDto>;
+  flowGraph(fence: CommandFence, source: string): Promise<FlowGraphDto>;
+  flowCompose(fence: CommandFence, definition: FlowDefinitionJson): Promise<FlowComposeDto>;
   validateFlow(fence: CommandFence, documentHandle: string, source: string): Promise<FlowReviewDto>;
   saveFlow(fence: CommandFence, documentHandle: string, source: string): Promise<FlowSaveDto>;
 }
 
 export const MAX_EVIDENCE_TEXT = 4_096;
 export const MAX_FLOW_SOURCE = 128_000;
+export const MAX_CHAT_MESSAGES = 100;
+export const CHAT_MAX_OUTPUT_TOKENS = 512;

@@ -37,12 +37,18 @@ export interface EvidenceOverlayEntry extends OverlayEntryBase {
   retryable: boolean;
 }
 
+export interface ModelChatOverlayEntry extends OverlayEntryBase {
+  kind: "model-chat";
+  modelId: string;
+}
+
 export type OverlayEntry =
   | ProjectOverlayEntry
   | QueueOverlayEntry
   | CommandOverlayEntry
   | ApprovalOverlayEntry
-  | EvidenceOverlayEntry;
+  | EvidenceOverlayEntry
+  | ModelChatOverlayEntry;
 
 export interface OverlayState {
   authority: OverlayAuthority | null;

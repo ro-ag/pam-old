@@ -64,6 +64,16 @@ fn activity_request(
     .authenticated(CallerCredential::new(credential))
 }
 
+fn model_status_request(request_id: &str, caller_id: &str, credential: &str) -> RequestEnvelope {
+    RequestEnvelope::model_status(
+        RequestId::from(request_id),
+        CallerId::from(caller_id),
+        ProjectId::from("project-observatory"),
+        IdempotencyKey::new(format!("{request_id}-key")),
+    )
+    .authenticated(CallerCredential::new(credential))
+}
+
 async fn start_daemon(
     endpoint: LocalEndpoint,
 ) -> (
@@ -236,6 +246,85 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
             "denied-observer",
             "denied-observer-credential",
             5,
+        ),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        denied.result.body,
+        ResultBody::Failure(ref failure) if failure.code == FailureCode::Forbidden
+    ));
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(runtime);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() {
+    let runtime = test_runtime("model-status-round-trip");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed.register_caller(
+        CallerId::from("denied-observer"),
+        CallerCredential::new("denied-observer-credential"),
+        2,
+    )
+    .await
+    .unwrap();
+    // model.status is a baseline capability, so denial coverage needs an
+    // explicit deny grant.
+    seed.put_grant(PutGrant {
+        grant: Grant {
+            id: GrantId::from("model-status-denied-grant"),
+            caller: CallerId::from("denied-observer"),
+            project: ProjectId::from("project-observatory"),
+            capability: CapabilityName::parse("model.status").unwrap(),
+            resource: ResourceScope::Any,
+            effect: Effect::Deny,
+            approval: ApprovalRequirement::None,
+            expires_at_ms: None,
+            revoked_at_ms: None,
+        },
+        created_at_ms: 3,
+    })
+    .await
+    .unwrap();
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
+    wait_until_ready(&endpoint).await;
+
+    // A daemon started without a model reports an empty surface as a baseline
+    // read.
+    let exchange = request_exchange(
+        &endpoint,
+        &model_status_request("model-status", "observatory-test", TEST_CREDENTIAL),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelStatus(status),
+    } = exchange.result.body
+    else {
+        panic!("a baseline model status read should return a typed result")
+    };
+    assert_eq!(truth, OperationTruth::Observed);
+    assert!(status.loaded.is_none());
+    assert!(status.registered.is_empty());
+
+    // An explicit deny grant overrides the baseline allowance.
+    let denied = request_exchange(
+        &endpoint,
+        &model_status_request(
+            "model-status-denied",
+            "denied-observer",
+            "denied-observer-credential",
         ),
         Duration::from_secs(1),
     )

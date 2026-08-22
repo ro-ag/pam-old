@@ -108,6 +108,7 @@ fn deterministic_json_contract_contains_only_normalized_metadata() {
             ..SkillInventoryDrift::default()
         },
         records: InventoryRecords::List(vec![record.clone()]),
+        skipped_unsafe_symlinks: 0,
     };
     let rendered = render_inventory(&output, true).unwrap();
     assert_eq!(rendered, render_inventory(&output, true).unwrap());
@@ -130,10 +131,25 @@ fn human_list_has_a_clear_empty_state() {
         cursor_global_rules_status: CursorGlobalRulesStatus::NotLocallyDiscoverable,
         drift: SkillInventoryDrift::default(),
         records: InventoryRecords::List(Vec::new()),
+        skipped_unsafe_symlinks: 0,
     };
     let rendered = render_inventory(&output, false).unwrap();
     assert!(rendered.contains("No active skill artifacts discovered."));
     assert!(rendered.contains("added=0 changed=0 removed=0 resurrected=0"));
+    assert!(!rendered.contains("entries skipped"));
+}
+
+#[test]
+fn human_list_notes_skipped_unsafe_symlinks() {
+    let output = InventoryOutput {
+        project_id: ProjectId::from("symlink-project"),
+        cursor_global_rules_status: CursorGlobalRulesStatus::NotLocallyDiscoverable,
+        drift: SkillInventoryDrift::default(),
+        records: InventoryRecords::List(Vec::new()),
+        skipped_unsafe_symlinks: 3,
+    };
+    let rendered = render_inventory(&output, false).unwrap();
+    assert!(rendered.contains("3 entries skipped (unsafe symlinks)"));
 }
 
 #[tokio::test]
@@ -238,6 +254,50 @@ async fn incomplete_audit_scan_leaves_prior_inventory_and_report_unchanged() {
     assert_eq!(current_artifacts, prior_artifacts);
     assert_eq!(current_report.observed_at_ms, 10);
     assert_eq!(current_report.report_json, initial.report_json);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_only_diagnostics_keep_the_inventory_available() {
+    use std::os::unix::fs::symlink;
+
+    let project = TestDirectory::new("inventory-symlink-project");
+    project.write("AGENTS.md", b"kept instruction\n");
+    let outside = TestDirectory::new("inventory-symlink-outside");
+    outside.write("SKILL.md", b"# Linked skill\n");
+    fs::create_dir_all(project.path().join(".claude/skills/memento")).unwrap();
+    symlink(
+        outside.path().join("SKILL.md"),
+        project.path().join(".claude/skills/memento/SKILL.md"),
+    )
+    .unwrap();
+    let state = TestDirectory::new("inventory-symlink-state");
+    let state_path = state.path().join("state.sqlite3");
+    let project_id = ProjectId::from("inventory-symlink-project");
+
+    let output = run_inventory(
+        request(&project, &state_path, &project_id, 10),
+        InventorySelection::List,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.skipped_unsafe_symlinks, 1);
+    let InventoryRecords::List(records) = &output.records else {
+        panic!("expected a list");
+    };
+    assert!(
+        records
+            .iter()
+            .any(|record| record.artifact.logical_path() == "AGENTS.md")
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| record.artifact.logical_path().contains("memento"))
+    );
+    let rendered = render_inventory(&output, false).unwrap();
+    assert!(rendered.contains("1 entries skipped (unsafe symlinks)"));
 }
 
 #[tokio::test]

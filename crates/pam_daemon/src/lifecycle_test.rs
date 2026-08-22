@@ -33,9 +33,9 @@ use tokio::sync::oneshot;
 
 use super::lifecycle::{
     BriefProvider, DaemonConfig, Ownership, approval_recovery, cancellation_presentation,
-    clamp_activity_limit, grant_recovery, model_runtime_result, policy_resource, prepare_endpoint,
-    protocol_activity_event, protocol_caller_summary, protocol_project_current,
-    request_audit_event_id, request_preflight, serve_until_with_delay,
+    clamp_activity_limit, grant_recovery, model_runtime_result, model_status_result,
+    policy_resource, prepare_endpoint, protocol_activity_event, protocol_caller_summary,
+    protocol_project_current, request_audit_event_id, request_preflight, serve_until_with_delay,
 };
 use crate::{
     DaemonError, ExchangeError, request_exchange, request_exchange_streaming, request_status,
@@ -2765,6 +2765,28 @@ fn activity_event_summaries_drop_redacted_detail_and_retention() {
             .windows(b"detail-must-not-cross".len())
             .any(|window| window == b"detail-must-not-cross")
     );
+}
+
+#[test]
+fn model_status_reports_the_loaded_model_without_path_or_digest() {
+    let empty = model_status_result(None).unwrap();
+    assert!(empty.loaded.is_none());
+    assert!(empty.registered.is_empty());
+
+    let key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
+    let status = model_status_result(Some((&key, 42))).unwrap();
+    let encoded = encode(&status).unwrap();
+    for secret_field in [&b"path"[..], b"digest", b"license"] {
+        assert!(
+            !encoded
+                .windows(secret_field.len())
+                .any(|window| window == secret_field)
+        );
+    }
+    let loaded = status.loaded.expect("the configured model is loaded");
+    assert_eq!(loaded.model_id(), "vendor/model-a");
+    assert_eq!(loaded.size_bytes, 42);
+    assert_eq!(status.registered, vec![loaded]);
 }
 
 #[test]

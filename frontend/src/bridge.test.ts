@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTauriBridge, sameFence } from "./bridge";
 import type { CommandFence } from "./domain";
+import { afterMergeDefinition } from "./fixtures";
 
 const fence: CommandFence = {
   projectHandle: "project:opaque",
@@ -48,6 +49,15 @@ describe("Tauri bridge ABI", () => {
         url: "https://example.com/team/skills.git",
         artifactPath: "skills/review/SKILL.md",
       },
+    }]);
+
+    await bridge.flowGraph(fence, "schema_version = 2");
+    await bridge.flowCompose(fence, afterMergeDefinition);
+    expect(calls[5]).toEqual(["flow_graph", {
+      request: { ...fence, source: "schema_version = 2" },
+    }]);
+    expect(calls[6]).toEqual(["flow_compose", {
+      request: { ...fence, definition: JSON.stringify(afterMergeDefinition) },
     }]);
   });
 
@@ -118,6 +128,29 @@ describe("Tauri bridge ABI", () => {
       ["daemon_activity", { request: { ...fence, limit: 25 } }],
       ["daemon_activity", { request: { ...fence, limit: null } }],
       ["caller_registry", { request: fence }],
+    ]);
+  });
+
+  it("keeps the local-model commands on the fixed request ABI", async () => {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    const invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
+      calls.push([command, args]);
+      return { status: "ok" } as T;
+    };
+    const bridge = createTauriBridge(invoke);
+    const messages = [
+      { role: "system" as const, content: "You are a bounded reviewer." },
+      { role: "user" as const, content: "hello" },
+    ];
+
+    await bridge.modelStatus(fence);
+    await bridge.modelInfer(fence, "qwen3-14b-instruct-q4", messages, 512);
+    await bridge.modelInfer(fence, "qwen3-14b-instruct-q4", messages);
+
+    expect(calls).toEqual([
+      ["model_status", { request: fence }],
+      ["model_infer", { request: { ...fence, model: "qwen3-14b-instruct-q4", messages, maxOutputTokens: 512 } }],
+      ["model_infer", { request: { ...fence, model: "qwen3-14b-instruct-q4", messages } }],
     ]);
   });
 

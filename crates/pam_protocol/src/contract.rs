@@ -171,6 +171,32 @@ impl RequestEnvelope {
         }
     }
 
+    /// Creates an authenticated model surface status request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The result identifies models only; filesystem paths,
+    /// content digests, and license text never cross this contract.
+    #[must_use]
+    pub fn model_status(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::ModelStatus,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelStatus,
+        }
+    }
+
     /// Creates an authenticated decision for one pending approval challenge.
     ///
     /// The daemon must authenticate this envelope and verify that the approval
@@ -713,6 +739,7 @@ pub enum Capability {
     InspectEvidence,
     ReadEvidence,
     ModelInfer,
+    ModelStatus,
     FlowRun,
 }
 
@@ -735,6 +762,7 @@ impl Capability {
             Self::InspectEvidence => "evidence.inspect",
             Self::ReadEvidence => "evidence.read",
             Self::ModelInfer => "model.infer",
+            Self::ModelStatus => "model.status",
             Self::FlowRun => "flow.run",
         }
     }
@@ -922,6 +950,7 @@ pub enum RequestPayload {
         messages: Vec<ModelMessage>,
         max_output_tokens: u32,
     },
+    ModelStatus,
     FlowRun {
         definition: FlowDefinitionDocument,
         project_root: FlowProjectRoot,
@@ -992,6 +1021,7 @@ pub enum ResultPayload {
     EvidenceMetadata(EvidenceMetadata),
     EvidenceChunk(EvidenceChunk),
     ModelGeneration(ModelGenerationResult),
+    ModelStatus(ModelStatusResult),
     FlowRun(pam_flow::FlowRunResult),
 }
 
@@ -1494,6 +1524,15 @@ fn validate_project_operation_kind(operation_kind: &str) -> Result<(), ProtocolC
     }
 }
 
+fn deserialize_model_summary_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let model_id = String::deserialize(deserializer)?;
+    validate_model_id(&model_id).map_err(serde::de::Error::custom)?;
+    Ok(model_id)
+}
+
 fn deserialize_project_operation_kind<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1608,6 +1647,51 @@ pub struct CallerSummary {
     pub caller_id: CallerId,
     pub registered_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
+}
+
+/// Snapshot of the daemon's model surface.
+///
+/// `loaded` is the model currently served by the embedded runtime, when one
+/// is loaded. `registered` lists the catalog entries this daemon can resolve.
+/// Filesystem paths, content digests, and license text never cross this
+/// contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelStatusResult {
+    pub loaded: Option<ModelSummary>,
+    pub registered: Vec<ModelSummary>,
+}
+
+/// One registered model identified only by its `vendor/name` ID and size.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelSummary {
+    #[serde(deserialize_with = "deserialize_model_summary_id")]
+    model_id: String,
+    pub size_bytes: u64,
+}
+
+impl ModelSummary {
+    /// Creates a summary with a validated `vendor/name` model ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolContractError::InvalidModelIdentity`] when the ID is
+    /// not two bounded `vendor/name` segments.
+    pub fn new(
+        model_id: impl Into<String>,
+        size_bytes: u64,
+    ) -> Result<Self, ProtocolContractError> {
+        let model_id = model_id.into();
+        validate_model_id(&model_id)?;
+        Ok(Self {
+            model_id,
+            size_bytes,
+        })
+    }
+
+    #[must_use]
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
 }
 
 /// One bounded, payload-free request summary for the native control center.

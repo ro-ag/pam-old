@@ -1,11 +1,12 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { ModelStatusDto } from "../domain";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { selectControlCenter } from "../selectors";
-import { ActivityView } from "./ActivityView";
+import { ActivityView, formatModelSize } from "./ActivityView";
 
-async function activityProps(scenario: FixtureScenario = "solved") {
+async function activityProps(scenario: FixtureScenario = "solved", modelStatus: ModelStatusDto | null = null) {
   const bridge = fixtureBridge(scenario);
   const snapshot = await bridge.bootstrap();
   const catalog = await bridge.catalog();
@@ -14,9 +15,18 @@ async function activityProps(scenario: FixtureScenario = "solved") {
     fence: snapshot.fence,
     data: selectControlCenter(snapshot.data, catalog, true),
     pending: false,
+    modelStatus,
+    onReloadModel: vi.fn(),
+    onOpenModelChat: vi.fn(),
     onStartDaemon: vi.fn(),
   };
 }
+
+const loadedStatus: ModelStatusDto = {
+  status: "ok",
+  loaded: { modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 },
+  registered: [{ modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 }],
+};
 
 describe("ActivityView", () => {
   it("renders daemon health and the bounded activity feed", async () => {
@@ -88,5 +98,79 @@ describe("ActivityView", () => {
 
     await user.click(screen.getByRole("button", { name: "Start PAM" }));
     expect(props.onStartDaemon).toHaveBeenCalledTimes(1);
+  });
+
+  it("formats model sizes in human units", () => {
+    expect(formatModelSize(19_500_000_000)).toBe("19.5 GB");
+    expect(formatModelSize(2_800_000_000)).toBe("2.8 GB");
+    expect(formatModelSize(850_000_000)).toBe("850 MB");
+    expect(formatModelSize(512)).toBe("512 bytes");
+  });
+
+  it("shows the loaded local model with size, pill, and chat entry point", async () => {
+    const user = userEvent.setup();
+    const props = await activityProps("solved", loadedStatus);
+    render(<ActivityView {...props} />);
+
+    expect(screen.getByText("qwen3-14b-instruct-q4")).toBeInTheDocument();
+    expect(screen.getByText("19.5 GB")).toBeInTheDocument();
+    expect(screen.getByText("loaded")).toBeInTheDocument();
+    await waitFor(() => expect(props.onReloadModel).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(props.onOpenModelChat).toHaveBeenCalledWith("qwen3-14b-instruct-q4", expect.any(HTMLElement));
+  });
+
+  it("shows a registered-but-not-loaded model as on deck with chat available", async () => {
+    const props = await activityProps("solved", {
+      status: "ok",
+      loaded: null,
+      registered: [{ modelId: "qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 }],
+    });
+    render(<ActivityView {...props} />);
+
+    expect(screen.getByText("qwen3-4b-instruct-q4")).toBeInTheDocument();
+    expect(screen.getByText("on deck")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled();
+  });
+
+  it("shows a calm empty model state with the import hint and no chat", async () => {
+    const props = await activityProps("solved", { status: "ok", loaded: null, registered: [] });
+    render(<ActivityView {...props} />);
+
+    expect(screen.getByText("No local model yet")).toBeInTheDocument();
+    expect(screen.getByText(/pam model import/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+  });
+
+  it("shows blocked and unavailable model failures without a chat entry point", async () => {
+    const props = await activityProps("solved", {
+      status: "blocked",
+      failure: { kind: "blocked", code: "model_status_blocked", detail: "Model status is blocked by project policy.", recovery: null },
+    });
+    const { unmount } = render(<ActivityView {...props} />);
+    expect(screen.getByText("Model status is blocked by project policy.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    unmount();
+
+    const offlineProps = await activityProps("offline", {
+      status: "unavailable",
+      failure: { kind: "unavailable", code: "daemon_offline", detail: "PAM is paused, so the local model runtime is not reachable.", recovery: null },
+    });
+    render(<ActivityView {...offlineProps} />);
+    expect(screen.getByText(/local model runtime is not reachable/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(offlineProps.onReloadModel).toHaveBeenCalled();
+  });
+
+  it("reloads the model card together with the feed refresh", async () => {
+    const user = userEvent.setup();
+    const props = await activityProps("solved", loadedStatus);
+    render(<ActivityView {...props} />);
+    await screen.findByText("project.current");
+    const mountCalls = props.onReloadModel.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Refresh activity" }));
+    await waitFor(() => expect(props.onReloadModel.mock.calls.length).toBeGreaterThan(mountCalls));
   });
 });

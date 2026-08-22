@@ -207,6 +207,26 @@ fn directory_entry_limit_rejects_one_over_without_unbounded_collection() {
     assert!(!report.complete());
 }
 
+#[test]
+fn unsafe_symlink_diagnostics_are_retained_but_do_not_block_completeness() {
+    let mut session = ScanSession::new(ScanLimits::default());
+    session.push_artifact(normalized("kept.mdc", 1));
+    session.diagnostic("skills/link.md", ScanDiagnosticKind::UnsafeSymlink);
+    let report = session.finish();
+    assert!(report.complete(), "{:?}", report.diagnostics());
+    assert_eq!(report.artifacts().len(), 1);
+    assert_eq!(report.diagnostics().len(), 1);
+    assert_eq!(
+        report.diagnostics()[0].kind(),
+        ScanDiagnosticKind::UnsafeSymlink
+    );
+
+    let mut mixed = ScanSession::new(ScanLimits::default());
+    mixed.diagnostic("skills/link.md", ScanDiagnosticKind::UnsafeSymlink);
+    mixed.diagnostic("settings.json", ScanDiagnosticKind::InvalidJson);
+    assert!(!mixed.finish().complete());
+}
+
 fn normalized(path: &str, byte: u8) -> AgentArtifact {
     AgentArtifact::new(
         path,

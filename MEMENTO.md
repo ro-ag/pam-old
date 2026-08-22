@@ -55,3 +55,13 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-21
 - cost: 0
 - status: watching
+
+## pam-features-coded-but-not-surfaced
+- kind: project-way
+- scope: project
+- rule: PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note
+- fix: When closing a backend feature task, check: is it reachable from the GUI in <=2 clicks? If not, add a GUI-surface task in the same plan before marking done
+- hits: 2026-08-22
+- cost: 15
+- status: watching
+

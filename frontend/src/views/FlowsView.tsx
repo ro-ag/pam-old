@@ -11,6 +11,7 @@ import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { sameFence, withOperation } from "../bridge";
 import type {
   CommandFence,
+  FlowDefinitionJson,
   FlowDocumentDataDto,
   FlowReviewDataDto,
   FlowWorkspaceDataDto,
@@ -18,10 +19,22 @@ import type {
 } from "../domain";
 import { MAX_FLOW_SOURCE } from "../domain";
 import { presentError } from "../state";
+import { VisualEditor } from "./flow/VisualEditor";
 
 function sameAuthority(left: CommandFence, right: CommandFence): boolean {
   return left.projectHandle === right.projectHandle && left.generation === right.generation;
 }
+
+const MAX_HISTORY = 50;
+const HISTORY_COALESCE_MS = 800;
+
+interface DefinitionHistory {
+  past: FlowDefinitionJson[];
+  future: FlowDefinitionJson[];
+  lastEditMs: number;
+}
+
+const freshHistory = (): DefinitionHistory => ({ past: [], future: [], lastEditMs: 0 });
 
 export interface FlowsViewProps {
   bridge: PamBridge;
@@ -34,6 +47,10 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
   const [workspace, setWorkspace] = useState<FlowWorkspaceDataDto | null>(null);
   const [selected, setSelected] = useState<FlowDocumentDataDto | null>(null);
   const [draft, setDraft] = useState("");
+  const [mode, setMode] = useState<"visual" | "source">("source");
+  const [definition, setDefinition] = useState<FlowDefinitionJson | null>(null);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [modeNotice, setModeNotice] = useState<string | null>(null);
   const [review, setReview] = useState<FlowReviewDataDto | null>(null);
   const [reviewedSource, setReviewedSource] = useState<string | null>(null);
   const [reviewPanel, setReviewPanel] = useState<"dry-run" | "diff">("dry-run");
@@ -43,11 +60,28 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
   const validationErrorId = useId();
   const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
+  const historyRef = useRef<DefinitionHistory>(freshHistory());
+  const definitionRef = useRef<FlowDefinitionJson | null>(null);
   fenceRef.current = fence;
+  definitionRef.current = definition;
 
   const isCurrentRequest = useCallback((sequence: number, requestFence: CommandFence) => (
     sequence === requestSequence.current && sameAuthority(requestFence, fenceRef.current)
   ), []);
+
+  const clearReview = () => {
+    setReview(null);
+    setReviewedSource(null);
+    setValidationError(null);
+  };
+
+  const resetEditorModes = () => {
+    setMode("source");
+    setDefinition(null);
+    setSelectedStepId(null);
+    setModeNotice(null);
+    historyRef.current = freshHistory();
+  };
 
   const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
@@ -57,6 +91,11 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
     setWorkspace(null);
     setSelected(null);
     setDraft("");
+    setMode("source");
+    setDefinition(null);
+    setSelectedStepId(null);
+    setModeNotice(null);
+    historyRef.current = freshHistory();
     setReview(null);
     setReviewedSource(null);
     setReviewPanel("dry-run");
@@ -87,6 +126,7 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
     setBusy(true);
     setSelected(null);
     setDraft("");
+    resetEditorModes();
     setReview(null);
     setReviewedSource(null);
     setReviewPanel("dry-run");
@@ -100,6 +140,20 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
       }
       setSelected(response.data);
       setDraft(response.data.source);
+      // Visual is the default view of an opened flow; a source the converter
+      // cannot follow simply opens in Source mode with a calm note.
+      try {
+        const graph = await bridge.flowGraph(requestFence, response.data.source);
+        if (!isCurrentRequest(sequence, requestFence)) return;
+        if (graph.status === "ok") {
+          setDefinition(graph.definition);
+          setMode("visual");
+        } else {
+          setModeNotice(graph.failure.detail);
+        }
+      } catch (error) {
+        if (isCurrentRequest(sequence, requestFence)) setModeNotice(presentError(error));
+      }
     } catch (error) {
       if (isCurrentRequest(sequence, requestFence)) onError(presentError(error));
     } finally {
@@ -107,9 +161,112 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
     }
   };
 
+  // Bounded undo history over definition snapshots; rapid edits coalesce so a
+  // typing burst stays one undo stop.
+  const editDefinition = (next: FlowDefinitionJson) => {
+    const history = historyRef.current;
+    const current = definitionRef.current;
+    const now = Date.now();
+    if (current) {
+      if (history.past.length === 0 || now - history.lastEditMs > HISTORY_COALESCE_MS) {
+        history.past.push(current);
+        if (history.past.length > MAX_HISTORY) history.past.shift();
+      }
+      history.lastEditMs = now;
+    }
+    history.future = [];
+    setDefinition(next);
+    setModeNotice(null);
+    clearReview();
+  };
+
+  const undo = useCallback(() => {
+    const history = historyRef.current;
+    const current = definitionRef.current;
+    const previous = history.past.pop();
+    if (!current || !previous) return;
+    history.future.push(current);
+    history.lastEditMs = 0;
+    setDefinition(previous);
+    setSelectedStepId((id) => (id && previous.steps.some((step) => step.id === id) ? id : null));
+    setReview(null);
+    setReviewedSource(null);
+    setValidationError(null);
+  }, []);
+
+  const redo = useCallback(() => {
+    const history = historyRef.current;
+    const current = definitionRef.current;
+    const next = history.future.pop();
+    if (!current || !next) return;
+    history.past.push(current);
+    if (history.past.length > MAX_HISTORY) history.past.shift();
+    history.lastEditMs = 0;
+    setDefinition(next);
+    setSelectedStepId((id) => (id && next.steps.some((step) => step.id === id) ? id : null));
+    setReview(null);
+    setReviewedSource(null);
+    setValidationError(null);
+  }, []);
+
+  const visualActive = mode === "visual" && definition !== null && selected !== null;
+
+  useEffect(() => {
+    if (!visualActive) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visualActive, undo, redo]);
+
+  const switchMode = async (next: "visual" | "source") => {
+    if (!selected || next === mode || busy) return;
+    setModeNotice(null);
+    const sequence = ++requestSequence.current;
+    const requestFence = withOperation(fenceRef.current);
+    setBusy(true);
+    try {
+      if (next === "source") {
+        const currentDefinition = definitionRef.current;
+        // An untouched definition still matches the opened source, so the
+        // original document text is kept as-is.
+        if (!currentDefinition || historyRef.current.past.length === 0) {
+          setMode("source");
+          return;
+        }
+        const composed = await bridge.flowCompose(requestFence, currentDefinition);
+        if (!isCurrentRequest(sequence, requestFence)) return;
+        if (composed.status === "invalid") {
+          setModeNotice(composed.failure.detail);
+          return;
+        }
+        setDraft(composed.source);
+        setMode("source");
+      } else {
+        const graph = await bridge.flowGraph(requestFence, draft);
+        if (!isCurrentRequest(sequence, requestFence)) return;
+        if (graph.status === "invalid") {
+          setModeNotice(graph.failure.detail);
+          return;
+        }
+        setDefinition(graph.definition);
+        setSelectedStepId(null);
+        historyRef.current = freshHistory();
+        setMode("visual");
+      }
+    } catch (error) {
+      if (isCurrentRequest(sequence, requestFence)) setModeNotice(presentError(error));
+    } finally {
+      if (isCurrentRequest(sequence, requestFence)) setBusy(false);
+    }
+  };
+
   const validate = async () => {
     if (!selected) return;
-    const source = draft.slice(0, MAX_FLOW_SOURCE);
     const documentHandle = selected.handle;
     const sequence = ++requestSequence.current;
     const requestFence = withOperation(fenceRef.current);
@@ -118,6 +275,20 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
     setReviewedSource(null);
     setValidationError(null);
     try {
+      let source = draft;
+      // The visual state composes to source first, so validation and save
+      // always run against the exact document that will be written.
+      if (mode === "visual" && definitionRef.current) {
+        const composed = await bridge.flowCompose(requestFence, definitionRef.current);
+        if (!isCurrentRequest(sequence, requestFence)) return;
+        if (composed.status === "invalid") {
+          setValidationError(composed.failure.detail);
+          return;
+        }
+        source = composed.source;
+        setDraft(source);
+      }
+      source = source.slice(0, MAX_FLOW_SOURCE);
       const response = await bridge.validateFlow(requestFence, documentHandle, source);
       if (!isCurrentRequest(sequence, requestFence)) return;
       if (!sameFence(requestFence, response.fence)) {
@@ -198,30 +369,47 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
             <div className="panel-title editor-title">
               <div><span className="eyebrow">Editing</span><h2>{selected?.identity?.fileName ?? "Select a definition"}</h2></div>
               <div>
+                {selected && (
+                  <div className="flow-mode-toggle" role="group" aria-label="Editor mode">
+                    <button type="button" aria-pressed={mode === "visual"} disabled={busy} onClick={() => void switchMode("visual")}>Visual</button>
+                    <button type="button" aria-pressed={mode === "source"} disabled={busy} onClick={() => void switchMode("source")}>Source</button>
+                  </div>
+                )}
                 <button type="button" className="button button--secondary button--small" disabled={busy || !selected} onClick={() => void validate()}><ListChecks size={17} /> Validate</button>
                 <button type="button" className="button button--primary button--small" disabled={busy || !acceptedReview?.diff.changed} onClick={() => void save()}><FloppyDisk size={17} /> Save</button>
               </div>
             </div>
-            <textarea
-              aria-label="Flow TOML source"
-              aria-invalid={validationError ? true : undefined}
-              aria-describedby={validationError ? validationErrorId : undefined}
-              spellCheck={false}
-              value={draft}
-              maxLength={MAX_FLOW_SOURCE}
-              disabled={!selected}
-              onChange={(event) => {
-                requestSequence.current += 1;
-                setBusy(false);
-                setDraft(event.target.value);
-                setReview(null);
-                setReviewedSource(null);
-                setValidationError(null);
-              }}
-            />
+            {visualActive && definition ? (
+              <VisualEditor
+                definition={definition}
+                selectedStepId={selectedStepId}
+                onSelectStep={setSelectedStepId}
+                onChange={editDefinition}
+              />
+            ) : (
+              <textarea
+                aria-label="Flow TOML source"
+                aria-invalid={validationError ? true : undefined}
+                aria-describedby={validationError ? validationErrorId : undefined}
+                spellCheck={false}
+                value={draft}
+                maxLength={MAX_FLOW_SOURCE}
+                disabled={!selected}
+                onChange={(event) => {
+                  requestSequence.current += 1;
+                  setBusy(false);
+                  setDraft(event.target.value);
+                  setReview(null);
+                  setReviewedSource(null);
+                  setValidationError(null);
+                  setModeNotice(null);
+                }}
+              />
+            )}
+            {modeNotice && <div className="mode-notice" role="status"><p>{modeNotice}</p></div>}
             {validationError && <div className="validation-errors" id={validationErrorId} role="alert"><p><WarningCircle size={16} aria-hidden="true" />{validationError}</p></div>}
             <div className="editor-status" role="status">
-              <span>{draft.length.toLocaleString()} / {MAX_FLOW_SOURCE.toLocaleString()} characters</span>
+              <span>{visualActive && definition ? `${definition.steps.length} steps` : `${draft.length.toLocaleString()} / ${MAX_FLOW_SOURCE.toLocaleString()} characters`}</span>
               {acceptedReview && <span className={acceptedReview.dryRun.daemonDefinitionEligible ? "is-valid" : "is-invalid"}>{acceptedReview.dryRun.daemonDefinitionEligible ? `Valid · ${acceptedReview.dryRun.steps.length} dry-run steps` : "Valid · outside daemon authority"}</span>}
             </div>
             {acceptedReview && (

@@ -7,10 +7,16 @@ import type {
   CatalogDto,
   CommandFence,
   EvidenceDto,
+  FlowComposeDto,
+  FlowDefinitionJson,
   FlowDocumentDto,
+  FlowGraphDto,
   FlowReviewDto,
   FlowSaveDto,
   FlowWorkspaceDto,
+  ChatMessageDto,
+  ModelInferDto,
+  ModelStatusDto,
   PamBridge,
   SkillAuditDto,
   SkillInventoryDto,
@@ -78,6 +84,15 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     callerRegistry: (fence) =>
       invokeCommand<CallersDto>("caller_registry", request(flatFence(fence))),
+    modelStatus: (fence) =>
+      invokeCommand<ModelStatusDto>("model_status", request(flatFence(fence))),
+    modelInfer: (fence, model, messages: ChatMessageDto[], maxOutputTokens) =>
+      invokeCommand<ModelInferDto>("model_infer", request({
+        ...flatFence(fence),
+        model,
+        messages,
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      })),
     activateProject: (projectHandle, operationId) =>
       invokeCommand<SnapshotDto>(
         "activate_project",
@@ -120,6 +135,11 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         "open_flow",
         request({ ...flatFence(fence), flowHandle }),
       ),
+    flowGraph: (fence, source) =>
+      invokeCommand<FlowGraphDto>("flow_graph", request({ ...flatFence(fence), source })),
+    flowCompose: (fence, definition: FlowDefinitionJson) =>
+      // The desktop command takes the definition as JSON text, not an object.
+      invokeCommand<FlowComposeDto>("flow_compose", request({ ...flatFence(fence), definition: JSON.stringify(definition) })),
     validateFlow: (fence, documentHandle, source) =>
       invokeCommand<FlowReviewDto>("validate_flow", request({
         ...flatFence(fence),

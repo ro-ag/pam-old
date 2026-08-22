@@ -11,9 +11,9 @@ use pam_core::{ContentDigest, ProjectId};
 use pam_platform::{IdentityError, ProjectIdentity, discover_project, user_data_dir};
 use pam_skills::{
     AgentArtifactId, CursorGlobalRulesStatus, EvaluatorKind, EvaluatorRunConfig,
-    LocalInventoryError, LocalInventoryRoots, ScanDiagnostic, ScanLimits, SkillsAuditError,
-    SkillsAuditEvaluationStatus, SkillsAuditFailureReason, SkillsAuditReport, run_skills_audit,
-    scan_local_inventory,
+    LocalInventoryError, LocalInventoryRoots, ScanDiagnostic, ScanDiagnosticKind, ScanLimits,
+    SkillsAuditError, SkillsAuditEvaluationStatus, SkillsAuditFailureReason, SkillsAuditReport,
+    run_skills_audit, scan_local_inventory,
 };
 use pam_store::{SkillInventoryDrift, Store, StoreError, StoredAgentArtifact};
 use serde::Serialize;
@@ -393,6 +393,7 @@ pub(crate) struct InventoryOutput {
     pub(crate) cursor_global_rules_status: CursorGlobalRulesStatus,
     pub(crate) drift: SkillInventoryDrift,
     pub(crate) records: InventoryRecords,
+    pub(crate) skipped_unsafe_symlinks: usize,
 }
 
 #[derive(Debug)]
@@ -986,6 +987,11 @@ pub(crate) async fn run_inventory(
     if !report.complete() {
         return Err(SkillsError::IncompleteScan(report.diagnostics().to_vec()));
     }
+    let skipped_unsafe_symlinks = report
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.kind() == ScanDiagnosticKind::UnsafeSymlink)
+        .count();
     let cursor_global_rules_status = report.cursor_global_rules_status();
     let store = Store::open(request.state_path).map_err(SkillsError::Store)?;
     let operation = async {
@@ -1017,6 +1023,7 @@ pub(crate) async fn run_inventory(
         cursor_global_rules_status,
         drift,
         records,
+        skipped_unsafe_symlinks,
     })
 }
 
@@ -1488,7 +1495,7 @@ fn render_human_show(output: &InventoryOutput, record: &StoredAgentArtifact) -> 
 }
 
 fn header_lines(output: &InventoryOutput) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("Project: {}", output.project_id),
         format!(
             "Cursor global rules: {}",
@@ -1501,7 +1508,14 @@ fn header_lines(output: &InventoryOutput) -> Vec<String> {
             output.drift.removed.len(),
             output.drift.resurrected.len()
         ),
-    ]
+    ];
+    if output.skipped_unsafe_symlinks > 0 {
+        lines.push(format!(
+            "{} entries skipped (unsafe symlinks)",
+            output.skipped_unsafe_symlinks
+        ));
+    }
+    lines
 }
 
 fn cursor_status_label(status: CursorGlobalRulesStatus) -> &'static str {
