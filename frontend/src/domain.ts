@@ -1,4 +1,4 @@
-export type ViewId = "activity" | "callers" | "flows" | "options";
+export type ViewId = "control-center" | "access" | "skills" | "flows" | "activity" | "callers";
 export type ApprovalDecision = "approve" | "deny";
 export type BridgeMode = "native" | "fixture";
 

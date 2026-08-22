@@ -22,11 +22,7 @@ import { Collapsible } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { StatusDot } from "../components/Shell";
-import type { CommandFence, PamBridge } from "../domain";
 import type { AgentBriefView, ControlCenterView, TimelineItemView } from "../selectors";
-import { SkillInventoryPanel } from "./SkillInventoryPanel";
-import { SkillLibraryPanel } from "./SkillLibraryPanel";
-import { SkillAuditReportPanel } from "./SkillAuditReportPanel";
 
 function formatClock(iso: string): string {
   const date = new Date(iso);
@@ -278,11 +274,9 @@ export function CurrentView({
 
 export interface AccessViewProps {
   data: ControlCenterView;
-  bridge: PamBridge;
-  fence: CommandFence;
 }
 
-export function AccessView({ data, bridge, fence }: AccessViewProps) {
+export function AccessView({ data }: AccessViewProps) {
   const accessIcon = (id: string) => id === "model"
     ? Pulse
     : id === "policy"
@@ -293,24 +287,23 @@ export function AccessView({ data, bridge, fence }: AccessViewProps) {
           ? GitBranch
           : WarningCircle;
   return (
-    <section className="project-detail-view">
-      <header className="project-header compact"><div><h1>Access</h1><p>Narrow capabilities, visible to the developer.</p></div></header>
-      <section className="panel access-panel" aria-labelledby="access-heading">
-        <div className="panel-title"><div><span className="eyebrow">Project boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>
-        <div className="access-list">
-          {data.access.length === 0 ? <p className="panel-empty">No access grants are configured for this project.</p> : data.access.map((grant) => {
-              const Icon = accessIcon(grant.id);
-              return <article key={grant.id}>
-              <span className="access-icon"><Icon size={21} /></span>
-              <div><strong>{grant.name}</strong><p>{grant.summary}</p></div>
-              <span className={`state-pill state-pill--${grant.state}`}>{grant.state}</span>
-            </article>;
-          })}
-        </div>
+    <main className="canvas" id="main-content">
+      <section className="project-detail-view">
+        <header className="project-header compact"><div><h1>Access</h1><p>Narrow capabilities, visible to the developer.</p></div></header>
+        <section className="panel access-panel" aria-labelledby="access-heading">
+          <div className="panel-title"><div><span className="eyebrow">Project boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>
+          <div className="access-list">
+            {data.access.length === 0 ? <p className="panel-empty">No access grants are configured for this project.</p> : data.access.map((grant) => {
+                const Icon = accessIcon(grant.id);
+                return <article key={grant.id}>
+                <span className="access-icon"><Icon size={21} /></span>
+                <div><strong>{grant.name}</strong><p>{grant.summary}</p></div>
+                <span className={`state-pill state-pill--${grant.state}`}>{grant.state}</span>
+              </article>;
+            })}
+          </div>
+        </section>
       </section>
-      <SkillInventoryPanel bridge={bridge} fence={fence} />
-      <SkillLibraryPanel bridge={bridge} fence={fence} />
-      <SkillAuditReportPanel bridge={bridge} fence={fence} />
-    </section>
+    </main>
   );
 }

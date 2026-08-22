@@ -5,7 +5,6 @@ import {
   CaretRight,
   Check,
   Circle,
-  Gear,
   GitBranch,
   LockSimple,
   MagnifyingGlass,
@@ -14,10 +13,13 @@ import {
   Pulse,
   Queue,
   SidebarSimple,
+  SquaresFour,
   SunHorizon,
+  UserCircle,
 } from "@phosphor-icons/react";
 import { DropdownMenu, Tooltip, VisuallyHidden } from "radix-ui";
 import {
+  Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -36,10 +38,12 @@ import type { ControlCenterView, ProjectView } from "../selectors";
 import type { PamTheme, PamThemeMode } from "../theme";
 
 export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof Pulse }> = [
-  { id: "activity", label: "Activity", icon: Pulse },
-  { id: "callers", label: "Callers", icon: LockSimple },
+  { id: "control-center", label: "Control Center", icon: SquaresFour },
+  { id: "access", label: "Access", icon: LockSimple },
+  { id: "skills", label: "Skills", icon: BookOpen },
   { id: "flows", label: "Flows", icon: GitBranch },
-  { id: "options", label: "Options", icon: Gear },
+  { id: "activity", label: "Activity", icon: Pulse },
+  { id: "callers", label: "Callers", icon: UserCircle },
 ];
 
 export function StatusDot({ state = "coral" }: { state?: "coral" | "aqua" | "muted" }) {
@@ -140,6 +144,9 @@ export function Sidebar({
   collapsed,
   pending,
   trapFocus,
+  projectMenuOpen,
+  onProjectMenuOpenChange,
+  onSelectProject,
   onNavigate,
   onToggleDaemon,
   onRestartDaemon,
@@ -151,6 +158,9 @@ export function Sidebar({
   collapsed: boolean;
   pending: boolean;
   trapFocus: boolean;
+  projectMenuOpen: boolean;
+  onProjectMenuOpenChange: (open: boolean) => void;
+  onSelectProject: (project: ProjectView) => void;
   onNavigate: (view: ViewId) => void;
   onToggleDaemon: () => void;
   onRestartDaemon: () => void;
@@ -188,25 +198,36 @@ export function Sidebar({
         <img src="/assets/pam-mark.png" alt="" />
         {!collapsed && <span>PAM</span>}
       </div>
+      {!collapsed && (
+        <ProjectMenu
+          active={data.project}
+          projects={data.catalog}
+          open={projectMenuOpen}
+          onOpenChange={onProjectMenuOpenChange}
+          onSelect={onSelectProject}
+        />
+      )}
       <nav className="primary-nav" aria-label="Primary">
         {navItems.map(({ id, label, icon: Icon }) => (
-          <button
-            type="button"
-            className={`nav-item ${activeView === id ? "is-active" : ""}`}
-            aria-current={activeView === id ? "page" : undefined}
-            aria-label={label}
-            title={collapsed ? label : undefined}
-            key={id}
-            onClick={() => onNavigate(id)}
-          >
-            <Icon size={21} weight={activeView === id ? "bold" : "regular"} aria-hidden="true" />
-            {!collapsed && <span>{label}</span>}
-            {!collapsed && id === "callers" && data.current.queue.length > 0 && (
-              <span className="nav-count" aria-label={`${data.current.queue.length} queued`}>
-                {data.current.queue.length}
-              </span>
-            )}
-          </button>
+          <Fragment key={id}>
+            {id === "activity" && <div className="nav-separator" role="separator" aria-hidden="true" />}
+            <button
+              type="button"
+              className={`nav-item ${activeView === id ? "is-active" : ""}`}
+              aria-current={activeView === id ? "page" : undefined}
+              aria-label={label}
+              title={collapsed ? label : undefined}
+              onClick={() => onNavigate(id)}
+            >
+              <Icon size={21} weight={activeView === id ? "bold" : "regular"} aria-hidden="true" />
+              {!collapsed && <span>{label}</span>}
+              {!collapsed && id === "control-center" && data.current.queue.length > 0 && (
+                <span className="nav-count" aria-label={`${data.current.queue.length} queued`}>
+                  {data.current.queue.length}
+                </span>
+              )}
+            </button>
+          </Fragment>
         ))}
       </nav>
       <div className="sidebar-footer">
@@ -383,6 +404,10 @@ export function Toolbar({
   data,
   collapsed,
   pending,
+  theme,
+  themeMode,
+  onThemeChange,
+  onThemeModeChange,
   onToggleSidebar,
   onRefresh,
   onOpenCommand,
@@ -394,6 +419,10 @@ export function Toolbar({
   data: ControlCenterView;
   collapsed: boolean;
   pending: boolean;
+  theme: PamTheme;
+  themeMode: PamThemeMode;
+  onThemeChange: (theme: PamTheme) => void;
+  onThemeModeChange: (mode: PamThemeMode) => void;
   onToggleSidebar: () => void;
   onRefresh: () => void;
   onOpenCommand: (returnFocusTarget?: HTMLElement) => void;
@@ -430,6 +459,12 @@ export function Toolbar({
             <ArrowClockwise className={pending ? "is-spinning" : ""} size={18} weight="bold" />
           </button>
         </IconTooltip>
+        <ThemeMenu
+          theme={theme}
+          themeMode={themeMode}
+          onThemeChange={onThemeChange}
+          onThemeModeChange={onThemeModeChange}
+        />
       </div>
     </header>
   );

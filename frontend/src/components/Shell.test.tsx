@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { Tooltip } from "radix-ui";
+import { createRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProjectView } from "../selectors";
-import { ProjectMenu, ResizeSeparator } from "./Shell";
+import { fixtureBridge } from "../fixtures";
+import { selectControlCenter, type ProjectView } from "../selectors";
+import { ProjectMenu, ResizeSeparator, Toolbar } from "./Shell";
 
 const projects: ProjectView[] = [
   { handle: "payments", name: "payments-api", rootLabel: "/work/payments-api", branch: "main", health: "ready", queuedCount: 0 },
@@ -137,6 +139,45 @@ describe("ProjectMenu", () => {
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith(projects[1]));
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
     await waitFor(() => expect(switcher).toHaveFocus());
+  });
+});
+
+describe("Toolbar", () => {
+  it("changes theme family and variant from the toolbar theme menu", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const snapshot = await bridge.bootstrap();
+    const catalog = await bridge.catalog();
+    const onThemeChange = vi.fn();
+    const onThemeModeChange = vi.fn();
+    render(
+      <Tooltip.Provider>
+        <Toolbar
+          data={selectControlCenter(snapshot.data, catalog, true)}
+          collapsed={false}
+          pending={false}
+          theme="ventisquero"
+          themeMode="light"
+          onThemeChange={onThemeChange}
+          onThemeModeChange={onThemeModeChange}
+          onToggleSidebar={vi.fn()}
+          onRefresh={vi.fn()}
+          onOpenCommand={vi.fn()}
+          onOpenQueue={vi.fn()}
+          toggleButtonRef={createRef()}
+          commandButtonRef={createRef()}
+          queueButtonRef={createRef()}
+        />
+      </Tooltip.Provider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Theme: Ventisquero · light" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Viña del Mar/ }));
+    expect(onThemeChange).toHaveBeenCalledWith("vina");
+
+    await user.click(screen.getByRole("button", { name: "Theme: Ventisquero · light" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Dark/ }));
+    expect(onThemeModeChange).toHaveBeenCalledWith("dark");
   });
 });
 
