@@ -12,10 +12,11 @@ use super::{
     ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FLOW_PROJECT_ROOT_BYTES,
     MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_TOKENS,
     MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRole, ModelUsage, NetworkDiagnosticsResult,
-    OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult, ProjectRequestState,
-    ProjectRequestSummary, ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload,
-    ResultBody, ResultEnvelope, ResultPayload, SourceAvailability, StatusResult,
+    ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
+    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
+    ProjectRequestState, ProjectRequestSummary, ProtocolContractError, ReplayResult,
+    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, SourceAvailability,
+    StatusResult,
 };
 
 const PROJECT_ROOT: &str = "/canonical/project";
@@ -151,6 +152,67 @@ fn caller_list_is_authenticated_policy_named_and_free_of_credential_fields() {
     let rendered = String::from_utf8_lossy(&encoded).into_owned();
     assert!(!rendered.contains("credential"));
     assert!(!rendered.contains("digest"));
+}
+
+#[test]
+fn model_status_is_authenticated_policy_named_and_free_of_path_or_digest_fields() {
+    let request = RequestEnvelope::model_status(
+        RequestId::from("model-status-1"),
+        CallerId::from("control-center-1"),
+        ProjectId::from("project-1"),
+        IdempotencyKey::from("model-status-key-1"),
+    )
+    .authenticated(CallerCredential::new("model-status-credential"));
+
+    assert!(request.authentication.is_some());
+    assert_eq!(request.capability, Capability::ModelStatus);
+    assert_eq!(request.capability.policy_name(), "model.status");
+    assert_eq!(request.payload, RequestPayload::ModelStatus);
+
+    let summary = ModelSummary::new("vendor/model-a", 42).unwrap();
+    let result = ResultPayload::ModelStatus(ModelStatusResult {
+        loaded: Some(summary.clone()),
+        registered: vec![summary],
+    });
+    let encoded = rmp_serde::to_vec_named(&result).unwrap();
+    let rendered = String::from_utf8_lossy(&encoded).into_owned();
+    for secret_field in ["path", "digest", "license", "source"] {
+        assert!(
+            !rendered.contains(secret_field),
+            "model status must not carry a {secret_field} field"
+        );
+    }
+}
+
+#[test]
+fn model_summary_requires_two_bounded_model_id_segments() {
+    let summary = ModelSummary::new("vendor/model-a", 7).unwrap();
+    assert_eq!(summary.model_id(), "vendor/model-a");
+    assert_eq!(summary.size_bytes, 7);
+
+    let oversized = format!("vendor/{}", "a".repeat(129));
+    for invalid in ["", "no-vendor", "a/b/c", "../escape", oversized.as_str()] {
+        assert!(
+            ModelSummary::new(invalid, 7).is_err(),
+            "{invalid:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn model_summary_rejects_invalid_model_ids_on_decode() {
+    let valid = rmp_serde::to_vec_named(&ModelSummary::new("vendor/model-a", 7).unwrap()).unwrap();
+    let tampered = valid
+        .windows("vendor/model-a".len())
+        .position(|window| window == b"vendor/model-a")
+        .map(|start| {
+            let mut bytes = valid.clone();
+            bytes[start..start + "vendor/model-a".len()].copy_from_slice(b"vendor model-a");
+            bytes
+        })
+        .expect("the encoded summary carries its model id");
+    assert!(rmp_serde::from_slice::<ModelSummary>(&tampered).is_err());
+    assert!(rmp_serde::from_slice::<ModelSummary>(&valid).is_ok());
 }
 
 #[test]

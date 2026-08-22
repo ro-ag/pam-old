@@ -72,6 +72,43 @@ pub enum ScanDiagnosticKind {
     UntrustedProjectConfig,
 }
 
+impl ScanDiagnosticKind {
+    /// Returns whether this diagnostic makes the scan report incomplete.
+    ///
+    /// [`Self::UnsafeSymlink`] is non-blocking: symlinked artifacts are never
+    /// followed, but skipping them keeps the rest of the inventory usable.
+    /// Every other kind marks the report incomplete.
+    #[must_use]
+    pub const fn blocks_inventory(self) -> bool {
+        match self {
+            Self::UnsafeSymlink => false,
+            Self::AggregateBytesExceeded
+            | Self::ArtifactLimitExceeded
+            | Self::DuplicateArtifactIdentity
+            | Self::DirectoryEntryLimitExceeded
+            | Self::FileTooLarge
+            | Self::InvalidArtifact
+            | Self::InvalidFrontmatter
+            | Self::InvalidJson
+            | Self::InvalidPluginId
+            | Self::InvalidProjectRootRelation
+            | Self::InvalidToml
+            | Self::MissingPluginManifest
+            | Self::NonUtf8Content
+            | Self::NonUtf8Path
+            | Self::PathChangedDuringRead
+            | Self::ReadDirectory
+            | Self::ReadFile
+            | Self::RootUnavailable
+            | Self::TraversalDepthExceeded
+            | Self::UnsafeFileType
+            | Self::UnsafeFallbackFilename
+            | Self::UnsafePath
+            | Self::UntrustedProjectConfig => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ScanDiagnostic {
     logical_path: String,
@@ -124,7 +161,7 @@ impl ScanReport {
     /// Builds a deterministic complete report from already-normalized artifacts.
     ///
     /// Duplicate conflicting identities and the global artifact limit are converted
-    /// into diagnostics, making the returned report incomplete. This metadata-only
+    /// into blocking diagnostics, making the returned report incomplete. This metadata-only
     /// constructor has no exact source bytes and therefore cannot support adoption.
     #[must_use]
     pub fn from_artifacts(artifacts: impl IntoIterator<Item = AgentArtifact>) -> Self {
@@ -152,6 +189,10 @@ impl ScanReport {
         &self.diagnostics
     }
 
+    /// Returns whether the scan saw no blocking diagnostics.
+    ///
+    /// Non-blocking diagnostics (skipped unsafe symlinks) may still be present
+    /// in [`Self::diagnostics`] on a complete report.
     #[must_use]
     pub const fn complete(&self) -> bool {
         self.complete
@@ -587,7 +628,10 @@ impl ScanSession {
         self.diagnostics.dedup();
         ScanReport {
             artifacts: self.artifacts.into_values().collect(),
-            complete: self.diagnostics.is_empty(),
+            complete: !self
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind.blocks_inventory()),
             diagnostics: self.diagnostics,
             retained_sources: self.retained_sources,
         }

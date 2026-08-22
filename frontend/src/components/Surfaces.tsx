@@ -9,9 +9,18 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ApprovalDecision, EvidenceDataDto } from "../domain";
-import { MAX_EVIDENCE_TEXT } from "../domain";
+import { withOperation } from "../bridge";
+import type {
+  ApprovalDecision,
+  ChatMessageDto,
+  CommandFence,
+  EvidenceDataDto,
+  ModelUsageDto,
+  PamBridge,
+} from "../domain";
+import { CHAT_MAX_OUTPUT_TOKENS, MAX_CHAT_MESSAGES, MAX_EVIDENCE_TEXT } from "../domain";
 import type { ControlCenterView } from "../selectors";
+import { presentError } from "../state";
 
 export interface DrawerProps {
   title: string;
@@ -122,6 +131,123 @@ export function QueueDrawer({ data, onClose, active = true, returnFocusTarget }:
           <article key={item.requestId}><span>{index + 1}</span><div><strong>{item.operationKind}</strong><code>{item.requestId}</code></div><span className={`state-pill state-pill--${item.state}`}>{item.state}</span></article>
         ))}
         {data.current.queueTruncated && <p className="bounded-note">Only the bounded queue window is shown.</p>}
+      </div>
+    </Drawer>
+  );
+}
+
+interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+  usage?: ModelUsageDto;
+}
+
+export interface ModelChatDrawerProps {
+  modelId: string;
+  bridge: PamBridge;
+  fence: CommandFence;
+  onClose: () => void;
+  active?: boolean;
+  returnFocusTarget?: HTMLElement | null;
+}
+
+export function ModelChatDrawer({ modelId, bridge, fence, onClose, active = true, returnFocusTarget }: ModelChatDrawerProps) {
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+  const fenceRef = useRef(fence);
+  fenceRef.current = fence;
+  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  // Closing the drawer discards any in-flight reply via the sequence guard.
+  useEffect(() => () => { requestSequence.current += 1; }, []);
+
+  useEffect(() => {
+    const viewport = transcriptRef.current;
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [turns, busy, note]);
+
+  const send = async () => {
+    const content = input.trim();
+    if (!content || busy) return;
+    if (turns.length >= MAX_CHAT_MESSAGES) {
+      setNote("This transcript has reached its bounded window. Clear it to keep chatting.");
+      return;
+    }
+    const nextTurns: ChatTurn[] = [...turns, { role: "user", content }];
+    const messages: ChatMessageDto[] = nextTurns.map((turn) => ({ role: turn.role, content: turn.content }));
+    setTurns(nextTurns);
+    setInput("");
+    setNote(null);
+    setBusy(true);
+    const sequence = ++requestSequence.current;
+    try {
+      const response = await bridge.modelInfer(withOperation(fenceRef.current), modelId, messages, CHAT_MAX_OUTPUT_TOKENS);
+      if (sequence !== requestSequence.current) return;
+      if (response.status === "ok") {
+        setTurns([...nextTurns, { role: "assistant", content: response.text, usage: response.usage }]);
+      } else {
+        setNote([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
+      if (sequence === requestSequence.current) setNote(presentError(error));
+    } finally {
+      if (sequence === requestSequence.current) setBusy(false);
+    }
+  };
+
+  const clear = () => {
+    requestSequence.current += 1;
+    setTurns([]);
+    setNote(null);
+    setBusy(false);
+  };
+
+  return (
+    <Drawer title="Model chat" eyebrow={modelId} active={active} returnFocusTarget={returnFocusTarget} onClose={onClose}>
+      <div className="model-chat">
+        <p className="bounded-note">Nothing here is kept — close the drawer and the transcript drifts away.</p>
+        <div className="chat-transcript" ref={transcriptRef}>
+          {turns.length === 0 && !busy && !note && (
+            <p className="panel-empty">Say hello to the local model. Replies stay in this drawer.</p>
+          )}
+          {turns.map((turn, index) => (
+            <article className={`chat-bubble chat-bubble--${turn.role}`} key={index}>
+              <p>{turn.content}</p>
+              {turn.usage && (
+                <small className="chat-usage">in {turn.usage.inputTokens} · out {turn.usage.emittedOutputTokens} tokens</small>
+              )}
+            </article>
+          ))}
+          {busy && (
+            <p className="chat-waiting" role="status" aria-live="polite">
+              <ArrowClockwise className="is-spinning" size={17} /> The model is thinking — longer replies can take a couple of minutes.
+            </p>
+          )}
+          {note && <p className="chat-note" role="status">{note}</p>}
+        </div>
+        <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+          <textarea
+            className="chat-input"
+            aria-label="Message the model"
+            placeholder="Ask the local model… (⌘Enter to send)"
+            rows={3}
+            value={input}
+            onChange={(event) => setInput(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <div className="chat-actions">
+            <button type="button" className="button button--secondary button--small" disabled={turns.length === 0 && !note} onClick={clear}>Clear</button>
+            <button type="submit" className="button button--primary button--small" disabled={busy || input.trim().length === 0}>Send</button>
+          </div>
+        </form>
       </div>
     </Drawer>
   );

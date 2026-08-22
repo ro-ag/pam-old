@@ -434,6 +434,7 @@ fn present_failure(failure: &Failure) -> Presentation {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One arm per result payload keeps the render table flat.
 fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
     match payload {
         ResultPayload::Status(status) => format!(
@@ -526,6 +527,15 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             result.usage.emitted_output_tokens,
             truth_label(truth),
             escape_text(result.text())
+        ),
+        ResultPayload::ModelStatus(status) => format!(
+            "loaded={} registered={} truth={}\n",
+            status
+                .loaded
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |model| escape_text(model.model_id())),
+            status.registered.len(),
+            truth_label(truth)
         ),
         ResultPayload::FlowRun(result) => render_flow_result(result, truth),
     }

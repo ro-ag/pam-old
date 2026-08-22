@@ -4,6 +4,7 @@ use pam_gui::SkillLibraryRequest;
 
 use crate::commands::{
     ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest, FencedRequest,
+    FlowComposeRequest, FlowGraphRequest, ModelInferRequest,
 };
 
 const PROJECT_HANDLE: &str = "88d408ec-796b-4f56-b34c-f2a8d25f9128";
@@ -159,4 +160,97 @@ fn activity_request_accepts_an_optional_limit_and_rejects_unknown_fields() {
     assert!(serde_json::from_value::<ActivityRequest>(without_limit).is_ok());
     assert!(serde_json::from_value::<ActivityRequest>(with_limit).is_ok());
     assert!(serde_json::from_value::<ActivityRequest>(unknown).is_err());
+}
+
+#[test]
+fn model_infer_request_accepts_the_fence_conversation_and_optional_token_budget() {
+    let with_budget = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "messages": [
+            { "role": "system", "content": "Answer briefly." },
+            { "role": "user", "content": "What changed?" }
+        ],
+        "maxOutputTokens": 256
+    });
+    let without_budget = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "messages": [{ "role": "user", "content": "What changed?" }]
+    });
+
+    assert!(serde_json::from_value::<ModelInferRequest>(with_budget).is_ok());
+    assert!(serde_json::from_value::<ModelInferRequest>(without_budget).is_ok());
+}
+
+#[test]
+fn model_infer_request_rejects_unknown_fields_and_unknown_roles() {
+    let ambient = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "messages": [{ "role": "user", "content": "What changed?" }],
+        "modelPath": "/tmp/untrusted.gguf"
+    });
+    let unknown_role = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "messages": [{ "role": "tool", "content": "ambient authority" }]
+    });
+    let ambient_message_field = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "messages": [{ "role": "user", "content": "What changed?", "path": "/tmp" }]
+    });
+
+    assert!(serde_json::from_value::<ModelInferRequest>(ambient).is_err());
+    assert!(serde_json::from_value::<ModelInferRequest>(unknown_role).is_err());
+    assert!(serde_json::from_value::<ModelInferRequest>(ambient_message_field).is_err());
+}
+
+#[test]
+fn flow_graph_request_accepts_only_the_fence_and_source_text() {
+    let valid = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "source": "schema_version = 2"
+    });
+    let ambient_path = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "source": "schema_version = 2",
+        "path": "/tmp/untrusted.toml"
+    });
+
+    assert!(serde_json::from_value::<FlowGraphRequest>(valid).is_ok());
+    assert!(serde_json::from_value::<FlowGraphRequest>(ambient_path).is_err());
+}
+
+#[test]
+fn flow_compose_request_accepts_only_the_fence_and_definition_text() {
+    let valid = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "definition": "{}"
+    });
+    let missing_definition = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID
+    });
+
+    assert!(serde_json::from_value::<FlowComposeRequest>(valid).is_ok());
+    assert!(serde_json::from_value::<FlowComposeRequest>(missing_definition).is_err());
 }

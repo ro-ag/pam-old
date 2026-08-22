@@ -535,6 +535,42 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .flow-diff pre { margin: 0; overflow-wrap: anywhere; color: var(--sand-400); white-space: pre-wrap; font: 10px/1.5 var(--font-mono); }
 .flow-diff pre.is-added { color: var(--aqua-soft); }
 .flow-diff pre.is-removed { color: var(--coral-soft); }
+.flow-mode-toggle { display: inline-flex; margin-right: 8px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.flow-mode-toggle button { padding: 5px 10px; border: 0; color: var(--sand-400); background: transparent; cursor: pointer; font-size: 11px; }
+.flow-mode-toggle button[aria-pressed="true"] { color: var(--aqua); background: rgba(7, 45, 54, 0.55); }
+.mode-notice { padding: 8px 13px; border-top: 1px solid var(--line); color: var(--sand-200); background: rgba(12, 39, 67, 0.45); }
+.mode-notice p { margin: 4px 0; font-size: 11px; }
+.flow-visual { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(230px, 34%); background: rgba(2, 13, 27, 0.82); }
+.flow-canvas { min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.flow-canvas .react-flow { background: transparent; }
+.flow-node { display: grid; gap: 4px; min-width: 190px; max-width: 230px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; color: var(--sand-100); background: rgba(6, 26, 49, 0.92); font-size: 11px; }
+.react-flow__node.selected .flow-node { border-color: rgba(89, 225, 213, 0.55); }
+.flow-node strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; }
+.flow-node small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sand-400); font-family: var(--font-mono); font-size: 9px; }
+.flow-node-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.flow-badge { font-size: 8px; }
+.flow-badge--observe, .flow-badge--verify { color: var(--aqua); border-color: rgba(89, 225, 213, 0.4); }
+.flow-badge--change, .flow-badge--stateful { color: var(--coral-soft); border-color: rgba(255, 156, 119, 0.4); }
+.flow-badge--read_only { color: var(--sand-400); }
+.flow-step-inspector { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: auto; }
+.flow-step-list { display: grid; gap: 5px; padding: 9px; border-bottom: 1px solid var(--line); }
+.flow-step-list > button:not(.button) { display: grid; gap: 2px; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--sand-400); background: transparent; cursor: pointer; text-align: left; }
+.flow-step-list > button:not(.button):hover, .flow-step-list > button:not(.button).is-active { border-color: rgba(255, 144, 101, 0.25); color: var(--sand-100); background: rgba(18, 47, 70, 0.76); }
+.flow-step-list strong { font-family: var(--font-mono); font-size: 11px; }
+.flow-step-list small { color: var(--sand-400); font-size: 9px; }
+.flow-step-fields { display: grid; gap: 9px; align-content: start; padding: 11px; overflow: auto; }
+.flow-step-fields--empty p { margin: 0; color: var(--sand-400); font-size: 11px; }
+.flow-field { display: grid; gap: 3px; margin: 0; border: 0; padding: 0; font-size: 11px; }
+.flow-field > span, .flow-field legend { color: var(--sand-200); font-size: 10px; }
+.flow-field input, .flow-field select, .flow-field textarea { padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--sand-100); background: rgba(2, 13, 27, 0.82); font-size: 11px; }
+.flow-field textarea { resize: vertical; font-family: var(--font-mono); }
+.flow-field small { color: var(--sand-400); font-size: 9px; }
+.flow-depends label { display: flex; gap: 6px; align-items: center; color: var(--sand-100); font-family: var(--font-mono); font-size: 10px; }
+.flow-action-summary { margin: 0; overflow-wrap: anywhere; color: var(--sand-400); font-family: var(--font-mono); font-size: 10px; }
+@media (max-width: 700px) {
+  .flow-canvas { display: none; }
+  .flow-visual { grid-template-columns: minmax(0, 1fr); }
+}
 .flow-diff > p { margin: 7px 0; color: var(--sand-400); font-size: 11px; }
 .loading-panel { display: flex; min-height: 240px; gap: 10px; align-items: center; justify-content: center; color: var(--sand-400); }
 .loading-panel.is-error { flex-wrap: wrap; padding: 24px; border-color: rgba(255, 103, 79, 0.48); }
@@ -1258,6 +1294,21 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .flow-editor textarea { border-color: var(--pam-line); color: var(--pam-content-secondary); background: var(--pam-page); }
 .flow-inspector, .flow-inspector-tabs { border-color: var(--pam-line); background: var(--pam-surface); }
 .flow-inspector-tab[aria-selected="true"] { border-color: color-mix(in srgb, var(--pam-violet) 28%, transparent); color: var(--pam-violet); background: var(--pam-violet-soft); }
+.flow-mode-toggle { border-color: var(--pam-line); border-radius: 8px; }
+.flow-mode-toggle button { color: var(--pam-muted); }
+.flow-mode-toggle button[aria-pressed="true"] { color: var(--pam-ice); background: var(--pam-surface); }
+.mode-notice { border-color: var(--pam-line); color: var(--pam-content-secondary); background: var(--pam-surface); }
+.flow-visual { background: var(--pam-page); }
+.flow-canvas { border-color: var(--pam-line); }
+.flow-node { border-color: var(--pam-line); border-radius: 10px; color: var(--pam-text); background: var(--pam-surface-raised); }
+.react-flow__node.selected .flow-node { border-color: var(--pam-focus); }
+.flow-badge--observe, .flow-badge--verify { color: var(--pam-ice); border-color: color-mix(in srgb, var(--pam-ice) 40%, transparent); }
+.flow-badge--change, .flow-badge--stateful { color: var(--pam-copper); border-color: color-mix(in srgb, var(--pam-copper) 40%, transparent); }
+.flow-step-inspector { background: var(--pam-surface); }
+.flow-step-list { border-color: var(--pam-line); }
+.flow-step-list > button:not(.button) { border-radius: 10px; color: var(--pam-muted); }
+.flow-step-list > button:not(.button):hover, .flow-step-list > button:not(.button).is-active { border-color: color-mix(in srgb, var(--pam-violet) 24%, transparent); color: var(--pam-text); background: var(--pam-violet-soft); }
+.flow-field input, .flow-field select, .flow-field textarea { border-color: var(--pam-line); border-radius: 8px; color: var(--pam-text); background: var(--pam-page); }
 
 .project-menu-popover,
 .theme-menu-popover,
@@ -1331,6 +1382,19 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .scrollbar-thumb { position: relative; flex: 1; border-radius: 999px; background: var(--pam-muted); opacity: 0.65; }
 .drawer-close { border: 0; color: var(--pam-muted); background: transparent; }
 .evidence-document pre { border-color: var(--pam-line); border-radius: 16px; color: var(--pam-content-secondary); background: var(--pam-page); }
+
+.model-chat { display: grid; gap: 12px; padding: 16px 18px; }
+.chat-transcript { display: grid; gap: 10px; overflow-y: auto; max-height: 52vh; }
+.chat-bubble { max-width: 88%; padding: 10px 13px; border: 1px solid var(--pam-line); border-radius: 14px; }
+.chat-bubble p { margin: 0; color: var(--pam-text); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-bubble--user { justify-self: end; border-bottom-right-radius: 4px; background: var(--pam-ice-soft); }
+.chat-bubble--assistant { justify-self: start; border-bottom-left-radius: 4px; background: var(--pam-surface-raised); }
+.chat-usage { display: block; margin-top: 6px; color: var(--pam-muted); font-size: 10px; }
+.chat-waiting, .chat-note { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 0; padding: 8px; color: var(--pam-muted); font-size: 12px; text-align: center; }
+.chat-composer { display: grid; gap: 8px; }
+.chat-input { min-height: 74px; padding: 10px 12px; border: 1px solid var(--pam-line); border-radius: 12px; color: var(--pam-text); background: var(--pam-surface-raised); font-family: var(--font-mono); font-size: 12.5px; resize: vertical; }
+.chat-input::placeholder { color: var(--pam-muted); }
+.chat-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .command-modal {
   position: fixed;

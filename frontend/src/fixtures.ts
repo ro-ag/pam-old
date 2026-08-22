@@ -7,10 +7,15 @@ import type {
   CatalogDto,
   CommandFence,
   EvidenceDataDto,
+  FlowDefinitionJson,
   FlowDocumentDataDto,
   FlowReviewDataDto,
   FlowSaveDataDto,
   FlowWorkspaceDataDto,
+  ChatMessageDto,
+  ModelInferDto,
+  ModelStatusDto,
+  ModelSummaryDto,
   PamBridge,
   ProjectSummaryDto,
   SnapshotDataDto,
@@ -85,6 +90,99 @@ semantic = "verify"
 action = { type = "command", program = "git", args = ["diff", "--quiet"], working_directory = "." }
 `;
 
+// The fixture flowSource above, expressed as the exact serde JSON of
+// pam_flow::FlowDefinition. Exported so tests can assert against the graph.
+export const afterMergeDefinition: FlowDefinitionJson = {
+  schema_version: 2,
+  id: "after-merge-checks",
+  name: "After merge checks",
+  description: "Observe the merged revision and verify the worktree.",
+  revision: 4,
+  steps: [
+    {
+      id: "observe-revision",
+      description: "Record the checked-out revision as evidence.",
+      depends_on: [],
+      condition: { kind: "always" },
+      retry: { max_attempts: 1, initial_backoff_ms: 0, max_backoff_ms: 0 },
+      approval: "none",
+      idempotency_key: null,
+      timeout_seconds: 30,
+      effect: "read_only",
+      semantic: "observe",
+      action: { type: "command", program: "git", args: ["rev-parse", "--verify", "HEAD"], working_directory: "." },
+    },
+    {
+      id: "verify-worktree",
+      description: "Verify tracked files match the index.",
+      depends_on: ["observe-revision"],
+      condition: { kind: "succeeded", step: "observe-revision" },
+      retry: { max_attempts: 1, initial_backoff_ms: 0, max_backoff_ms: 0 },
+      approval: "none",
+      idempotency_key: null,
+      timeout_seconds: 30,
+      effect: "read_only",
+      semantic: "verify",
+      action: { type: "command", program: "git", args: ["diff", "--quiet"], working_directory: "." },
+    },
+  ],
+  outcome: {
+    solved: "Whether every declared check completed successfully.",
+    changed: "This read-only flow does not change project state.",
+    verified: "Whether the tracked worktree matches the index.",
+    unresolved: "Which check still needs investigation.",
+    blocked: "Which policy or workspace boundary stopped the flow.",
+  },
+};
+
+const tomlString = (value: string) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+const tomlArray = (values: string[]) => `[${values.map(tomlString).join(", ")}]`;
+
+// A deterministic serializer for FlowDefinitionJson, mirroring the inline TOML
+// style pam_flow writes. This is not a parser: the fixture graphs only sources
+// it has produced (or its own seed document) via a lookup.
+function composeFlowToml(definition: FlowDefinitionJson): string {
+  const lines = [
+    `schema_version = ${definition.schema_version}`,
+    `id = ${tomlString(definition.id)}`,
+    `name = ${tomlString(definition.name)}`,
+    `description = ${tomlString(definition.description)}`,
+    `revision = ${definition.revision}`,
+    "",
+    "[outcome]",
+    `solved = ${tomlString(definition.outcome.solved)}`,
+    `changed = ${tomlString(definition.outcome.changed)}`,
+    `verified = ${tomlString(definition.outcome.verified)}`,
+    `unresolved = ${tomlString(definition.outcome.unresolved)}`,
+    `blocked = ${tomlString(definition.outcome.blocked)}`,
+  ];
+  for (const step of definition.steps) {
+    const condition = step.condition.kind === "always"
+      ? '{ kind = "always" }'
+      : `{ kind = ${tomlString(step.condition.kind)}, step = ${tomlString(step.condition.step)} }`;
+    const action = step.action.type === "command"
+      ? `{ type = "command", program = ${tomlString(step.action.program)}, args = ${tomlArray(step.action.args)}, working_directory = ${tomlString(step.action.working_directory)} }`
+      : `{ type = "connector", connector = ${tomlString(step.action.connector)}, capability = ${tomlString(step.action.capability)}, resource = { kind = ${tomlString(step.action.resource.kind)}, id = ${tomlString(step.action.resource.id)} } }`;
+    lines.push(
+      "",
+      "[[steps]]",
+      `id = ${tomlString(step.id)}`,
+      `description = ${tomlString(step.description)}`,
+      `depends_on = ${tomlArray(step.depends_on)}`,
+      `condition = ${condition}`,
+      `retry = { max_attempts = ${step.retry.max_attempts}, initial_backoff_ms = ${step.retry.initial_backoff_ms}, max_backoff_ms = ${step.retry.max_backoff_ms} }`,
+      `approval = ${tomlString(step.approval)}`,
+    );
+    if (step.idempotency_key !== null) lines.push(`idempotency_key = ${tomlString(step.idempotency_key)}`);
+    lines.push(`timeout_seconds = ${step.timeout_seconds}`, `effect = ${tomlString(step.effect)}`);
+    if (step.semantic !== null) lines.push(`semantic = ${tomlString(step.semantic)}`);
+    lines.push(`action = ${action}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+const normalizeFlowSource = (source: string) => `${source.trimEnd()}\n`;
+
 const definitionHandle = "66666666-6666-4666-8666-666666666666";
 const secondDefinitionHandle = "77777777-7777-4777-8777-777777777777";
 const documentHandle = "88888888-8888-4888-8888-888888888888";
@@ -114,6 +212,7 @@ export const fixtureScenarios = [
   "skill-audit-no-evaluator",
   "skill-audit-failed",
   "skill-audit-load-error",
+  "model-infer-blocked",
 ] as const;
 
 export type FixtureScenario = typeof fixtureScenarios[number];
@@ -121,6 +220,14 @@ export type FixtureScenario = typeof fixtureScenarios[number];
 export function fixtureScenario(value: string | null | undefined): FixtureScenario {
   return fixtureScenarios.find((scenario) => scenario === value) ?? "solved";
 }
+
+const loadedModel: ModelSummaryDto = { modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 };
+const registeredModels: ModelSummaryDto[] = [
+  loadedModel,
+  { modelId: "qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
+];
+
+const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
 
 const unavailableFailure = {
   kind: "unavailable" as const,
@@ -455,6 +562,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   let generation = "99999999-9999-4999-8999-999999999999";
   let daemonRunning = scenario !== "offline";
   let savedSource = flowSource;
+  const flowGraphSources = new Map<string, FlowDefinitionJson>([
+    [normalizeFlowSource(flowSource), afterMergeDefinition],
+  ]);
   const libraryEntries = skillLibraryFixture();
   const libraryDrift = new Map<string, SkillLibraryDriftStateDto>([
     ["release-confidence:sha256:1111111111111111111111111111111111111111111111111111111111111111:codex", { state: "missing" }],
@@ -507,6 +617,58 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       if (scenario === "empty") return { status: "ok", events: [], truncated: false };
       const bounded = activityEvents.slice(0, limit ?? activityEvents.length);
       return clone({ status: "ok" as const, events: bounded, truncated: bounded.length < activityEvents.length });
+    },
+    async modelStatus(_fence): Promise<ModelStatusDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so the local model runtime is not reachable.",
+            recovery: "Start PAM to check on the local model.",
+          },
+        };
+      }
+      return clone({ status: "ok" as const, loaded: loadedModel, registered: registeredModels });
+    },
+    async modelInfer(_fence, model, messages: ChatMessageDto[]): Promise<ModelInferDto> {
+      if (scenario === "model-infer-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "model_infer_blocked",
+            detail: "Project policy has not granted model.infer to this caller yet.",
+            recovery: "pam access grant model.infer for this GUI caller and project, then send again.",
+          },
+        };
+      }
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so the local model cannot answer.",
+            recovery: "Start PAM to chat with the local model.",
+          },
+        };
+      }
+      const lastUser = [...messages].reverse().find((message) => message.role === "user");
+      const text = `You said: ${lastUser?.content ?? "nothing yet"}. The fixture model heard ${messages.length} message${messages.length === 1 ? "" : "s"}.`;
+      const outputTokens = estimateTokens(text);
+      return {
+        status: "ok",
+        model,
+        text,
+        finishReason: "stop",
+        usage: {
+          inputTokens: messages.reduce((total, message) => total + estimateTokens(message.content), 0),
+          sampledOutputTokens: outputTokens,
+          emittedOutputTokens: outputTokens,
+        },
+      };
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {
@@ -707,6 +869,21 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     async openFlow(fence, flowHandle) {
       if (flowHandle !== definitionHandle) throw new Error("This fixture definition has no editable document.");
       return fenceResponse(fence, document());
+    },
+    async flowGraph(_fence, source) {
+      const definition = flowGraphSources.get(normalizeFlowSource(source));
+      if (!definition) {
+        return {
+          status: "invalid",
+          failure: { detail: "This source has hand edits the visual editor cannot follow yet. Keep working here, or validate first." },
+        };
+      }
+      return { status: "ok", definition: clone(definition) };
+    },
+    async flowCompose(_fence, definition) {
+      const source = composeFlowToml(definition);
+      flowGraphSources.set(normalizeFlowSource(source), clone(definition));
+      return { status: "ok", source };
     },
     async validateFlow(fence, _documentHandle, source) {
       if (!source.includes("schema_version = 2") || !source.includes("[[steps]]")) {

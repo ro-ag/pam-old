@@ -13,6 +13,7 @@ import { answersFence, nextOperationId, sameFence, withOperation } from "./bridg
 import type {
   ApprovalDecision,
   CommandFence,
+  ModelStatusDto,
   PamBridge,
   SnapshotDto,
   ViewId,
@@ -35,6 +36,7 @@ import {
   type CommandPaletteCommand,
   EvidenceDrawer,
   LoadingScreen,
+  ModelChatDrawer,
   QueueDrawer,
   RecoveryScreen,
 } from "./components/Surfaces";
@@ -131,8 +133,11 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   });
   const [overlays, dispatchOverlay] = useReducer(overlayReducer, null, createOverlayState);
   const [toast, setToast] = useState("");
+  const [modelStatus, setModelStatus] = useState<ModelStatusDto | null>(null);
   const toastTimer = useRef<number | null>(null);
   const evidenceRequestSequence = useRef(0);
+  const modelRequestSequence = useRef(0);
+  const modelChatReturnFocusRef = useRef<HTMLElement | null>(null);
   const dataCommandSequence = useRef(0);
   const bootstrapRequestSequence = useRef(0);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -274,11 +279,33 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     }
   }, [showToast]);
 
+  const loadModelStatus = useCallback(async () => {
+    if (!fenceRef.current) return;
+    const sequence = ++modelRequestSequence.current;
+    try {
+      const response = await bridge.modelStatus(withOperation(fenceRef.current));
+      if (sequence === modelRequestSequence.current) setModelStatus(response);
+    } catch (error) {
+      if (sequence === modelRequestSequence.current) {
+        setModelStatus({ status: "unavailable", failure: { code: null, detail: presentError(error), recovery: null } });
+      }
+    }
+  }, [bridge]);
+
+  const reloadModelStatus = useCallback(() => { void loadModelStatus(); }, [loadModelStatus]);
+
+  const activeProjectHandle = state.activeFence?.projectHandle ?? null;
+  useEffect(() => {
+    if (activeProjectHandle) void loadModelStatus();
+    else setModelStatus(null);
+  }, [activeProjectHandle, loadModelStatus]);
+
   const refresh = useCallback(() => {
     if (!fenceRef.current) return;
     const fence = withOperation(fenceRef.current);
     void executeDataCommand(fence, () => bridge.refreshProject(fence), "Project state refreshed");
-  }, [bridge, executeDataCommand]);
+    void loadModelStatus();
+  }, [bridge, executeDataCommand, loadModelStatus]);
 
   const mobileSidebarOpen = compactViewport && !state.sidebarCollapsed;
   const toggleSidebar = useCallback(() => {
@@ -462,6 +489,17 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     queueReturnFocusRef.current = returnFocusTarget ?? activeElement ?? queueButtonRef.current;
     openOverlay({ id: "queue", kind: "queue", authority: overlayAuthority });
   };
+  const chatModelId = modelStatus?.status === "ok"
+    ? (modelStatus.loaded ?? modelStatus.registered[0])?.modelId ?? null
+    : null;
+  const openModelChat = (modelId: string, returnFocusTarget?: HTMLElement) => {
+    if (!overlayAuthority) return;
+    const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null;
+    modelChatReturnFocusRef.current = returnFocusTarget ?? activeElement;
+    openOverlay({ id: "model-chat", kind: "model-chat", authority: overlayAuthority, modelId });
+  };
   const openCommandPalette = (returnFocusTarget?: HTMLElement) => {
     if (!overlayAuthority || currentOverlay) return;
     commandReturnFocusRef.current = returnFocusTarget ?? commandButtonRef.current;
@@ -483,6 +521,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
     { id: "view-callers", label: "Open Callers", description: "Show the callers registered with the daemon.", shortcut: "⌘6" },
     { id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." },
+    ...(chatModelId
+      ? [{ id: "model-chat", label: "Chat with the model", description: "Review the local model in an ephemeral chat." }]
+      : []),
     { id: "refresh", label: "Refresh project", description: "Request current state from PAM.", shortcut: "⌘R" },
   ];
   const runCommand = (id: string) => {
@@ -505,6 +546,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     } else if (id === "open-queue" && overlayAuthority) {
       queueReturnFocusRef.current = commandReturnFocusRef.current?.isConnected ? commandReturnFocusRef.current : null;
       openOverlay({ id: "queue", kind: "queue", authority: overlayAuthority }, true);
+    } else if (id === "model-chat" && overlayAuthority && chatModelId) {
+      modelChatReturnFocusRef.current = commandReturnFocusRef.current?.isConnected ? commandReturnFocusRef.current : null;
+      openOverlay({ id: "model-chat", kind: "model-chat", authority: overlayAuthority, modelId: chatModelId }, true);
     } else if (id === "refresh") {
       closeActiveOverlay();
       refresh();
@@ -579,6 +623,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   bridge={bridge}
                   fence={state.activeFence}
                   pending={pending}
+                  modelStatus={modelStatus}
+                  onReloadModel={reloadModelStatus}
+                  onOpenModelChat={openModelChat}
                   onStartDaemon={toggleDaemon}
                 />
               )}
@@ -600,6 +647,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         }
         if (entry.kind === "evidence") {
           return <EvidenceDrawer active={active} document={entry.document} loading={entry.loading} error={entry.error} key={entry.id} onRetry={entry.retryable ? () => { void loadEvidence(entry.handle); } : undefined} onClose={closeActiveOverlay} />;
+        }
+        if (entry.kind === "model-chat") {
+          return <ModelChatDrawer active={active} bridge={bridge} fence={state.activeFence!} modelId={entry.modelId} key={entry.id} returnFocusTarget={modelChatReturnFocusRef.current} onClose={closeActiveOverlay} />;
         }
         return <CommandPalette active={active} commands={commands} key={entry.id} returnFocusTarget={commandReturnFocusRef.current} onAction={runCommand} onClose={closeActiveOverlay} />;
       })}

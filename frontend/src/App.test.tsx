@@ -816,6 +816,8 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("button", { name: "Flows" }));
     expect(await screen.findByRole("region", { name: "Flow workspace" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
     const source = await screen.findByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement;
     expect(source.value).toContain("schema_version = 2");
     fireEvent.change(source, { target: { value: `${source.value.replace("revision = 4", "revision = 5")}\n\n` } });
@@ -850,6 +852,8 @@ describe("daemon observatory", () => {
     await screen.findByRole("heading", { name: "payments-api" });
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await user.click(await screen.findByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
 
     const source = await screen.findByRole("textbox", { name: "Flow TOML source" });
     await user.click(screen.getByRole("button", { name: "Validate" }));
@@ -877,6 +881,8 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await screen.findByRole("region", { name: "Flow workspace" });
     await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
     const source = await screen.findByRole("textbox", { name: "Flow TOML source" });
 
     await user.click(screen.getByRole("button", { name: "Validate" }));
@@ -903,6 +909,8 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await screen.findByRole("region", { name: "Flow workspace" });
     await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
     const source = await screen.findByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement;
 
     await user.click(screen.getByRole("button", { name: "Validate" }));
@@ -1032,5 +1040,112 @@ describe("daemon observatory", () => {
     await screen.findByRole("heading", { name: "Authenticated project state is unavailable" });
 
     expect(screen.queryByRole("button", { name: "Restart PAM" })).not.toBeInTheDocument();
+  });
+
+  it("chats with the local model in an ephemeral drawer with usage lines", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={fixtureBridge()} initialView="activity" />);
+
+    await user.click(await screen.findByRole("button", { name: "Chat" }));
+    const drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    expect(within(drawer).getAllByText("qwen3-14b-instruct-q4").length).toBeGreaterThan(0);
+    expect(within(drawer).getByText(/close the drawer and the transcript drifts away/)).toBeInTheDocument();
+
+    await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "hello tide");
+    await user.click(within(drawer).getByRole("button", { name: "Send" }));
+
+    expect(await within(drawer).findByText("hello tide")).toBeInTheDocument();
+    expect(await within(drawer).findByText(/You said: hello tide/)).toBeInTheDocument();
+    expect(within(drawer).getByText(/in \d+ · out \d+ tokens/)).toBeInTheDocument();
+
+    await user.click(within(drawer).getByRole("button", { name: "Clear" }));
+    expect(within(drawer).queryByText("hello tide")).not.toBeInTheDocument();
+    expect(within(drawer).getByText(/Say hello to the local model/)).toBeInTheDocument();
+  });
+
+  it("discards the transcript on close, restores focus, and reopens empty", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={fixtureBridge()} initialView="activity" />);
+
+    const chatOpener = await screen.findByRole("button", { name: "Chat" });
+    await user.click(chatOpener);
+    let drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "remember me");
+    await user.click(within(drawer).getByRole("button", { name: "Send" }));
+    await within(drawer).findByText(/You said: remember me/);
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Model chat" })).not.toBeInTheDocument());
+    await waitFor(() => expect(chatOpener).toHaveFocus());
+
+    await user.click(chatOpener);
+    drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    expect(within(drawer).queryByText(/remember me/)).not.toBeInTheDocument();
+    expect(within(drawer).getByText(/Say hello to the local model/)).toBeInTheDocument();
+  });
+
+  it("shows a patient busy state and discards a stale reply after the drawer closes", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    let releaseReply!: () => void;
+    const originalInfer = bridge.modelInfer.bind(bridge);
+    bridge.modelInfer = vi.fn(async (fence, model, messages, maxOutputTokens) => {
+      await new Promise<void>((resolve) => { releaseReply = resolve; });
+      return originalInfer(fence, model, messages, maxOutputTokens);
+    });
+    render(<App bridge={bridge} initialView="activity" />);
+
+    await user.click(await screen.findByRole("button", { name: "Chat" }));
+    const drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "slow reply");
+    await user.click(within(drawer).getByRole("button", { name: "Send" }));
+
+    expect(within(drawer).getByRole("status")).toHaveTextContent(/The model is thinking/);
+    expect(within(drawer).getByRole("button", { name: "Send" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Model chat" })).not.toBeInTheDocument());
+    await act(async () => { releaseReply(); });
+    expect(screen.queryByText(/You said: slow reply/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    const reopened = await screen.findByRole("dialog", { name: "Model chat" });
+    expect(within(reopened).queryByText(/slow reply/)).not.toBeInTheDocument();
+  });
+
+  it("surfaces a blocked model.infer grant calmly inside the drawer", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={fixtureBridge("model-infer-blocked")} initialView="activity" />);
+
+    await user.click(await screen.findByRole("button", { name: "Chat" }));
+    const drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "hello");
+    await user.click(within(drawer).getByRole("button", { name: "Send" }));
+
+    const note = await within(drawer).findByText(/pam access grant model\.infer/);
+    expect(note).toHaveTextContent("Project policy has not granted model.infer to this caller yet.");
+    expect(within(drawer).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("offers the model chat palette command only while a model is present", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App bridge={fixtureBridge()} />);
+    await screen.findByRole("heading", { name: "Control center" });
+
+    await user.click(screen.getByRole("button", { name: "Open command palette (⌘K)" }));
+    let palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await user.type(within(palette).getByRole("searchbox", { name: "Search commands" }), "chat");
+    await user.click(await within(palette).findByRole("option", { name: /Chat with the model/ }));
+    expect(await screen.findByRole("dialog", { name: "Model chat" })).toBeInTheDocument();
+    unmount();
+
+    render(<App bridge={fixtureBridge("offline")} />);
+    await screen.findByRole("heading", { name: "Authenticated project state is unavailable" });
+    await user.click(screen.getByRole("button", { name: "Open command palette (⌘K)" }));
+    palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await user.type(within(palette).getByRole("searchbox", { name: "Search commands" }), "chat");
+    expect(within(palette).queryByRole("option", { name: /Chat with the model/ })).not.toBeInTheDocument();
+    expect(within(palette).getByText("No matching commands.")).toBeInTheDocument();
   });
 });

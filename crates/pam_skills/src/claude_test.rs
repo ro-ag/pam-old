@@ -288,12 +288,52 @@ fn invalid_metadata_is_diagnostic_but_never_executed() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_escape_is_rejected_and_marks_scan_incomplete() {
+fn symlink_escape_is_skipped_without_blocking_the_scan() {
     use std::os::unix::fs::symlink;
 
     let project = TestDirectory::new("claude-symlink-project");
     let outside = TestDirectory::new("claude-symlink-outside");
     outside.write("outside.md", b"secret\n");
+    project.write("CLAUDE.md", b"kept\n");
+    fs::create_dir_all(project.path().join(".claude/rules")).unwrap();
+    symlink(
+        outside.path().join("outside.md"),
+        project.path().join(".claude/rules/escape.md"),
+    )
+    .unwrap();
+
+    let report = scan_claude_code(
+        ClaudeScanRoots::new(None, Some(project.path()), &[]),
+        ScanLimits::default(),
+    );
+    assert!(report.complete(), "{:?}", report.diagnostics());
+    assert!(report.diagnostics().iter().any(|diagnostic| {
+        diagnostic.kind() == ScanDiagnosticKind::UnsafeSymlink
+            && diagnostic.logical_path() == ".claude/rules/escape.md"
+    }));
+    artifact(
+        report.artifacts(),
+        "CLAUDE.md",
+        ArtifactKind::Instruction,
+        ArtifactScope::Project,
+    );
+    assert!(
+        !report
+            .artifacts()
+            .iter()
+            .any(|artifact| artifact.logical_path().contains("escape"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_only_diagnostics_still_block_when_mixed_with_invalid_json() {
+    use std::os::unix::fs::symlink;
+
+    let project = TestDirectory::new("claude-symlink-mixed-project");
+    let outside = TestDirectory::new("claude-symlink-mixed-outside");
+    outside.write("outside.md", b"secret\n");
+    project.write(".claude/settings.json", b"{not json");
     fs::create_dir_all(project.path().join(".claude/rules")).unwrap();
     symlink(
         outside.path().join("outside.md"),
@@ -306,11 +346,18 @@ fn symlink_escape_is_rejected_and_marks_scan_incomplete() {
         ScanLimits::default(),
     );
     assert!(!report.complete());
-    assert!(report.diagnostics().iter().any(|diagnostic| {
-        diagnostic.kind() == ScanDiagnosticKind::UnsafeSymlink
-            && diagnostic.logical_path() == ".claude/rules/escape.md"
-    }));
-    assert!(report.artifacts().is_empty());
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.kind() == ScanDiagnosticKind::UnsafeSymlink })
+    );
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.kind() == ScanDiagnosticKind::InvalidJson })
+    );
 }
 
 #[test]

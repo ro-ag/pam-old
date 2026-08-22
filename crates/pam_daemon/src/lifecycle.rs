@@ -45,9 +45,9 @@ use pam_protocol::{
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
     DaemonLifecycleResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
     EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode,
-    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
-    ProjectRequestState as ProtocolProjectRequestState,
+    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
+    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
+    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ReplayResult, RequestEnvelope,
     RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability,
     StatusResult, decode_request_envelope, decode_server_message_envelope, encode,
@@ -102,6 +102,7 @@ const MAX_MODEL_DEADLINE: Duration = Duration::from_mins(10);
 #[derive(Clone)]
 struct LoadedModelService {
     key: ModelKey,
+    size_bytes: u64,
     service: ModelService,
 }
 
@@ -442,6 +443,7 @@ async fn start_model_service(
         return Ok((None, None));
     };
     let registered = store.model(key.clone()).await?;
+    let size_bytes = registered.size_bytes;
     let runtime = tokio::task::spawn_blocking(move || {
         MacosLlamaCppRuntime::load(registered, Arc::new(MacosRuntimeHostAdmission))
     })
@@ -452,6 +454,7 @@ async fn start_model_service(
     Ok((
         Some(LoadedModelService {
             key,
+            size_bytes,
             service: service.clone(),
         }),
         Some(worker),
@@ -877,6 +880,9 @@ async fn handle_incoming(
         (Capability::CallerList, RequestPayload::CallerList) => {
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
+        (Capability::ModelStatus, RequestPayload::ModelStatus) => {
+            handle_model_status(&request, incoming, &outbound, loaded_model.as_ref()).await
+        }
         (Capability::FlowRun, RequestPayload::FlowRun { .. }) => {
             handle_flow_run(
                 request,
@@ -1116,6 +1122,7 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
                 RequestPayload::ReadEvidence { .. }
             )
             | (Capability::ModelInfer, RequestPayload::ModelInfer { .. })
+            | (Capability::ModelStatus, RequestPayload::ModelStatus)
             | (Capability::FlowRun, RequestPayload::FlowRun { .. })
     );
     capability_matches
@@ -1256,7 +1263,8 @@ pub(super) fn policy_resource(
         RequestPayload::Status
         | RequestPayload::Stop
         | RequestPayload::DaemonActivity { .. }
-        | RequestPayload::CallerList => "daemon".to_owned(),
+        | RequestPayload::CallerList
+        | RequestPayload::ModelStatus => "daemon".to_owned(),
         RequestPayload::ProjectCurrent => "project".to_owned(),
         RequestPayload::ApprovalDecide { .. } => "approval".to_owned(),
         RequestPayload::Brief => format!("project:{}", request.project_id),
@@ -1467,6 +1475,7 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::DaemonStop
         | Capability::DaemonActivity
         | Capability::CallerList
+        | Capability::ModelStatus
         | Capability::CancelRequest
         | Capability::ReplayEvents => format!(
             "pam approval approve {approval_id}; PAM has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request"
@@ -2197,6 +2206,46 @@ async fn handle_caller_list(
     )
     .await;
     Ok(())
+}
+
+async fn handle_model_status(
+    request: &RequestEnvelope,
+    incoming: IncomingRequest,
+    outbound: &mpsc::Sender<Outbound>,
+    loaded: Option<&LoadedModelService>,
+) -> Result<(), DaemonError> {
+    let message = match model_status_result(loaded.map(|model| (&model.key, model.size_bytes))) {
+        Ok(result) => ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Observed,
+            ResultPayload::ModelStatus(result),
+        )),
+        Err(_) => ServerMessage::Result(failure_result(
+            request,
+            FailureCode::Internal,
+            "the loaded model identity cannot be represented in the status contract",
+        )),
+    };
+    send_routed(outbound, incoming, vec![message], None).await;
+    Ok(())
+}
+
+/// Maps the daemon's model surface into the caller-facing status contract.
+///
+/// The registered catalog is limited to the models this daemon has resolved
+/// from the durable registry.
+// ponytail: only the configured model is resolvable today; a full catalog
+// needs a registry listing API in the store.
+pub(super) fn model_status_result(
+    loaded: Option<(&ModelKey, u64)>,
+) -> Result<ModelStatusResult, pam_protocol::ProtocolContractError> {
+    let loaded = loaded
+        .map(|(key, size_bytes)| ModelSummary::new(key.id(), size_bytes))
+        .transpose()?;
+    Ok(ModelStatusResult {
+        registered: loaded.clone().into_iter().collect(),
+        loaded,
+    })
 }
 
 pub(super) fn protocol_caller_summary(registration: CallerRegistration) -> CallerSummary {
@@ -3210,6 +3259,7 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::InspectEvidence { .. }
         | RequestPayload::ReadEvidence { .. }
         | RequestPayload::ModelInfer { .. }
+        | RequestPayload::ModelStatus
         | RequestPayload::FlowRun { .. } => None,
     }
 }

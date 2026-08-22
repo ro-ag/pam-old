@@ -34,12 +34,14 @@ pub use desktop::{
     ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallerDto, CallersDto,
     CatalogDto, CommandFence, CurrentDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
     DesktopResult, EvidenceDataDto, EvidenceDto, EvidenceHandleDto, FailureDto, FailureKindDto,
-    FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto,
-    FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowIdentityDto, FlowReviewDataDto,
-    FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto, FlowVersionDiffLineDto,
-    FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto, OperationId, OutcomeDto,
-    OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, RequestSummaryDto, RunDto,
-    SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto, TimelineKindDto,
+    FlowComposeDto, FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto,
+    FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
+    FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
+    FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
+    ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelUsageDto,
+    OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
+    RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
+    TimelineKindDto,
 };
 
 pub use skill_inventory::{

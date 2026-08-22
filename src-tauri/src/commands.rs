@@ -3,9 +3,10 @@ use std::sync::Arc;
 use pam_gui::{
     ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallersDto,
     CatalogDto, CommandFence, DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto,
-    FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowReviewDto, FlowSaveDto,
-    FlowWorkspaceDto, GenerationId, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto,
-    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto,
+    FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, ModelInferDto, ModelMessageDto,
+    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
+    SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -156,6 +157,45 @@ pub(crate) struct ActivityRequest {
     limit: Option<u32>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelInferRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    model: String,
+    messages: Vec<ModelMessageDto>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FlowGraphRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    source: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FlowComposeRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    definition: String,
+}
+
 fn fence(
     project_handle: ProjectHandle,
     generation: GenerationId,
@@ -289,6 +329,70 @@ pub(crate) async fn caller_registry(
     request: FencedRequest,
 ) -> Result<CallersDto, DesktopErrorDto> {
     state.core.caller_registry(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn model_status(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelStatusDto, DesktopErrorDto> {
+    state.core.model_status(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn model_infer(
+    state: State<'_, DesktopState>,
+    request: ModelInferRequest,
+) -> Result<ModelInferDto, DesktopErrorDto> {
+    state
+        .core
+        .model_infer(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
+            request.messages,
+            request.max_output_tokens,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_graph(
+    state: State<'_, DesktopState>,
+    request: FlowGraphRequest,
+) -> Result<FlowGraphDto, DesktopErrorDto> {
+    state
+        .core
+        .flow_graph(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.source,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_compose(
+    state: State<'_, DesktopState>,
+    request: FlowComposeRequest,
+) -> Result<FlowComposeDto, DesktopErrorDto> {
+    state
+        .core
+        .flow_compose(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.definition,
+        )
+        .await
 }
 
 #[tauri::command]

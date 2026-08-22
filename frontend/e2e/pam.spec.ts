@@ -226,6 +226,7 @@ test.describe("production-shaped interactions", () => {
     await page.setViewportSize({ width: 960, height: 800 });
     await openFixture(page, "solved", "flows");
     await page.getByRole("button", { name: /after-merge-checks/ }).click();
+    await page.getByRole("button", { name: "Source" }).click();
     const source = page.getByRole("textbox", { name: "Flow TOML source" });
     const original = await source.inputValue();
     await source.fill(original.replace("revision = 4", "revision = 5"));

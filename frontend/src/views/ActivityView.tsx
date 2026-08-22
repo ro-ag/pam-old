@@ -1,5 +1,6 @@
 import {
   ArrowClockwise,
+  Brain,
   CheckCircle,
   Power,
   Pulse,
@@ -8,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withOperation } from "../bridge";
-import type { ActivityDto, ActivityEventDto, CommandFence, PamBridge } from "../domain";
+import type { ActivityDto, ActivityEventDto, CommandFence, ModelStatusDto, PamBridge } from "../domain";
 import type { ControlCenterView } from "../selectors";
 import { presentError } from "../state";
 
@@ -19,15 +20,24 @@ function formatClock(occurredAtMs: number): string {
     : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
 }
 
+export function formatModelSize(sizeBytes: number): string {
+  if (sizeBytes >= 1_000_000_000) return `${(sizeBytes / 1_000_000_000).toFixed(1)} GB`;
+  if (sizeBytes >= 1_000_000) return `${Math.round(sizeBytes / 1_000_000)} MB`;
+  return `${sizeBytes.toLocaleString()} bytes`;
+}
+
 export interface ActivityViewProps {
   data: ControlCenterView;
   bridge: PamBridge;
   fence: CommandFence;
   pending: boolean;
+  modelStatus: ModelStatusDto | null;
+  onReloadModel: () => void;
+  onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartDaemon: () => void;
 }
 
-export function ActivityView({ data, bridge, fence, pending, onStartDaemon }: ActivityViewProps) {
+export function ActivityView({ data, bridge, fence, pending, modelStatus, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
   const [activity, setActivity] = useState<ActivityDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,6 +62,7 @@ export function ActivityView({ data, bridge, fence, pending, onStartDaemon }: Ac
   }, [bridge]);
 
   useEffect(() => {
+    onReloadModel();
     if (offline) {
       setActivity(null);
       setLoadError(null);
@@ -59,7 +70,11 @@ export function ActivityView({ data, bridge, fence, pending, onStartDaemon }: Ac
     }
     void load();
     return () => { requestSequence.current += 1; };
-  }, [load, offline]);
+  }, [load, offline, onReloadModel]);
+
+  const chatModel = modelStatus?.status === "ok"
+    ? modelStatus.loaded ?? modelStatus.registered[0] ?? null
+    : null;
 
   const projectLabel = (projectId: string | null) => projectId === null
     ? "daemon"
@@ -103,6 +118,47 @@ export function ActivityView({ data, bridge, fence, pending, onStartDaemon }: Ac
           <div><small>Queue depth</small><strong>{data.daemon.queueDepth ?? "Not reported"}</strong></div>
           {data.daemon.queueDepth !== null && <span className="project-stat-value">{data.daemon.queueDepth}</span>}
         </article>
+        <article className="project-stat group flex items-center gap-3">
+          <span className="project-stat-icon"><Brain size={21} weight="bold" /></span>
+          {!modelStatus ? (
+            <div><small>Local model</small><strong>Checking the local model…</strong></div>
+          ) : modelStatus.status !== "ok" ? (
+            <div><small>Local model</small><strong>{modelStatus.failure.detail}</strong></div>
+          ) : modelStatus.loaded ? (
+            <>
+              <div>
+                <small>Local model</small>
+                <strong>{modelStatus.loaded.modelId}</strong>
+                <small>{formatModelSize(modelStatus.loaded.sizeBytes)}</small>
+              </div>
+              <span className="state-pill state-pill--healthy">loaded</span>
+            </>
+          ) : modelStatus.registered.length > 0 ? (
+            <>
+              <div>
+                <small>Local model</small>
+                <strong>{modelStatus.registered[0].modelId}</strong>
+                <small>{formatModelSize(modelStatus.registered[0].sizeBytes)}</small>
+              </div>
+              <span className="state-pill state-pill--observed">on deck</span>
+            </>
+          ) : (
+            <div>
+              <small>Local model</small>
+              <strong>No local model yet</strong>
+              <small>Import one with pam model import whenever you are ready.</small>
+            </div>
+          )}
+          {chatModel && (
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={(event) => onOpenModelChat(chatModel.modelId, event.currentTarget)}
+            >
+              Chat
+            </button>
+          )}
+        </article>
       </section>
       {offline ? (
         <section className="empty-state">
@@ -122,7 +178,7 @@ export function ActivityView({ data, bridge, fence, pending, onStartDaemon }: Ac
               className="button button--secondary button--small"
               aria-label="Refresh activity"
               disabled={busy}
-              onClick={() => void load()}
+              onClick={() => { void load(); onReloadModel(); }}
             >
               <ArrowClockwise className={busy ? "is-spinning" : ""} size={17} /> Refresh
             </button>

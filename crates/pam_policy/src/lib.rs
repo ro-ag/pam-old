@@ -178,16 +178,17 @@ pub enum Decision {
 
 /// Capabilities every registered caller may use without an explicit grant.
 /// The daemon is a generic executor: clients call it, it answers status,
-/// current-project, activity, and caller-registry reads, and local callers
+/// current-project, activity, caller-registry, and model-surface reads, and local callers
 /// control its lifecycle (the UI starts, stops, and restarts it). An explicit
 /// deny still overrides, and an explicit approval-required allow still
 /// tightens.
-pub const BASELINE_CAPABILITIES: [&str; 5] = [
+pub const BASELINE_CAPABILITIES: [&str; 6] = [
     "daemon.status",
     "project.current",
     "daemon.stop",
     "daemon.activity",
     "caller.list",
+    "model.status",
 ];
 
 /// Evaluates active grants using deny-overrides semantics.

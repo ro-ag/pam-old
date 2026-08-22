@@ -3,8 +3,9 @@ use pam_core::{
 };
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalChallenge, CallerListResult, CallerSummary,
-    ConfigurationPresence, FailureCode, NetworkDiagnosticsResult, OperationTruth, PacState,
-    RequestEnvelope,
+    ConfigurationPresence, FailureCode, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason,
+    ModelGenerationResult, ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult,
+    OperationTruth, PacState, RequestEnvelope,
 };
 use std::sync::atomic::AtomicUsize;
 
@@ -13,12 +14,15 @@ use super::{
     current::{CurrentState, EvidencePreview, pending_approval_for_test},
     desktop::{
         AccessConfigDto, ApprovalDecisionDispositionDto, CommandFence, CurrentDto,
-        EvidenceHandleDto, FailureDto, FailureKindDto, GenerationId, HealthDto, OperationId,
-        ProjectHandle, TimelineKindDto, access_dto_for_test, active_core_for_test,
-        activity_dto_for_test, approval_current_for_test, approval_failure_retains_handle_for_test,
-        bounded_detail_for_test, callers_dto_for_test, current_dto_for_test, evidence_dto_for_test,
-        failure_kind_for_test, gui_registration_current_for_test, post_save_reload_error_for_test,
-        registration_contract_for_test, reserve_for_test, switch_authority_for_test,
+        EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowGraphDto, GenerationId,
+        HealthDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
+        active_core_for_test, activity_dto_for_test, approval_current_for_test,
+        approval_failure_retains_handle_for_test, bounded_detail_for_test, callers_dto_for_test,
+        clamp_model_output_tokens_for_test, current_dto_for_test, evidence_dto_for_test,
+        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
+        gui_registration_current_for_test, model_infer_dto_for_test, model_status_dto_for_test,
+        post_save_reload_error_for_test, registration_contract_for_test, reserve_for_test,
+        switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -496,4 +500,176 @@ fn observatory_denials_are_blocked_and_offline_reads_are_unavailable() {
             }
         })
     );
+}
+
+#[test]
+fn model_status_dto_serializes_the_exact_frontend_ok_contract() {
+    let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
+        loaded: Some(ModelSummary::new("qwen/qwen3-4b-instruct", 2_600_000_000).unwrap()),
+        registered: vec![
+            ModelSummary::new("qwen/qwen3-4b-instruct", 2_600_000_000).unwrap(),
+            ModelSummary::new("vendor/name", 123).unwrap(),
+        ],
+    }));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "loaded": { "modelId": "qwen/qwen3-4b-instruct", "sizeBytes": 2_600_000_000_u64 },
+            "registered": [
+                { "modelId": "qwen/qwen3-4b-instruct", "sizeBytes": 2_600_000_000_u64 },
+                { "modelId": "vendor/name", "sizeBytes": 123 }
+            ]
+        })
+    );
+}
+
+#[test]
+fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
+    let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
+        loaded: None,
+        registered: Vec::new(),
+    }));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({ "status": "ok", "loaded": null, "registered": [] })
+    );
+}
+
+#[test]
+fn model_infer_dto_serializes_the_exact_frontend_ok_contract() {
+    let dto = model_infer_dto_for_test(ObservatoryState::Available(
+        ModelGenerationResult::new(
+            "vendor/name",
+            "Observed answer.",
+            ModelFinishReason::Stop,
+            ModelUsage {
+                input_tokens: 1,
+                sampled_output_tokens: 2,
+                emitted_output_tokens: 2,
+            },
+        )
+        .unwrap(),
+    ));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "model": "vendor/name",
+            "text": "Observed answer.",
+            "finishReason": "stop",
+            "usage": { "inputTokens": 1, "sampledOutputTokens": 2, "emittedOutputTokens": 2 }
+        })
+    );
+}
+
+#[test]
+fn model_infer_denials_are_blocked_with_recovery_and_transport_is_unavailable() {
+    let blocked = model_infer_dto_for_test(ObservatoryState::Blocked {
+        code: FailureCode::Forbidden,
+        detail: "Policy denies model.infer.".to_owned(),
+        recovery: Some("Approve model.infer for the GUI caller.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(blocked).unwrap(),
+        serde_json::json!({
+            "status": "blocked",
+            "failure": {
+                "kind": "blocked",
+                "code": "forbidden",
+                "detail": "Policy denies model.infer.",
+                "recovery": "Approve model.infer for the GUI caller."
+            }
+        })
+    );
+
+    let unavailable = model_infer_dto_for_test(ObservatoryState::Unavailable {
+        code: None,
+        detail: "The PAM daemon is not running.".to_owned(),
+        recovery: Some("Start the PAM daemon.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(unavailable).unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": null,
+                "detail": "The PAM daemon is not running.",
+                "recovery": "Start the PAM daemon."
+            }
+        })
+    );
+}
+
+#[test]
+fn model_output_token_requests_are_clamped_to_the_protocol_budget() {
+    for (requested, expected) in [
+        (None, 512),
+        (Some(0), 512),
+        (Some(1), 1),
+        (Some(512), 512),
+        (Some(MAX_MODEL_OUTPUT_TOKENS), MAX_MODEL_OUTPUT_TOKENS),
+        (Some(MAX_MODEL_OUTPUT_TOKENS + 1), MAX_MODEL_OUTPUT_TOKENS),
+        (Some(u32::MAX), MAX_MODEL_OUTPUT_TOKENS),
+    ] {
+        assert_eq!(clamp_model_output_tokens_for_test(requested), expected);
+    }
+}
+
+fn repo_flow_source() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.pam/flows/after-merge-checks.toml");
+    std::fs::read_to_string(path).expect("the repo flow fixture must be readable")
+}
+
+#[test]
+fn flow_graph_and_flow_compose_reach_a_fixpoint_on_the_repo_flow() {
+    let FlowGraphDto::Ok { definition } = flow_graph_data_for_test(&repo_flow_source()) else {
+        panic!("the repo flow must convert to a structured definition");
+    };
+    let encoded = serde_json::to_string(&definition).unwrap();
+    let FlowComposeDto::Ok { source } = flow_compose_data_for_test(&encoded) else {
+        panic!("the structured definition must compose back to TOML");
+    };
+    let FlowGraphDto::Ok {
+        definition: reparsed,
+    } = flow_graph_data_for_test(&source)
+    else {
+        panic!("the normalized TOML must convert back to a structured definition");
+    };
+
+    assert_eq!(definition, reparsed);
+    assert_eq!(definition["schema_version"], serde_json::json!(2));
+    assert_eq!(definition["id"], serde_json::json!("after-merge-checks"));
+    assert_eq!(
+        definition["steps"][0]["semantic"],
+        serde_json::json!("observe")
+    );
+}
+
+#[test]
+fn flow_conversions_reject_invalid_documents_with_bounded_detail() {
+    let graph = flow_graph_data_for_test("schema_version = 99");
+    assert!(matches!(graph, FlowGraphDto::Invalid { .. }));
+
+    let compose = flow_compose_data_for_test("{\"schema_version\":99}");
+    assert!(matches!(compose, FlowComposeDto::Invalid { .. }));
+}
+
+#[test]
+fn oversized_flow_documents_are_invalid_in_both_directions() {
+    let oversized = "x".repeat(pam_flow::MAX_FLOW_DOCUMENT_BYTES + 1);
+
+    assert!(matches!(
+        flow_graph_data_for_test(&oversized),
+        FlowGraphDto::Invalid { .. }
+    ));
+    assert!(matches!(
+        flow_compose_data_for_test(&oversized),
+        FlowComposeDto::Invalid { .. }
+    ));
 }

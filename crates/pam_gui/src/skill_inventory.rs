@@ -110,7 +110,7 @@ impl SkillInventoryEnvironment {
                 DesktopErrorDto::unavailable(
                     "PAM could not resolve its local inventory state.",
                     Some(
-                        "Verify the operating system user data directory and retry Access."
+                        "Verify the operating system user data directory, then retry the Skills view."
                             .to_owned(),
                     ),
                 )
@@ -193,7 +193,10 @@ pub(crate) async fn load_skill_inventory(
     .map_err(|_| {
         DesktopErrorDto::unavailable(
             "PAM could not safely read the local agent inventory configuration.",
-            Some("Repair the configured agent plugin registry, then retry Access.".to_owned()),
+            Some(
+                "Repair the configured agent plugin registry, then retry the Skills view."
+                    .to_owned(),
+            ),
         )
     })?;
     if !report.complete() {
@@ -203,7 +206,8 @@ pub(crate) async fn load_skill_inventory(
                 report.diagnostics().len()
             ),
             Some(
-                "Review local agent file permissions and boundaries, then retry Access.".to_owned(),
+                "Review local agent file permissions and boundaries, then retry the Skills view."
+                    .to_owned(),
             ),
         ));
     }
@@ -295,14 +299,14 @@ fn now_ms() -> DesktopResult<u64> {
         .map_err(|_| {
             DesktopErrorDto::unavailable(
                 "The system clock cannot timestamp the skill inventory.",
-                Some("Correct the system clock and retry Access.".to_owned()),
+                Some("Correct the system clock, then retry the Skills view.".to_owned()),
             )
         })?
         .as_millis();
     u64::try_from(millis).map_err(|_| {
         DesktopErrorDto::unavailable(
             "The system clock is outside PAM's supported range.",
-            Some("Correct the system clock and retry Access.".to_owned()),
+            Some("Correct the system clock, then retry the Skills view.".to_owned()),
         )
     })
 }
@@ -310,7 +314,7 @@ fn now_ms() -> DesktopResult<u64> {
 fn store_error(_error: pam_store::StoreError) -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
         "PAM could not update its durable skill inventory.",
-        Some("Verify the local PAM state directory and retry Access.".to_owned()),
+        Some("Verify the local PAM state directory, then retry the Skills view.".to_owned()),
     )
 }
 

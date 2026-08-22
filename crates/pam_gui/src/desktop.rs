@@ -13,10 +13,12 @@ use std::os::unix::process::CommandExt;
 
 use pam_core::{CallerCredential, CallerId, EvidenceHandle as ProtocolEvidenceHandle, ProjectId};
 use pam_daemon::registered_projects;
+use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, StepCondition};
 use pam_platform::{CallerKind, caller_id, discover_project};
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult, CallerSummary,
-    FailureCode, ProjectRequestState, ProjectRequestSummary,
+    FailureCode, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason, ModelGenerationResult, ModelMessage,
+    ModelRole, ModelStatusResult, ModelSummary, ProjectRequestState, ProjectRequestSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -37,7 +39,10 @@ use crate::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
-    observatory::{ObservatoryState, load_caller_registry, load_daemon_activity},
+    observatory::{
+        ObservatoryState, load_caller_registry, load_daemon_activity, load_model_status,
+        run_model_infer,
+    },
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
     skill_library::{
@@ -55,6 +60,7 @@ const STARTUP_DELAY: Duration = Duration::from_millis(500);
 const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
 const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
+const MODEL_INFER_DEFAULT_OUTPUT_TOKENS: u32 = 512;
 
 macro_rules! uuid_handle {
     ($name:ident) => {
@@ -617,6 +623,108 @@ pub struct CallerDto {
     pub caller_id: String,
     pub registered_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelStatusDto {
+    Ok {
+        loaded: Option<ModelSummaryDto>,
+        registered: Vec<ModelSummaryDto>,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelSummaryDto {
+    pub model_id: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelInferDto {
+    Ok {
+        model: String,
+        text: String,
+        finish_reason: String,
+        usage: ModelUsageDto,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelUsageDto {
+    pub input_tokens: u32,
+    pub sampled_output_tokens: u32,
+    pub emitted_output_tokens: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRoleDto {
+    System,
+    User,
+    Assistant,
+}
+
+impl From<ModelRoleDto> for ModelRole {
+    fn from(value: ModelRoleDto) -> Self {
+        match value {
+            ModelRoleDto::System => Self::System,
+            ModelRoleDto::User => Self::User,
+            ModelRoleDto::Assistant => Self::Assistant,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelMessageDto {
+    pub role: ModelRoleDto,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum FlowGraphDto {
+    Ok { definition: serde_json::Value },
+    Invalid { failure: FailureDto },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum FlowComposeDto {
+    Ok { source: String },
+    Invalid { failure: FailureDto },
 }
 
 #[derive(Clone)]
@@ -1218,6 +1326,117 @@ impl DesktopCore {
             Err(state) => state,
         };
         let data = callers_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Loads the daemon's model surface: the loaded model and the catalog.
+    ///
+    /// Daemon failures are classified in the returned DTO: an explicit policy
+    /// deny is blocked, everything else unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_status(&self, fence: CommandFence) -> DesktopResult<ModelStatusDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => {
+                load_model_status(caller, credential, active.project_id.clone()).await
+            }
+            Err(state) => state,
+        };
+        let data = model_status_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Runs one policy-gated direct inference on the embedded runtime.
+    ///
+    /// A missing or zero `max_output_tokens` requests the default budget and
+    /// larger requests are clamped to the protocol maximum. Policy and
+    /// approval refusals are classified as blocked in the returned DTO with
+    /// recovery text; everything else is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused,
+    /// or when the model identity or conversation violates the protocol
+    /// contract before any daemon exchange.
+    pub async fn model_infer(
+        &self,
+        fence: CommandFence,
+        model: String,
+        messages: Vec<ModelMessageDto>,
+        max_output_tokens: Option<u32>,
+    ) -> DesktopResult<ModelInferDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let messages = messages
+            .into_iter()
+            .map(|message| ModelMessage::new(message.role.into(), message.content))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?;
+        let max_output_tokens = clamp_model_output_tokens(max_output_tokens);
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_infer(
+                caller,
+                credential,
+                active.project_id.clone(),
+                model,
+                messages,
+                max_output_tokens,
+            )
+            .await
+            .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+            Err(state) => state,
+        };
+        let data = model_infer_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Converts one TOML flow document into its structured definition, locally.
+    ///
+    /// Parse and validation failures are classified in the returned DTO; no
+    /// daemon exchange is involved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn flow_graph(
+        &self,
+        fence: CommandFence,
+        source: String,
+    ) -> DesktopResult<FlowGraphDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let data = flow_graph_data(&source);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Serializes one structured flow definition into normalized TOML, locally.
+    ///
+    /// Parse and validation failures are classified in the returned DTO; no
+    /// daemon exchange is involved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn flow_compose(
+        &self,
+        fence: CommandFence,
+        definition: String,
+    ) -> DesktopResult<FlowComposeDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let data = flow_compose_data(&definition);
         let state = self.inner.lock().await;
         ensure_active_matches(&state, &active, &fence)?;
         Ok(data)
@@ -1993,6 +2212,226 @@ fn caller_dto(caller: &CallerSummary) -> CallerDto {
     }
 }
 
+fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDto {
+    match state {
+        ObservatoryState::Available(result) => ModelStatusDto::Ok {
+            loaded: result.loaded.as_ref().map(model_summary_dto),
+            registered: result.registered.iter().map(model_summary_dto).collect(),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelStatusDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelStatusDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn model_summary_dto(summary: &ModelSummary) -> ModelSummaryDto {
+    ModelSummaryDto {
+        model_id: bounded_detail(summary.model_id().to_owned()),
+        size_bytes: summary.size_bytes,
+    }
+}
+
+fn model_infer_dto(state: ObservatoryState<ModelGenerationResult>) -> ModelInferDto {
+    match state {
+        ObservatoryState::Available(result) => ModelInferDto::Ok {
+            model: bounded_detail(result.model.clone()),
+            // The protocol already bounds generation text at 512 KiB; the
+            // 4 KiB detail bound would destroy legitimate output.
+            text: result.text().to_owned(),
+            finish_reason: finish_reason_label(result.finish_reason).to_owned(),
+            usage: ModelUsageDto {
+                input_tokens: result.usage.input_tokens,
+                sampled_output_tokens: result.usage.sampled_output_tokens,
+                emitted_output_tokens: result.usage.emitted_output_tokens,
+            },
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelInferDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelInferDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+const fn finish_reason_label(reason: ModelFinishReason) -> &'static str {
+    match reason {
+        ModelFinishReason::Stop => "stop",
+        ModelFinishReason::Length => "length",
+    }
+}
+
+const fn clamp_model_output_tokens(requested: Option<u32>) -> u32 {
+    match requested {
+        None | Some(0) => MODEL_INFER_DEFAULT_OUTPUT_TOKENS,
+        Some(tokens) if tokens > MAX_MODEL_OUTPUT_TOKENS => MAX_MODEL_OUTPUT_TOKENS,
+        Some(tokens) => tokens,
+    }
+}
+
+fn flow_graph_data(source: &str) -> FlowGraphDto {
+    // FlowDefinition::parse_toml enforces MAX_FLOW_DOCUMENT_BYTES on the way in.
+    match FlowDefinition::parse_toml(source) {
+        Ok(definition) => FlowGraphDto::Ok {
+            definition: definition_json(&definition),
+        },
+        Err(error) => FlowGraphDto::Invalid {
+            failure: flow_conversion_failure(error.to_string()),
+        },
+    }
+}
+
+fn flow_compose_data(definition: &str) -> FlowComposeDto {
+    if definition.len() > MAX_FLOW_DOCUMENT_BYTES {
+        return FlowComposeDto::Invalid {
+            failure: flow_conversion_failure(format!(
+                "The flow definition exceeds the {MAX_FLOW_DOCUMENT_BYTES}-byte limit."
+            )),
+        };
+    }
+    let parsed = match serde_json::from_str::<FlowDefinition>(definition) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return FlowComposeDto::Invalid {
+                failure: flow_conversion_failure(error.to_string()),
+            };
+        }
+    };
+    // to_normalized_toml re-validates the complete definition first.
+    let source = match parsed.to_normalized_toml() {
+        Ok(source) => source,
+        Err(error) => {
+            return FlowComposeDto::Invalid {
+                failure: flow_conversion_failure(error.to_string()),
+            };
+        }
+    };
+    if source.len() > MAX_FLOW_DOCUMENT_BYTES {
+        return FlowComposeDto::Invalid {
+            failure: flow_conversion_failure(format!(
+                "The normalized flow document exceeds the {MAX_FLOW_DOCUMENT_BYTES}-byte limit."
+            )),
+        };
+    }
+    FlowComposeDto::Ok { source }
+}
+
+fn flow_conversion_failure(detail: String) -> FailureDto {
+    unavailable_failure(
+        None,
+        detail,
+        Some("Fix the flow definition and retry the conversion.".to_owned()),
+    )
+}
+
+/// Builds the exact serde JSON layout of [`FlowDefinition`], with defaults
+/// materialized, so the value deserializes back into an equal definition.
+fn definition_json(definition: &FlowDefinition) -> serde_json::Value {
+    let outcome = definition.outcome();
+    serde_json::json!({
+        "schema_version": definition.schema_version(),
+        "id": definition.id(),
+        "name": definition.name(),
+        "description": definition.description(),
+        "revision": definition.revision(),
+        "steps": definition
+            .steps()
+            .iter()
+            .map(|step| step_json(definition.schema_version(), step))
+            .collect::<Vec<_>>(),
+        "outcome": {
+            "solved": outcome.solved(),
+            "changed": outcome.changed(),
+            "verified": outcome.verified(),
+            "unresolved": outcome.unresolved(),
+            "blocked": outcome.blocked(),
+        },
+    })
+}
+
+fn step_json(schema_version: u16, step: &FlowStep) -> serde_json::Value {
+    let retry = step.retry();
+    let mut value = serde_json::json!({
+        "id": step.id(),
+        "description": step.description(),
+        "depends_on": step.dependencies(),
+        "condition": condition_json(step.condition()),
+        "retry": {
+            "max_attempts": retry.max_attempts(),
+            "initial_backoff_ms": retry.initial_backoff_ms(),
+            "max_backoff_ms": retry.max_backoff_ms(),
+        },
+        "approval": approval_label(step.approval()),
+        "timeout_seconds": step.timeout_seconds(),
+        "effect": effect_label(step.effect()),
+        "action": action_json(step.action()),
+    });
+    if let Some(key) = step.idempotency_key() {
+        value["idempotency_key"] = serde_json::Value::String(key.to_owned());
+    }
+    // Schema version 1 derives semantics and rejects an explicit field;
+    // version 2 always carries one.
+    if schema_version >= 2 {
+        value["semantic"] =
+            serde_json::Value::String(semantic_role_label(step.semantic_role()).to_owned());
+    }
+    value
+}
+
+fn condition_json(condition: &StepCondition) -> serde_json::Value {
+    match condition {
+        StepCondition::Always => serde_json::json!({ "kind": "always" }),
+        StepCondition::Succeeded { step } => {
+            serde_json::json!({ "kind": "succeeded", "step": step })
+        }
+        StepCondition::Failed { step } => serde_json::json!({ "kind": "failed", "step": step }),
+    }
+}
+
+fn action_json(action: &StepAction) -> serde_json::Value {
+    match action {
+        StepAction::Command {
+            program,
+            args,
+            working_directory,
+        } => serde_json::json!({
+            "type": "command",
+            "program": program,
+            "args": args,
+            "working_directory": working_directory,
+        }),
+        StepAction::Connector {
+            connector,
+            capability,
+            resource,
+        } => serde_json::json!({
+            "type": "connector",
+            "connector": connector,
+            "capability": capability,
+            "resource": { "kind": resource.kind(), "id": resource.id() },
+        }),
+    }
+}
+
 fn failure_dto(code: &FailureCode, detail: String, recovery: Option<String>) -> FailureDto {
     FailureDto {
         kind: failure_kind(code),
@@ -2298,6 +2737,35 @@ pub(crate) fn activity_dto_for_test(state: ObservatoryState<ActivityResult>) -> 
 #[cfg(test)]
 pub(crate) fn callers_dto_for_test(state: ObservatoryState<CallerListResult>) -> CallersDto {
     callers_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_status_dto_for_test(
+    state: ObservatoryState<ModelStatusResult>,
+) -> ModelStatusDto {
+    model_status_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_infer_dto_for_test(
+    state: ObservatoryState<ModelGenerationResult>,
+) -> ModelInferDto {
+    model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) const fn clamp_model_output_tokens_for_test(requested: Option<u32>) -> u32 {
+    clamp_model_output_tokens(requested)
+}
+
+#[cfg(test)]
+pub(crate) fn flow_graph_data_for_test(source: &str) -> FlowGraphDto {
+    flow_graph_data(source)
+}
+
+#[cfg(test)]
+pub(crate) fn flow_compose_data_for_test(definition: &str) -> FlowComposeDto {
+    flow_compose_data(definition)
 }
 
 #[cfg(test)]
