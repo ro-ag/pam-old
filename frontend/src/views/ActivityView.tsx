@@ -169,7 +169,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
           </button>
         </section>
       ) : (
-        <section className="panel" aria-labelledby="activity-heading">
+        <section className="panel activity-feed" aria-labelledby="activity-heading">
           <div className="panel-title">
             <div><span className="eyebrow">Daemon feed</span><h2 id="activity-heading">Recent activity</h2></div>
             <button
