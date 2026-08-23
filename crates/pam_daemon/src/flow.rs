@@ -35,6 +35,10 @@ use pam_connectors::{
         DiscoverIssuesRequest as JiraDiscoverIssuesRequest, IssueKey, Jira, JiraTransport, Jql,
         ProjectKey as JiraProjectKey,
     },
+    sharepoint::{
+        DiscoverDocuments, DiscoverDocumentsRequest, DiscoverLists, DiscoverListsRequest,
+        SearchQuery, SharePoint, SharePointTransport, SiteId,
+    },
     sonarqube::{
         DiscoverIssues, DiscoverIssuesRequest, FetchQualityGate, FetchQualityGateRequest,
         ProjectKey, SonarQube, SonarTransport,
@@ -68,7 +72,8 @@ use crate::connectors::{
     ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
     JENKINS, JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
     JENKINS_DISCOVER_JOBS_CAPABILITY, JIRA, JIRA_COLLECT_ISSUE_CAPABILITY,
-    JIRA_DISCOVER_ISSUES_CAPABILITY, SONARQUBE, SONARQUBE_GATE_CAPABILITY,
+    JIRA_DISCOVER_ISSUES_CAPABILITY, SHAREPOINT, SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY,
+    SHAREPOINT_DISCOVER_LISTS_CAPABILITY, SONARQUBE, SONARQUBE_GATE_CAPABILITY,
     SONARQUBE_ISSUES_CAPABILITY,
 };
 
@@ -2445,12 +2450,18 @@ enum ConfluenceCall {
     CollectPage(CollectPageRequest),
 }
 
+enum SharePointCall {
+    DiscoverDocuments(DiscoverDocumentsRequest),
+    DiscoverLists(DiscoverListsRequest),
+}
+
 enum PreparedCall {
     GitHub(GitHubCall),
     Jenkins(JenkinsCall),
     Sonar(SonarCall),
     Jira(JiraCall),
     Confluence(ConfluenceCall),
+    SharePoint(SharePointCall),
 }
 
 enum BuiltCall {
@@ -2459,6 +2470,7 @@ enum BuiltCall {
     Sonar(SonarQube<Arc<dyn SonarTransport>>, SonarCall),
     Jira(Jira<Arc<dyn JiraTransport>>, JiraCall),
     Confluence(Confluence<Arc<dyn ConfluenceTransport>>, ConfluenceCall),
+    SharePoint(SharePoint<Arc<dyn SharePointTransport>>, SharePointCall),
 }
 
 struct ConnectorCallSuccess {
@@ -2504,6 +2516,10 @@ async fn execute_connector_step(
         },
         CONFLUENCE => match parse_confluence_call(step) {
             Ok(call) => PreparedCall::Confluence(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
+        SHAREPOINT => match parse_sharepoint_call(step) {
+            Ok(call) => PreparedCall::SharePoint(call),
             Err(message) => return failed_connector_outcome(message, false),
         },
         _ => {
@@ -2613,6 +2629,22 @@ async fn execute_connector_step(
             };
             match connectors.confluence(base_url, credential) {
                 Ok(confluence) => BuiltCall::Confluence(confluence, call),
+                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            }
+        }
+        PreparedCall::SharePoint(call) => {
+            let Some(base_url) = record.base_url.as_deref() else {
+                return failed_connector_outcome(
+                    format!(
+                        "connector {} requires a configured base URL; \
+                         {CONNECTOR_RECOVERY_SURFACES}",
+                        step.connector
+                    ),
+                    false,
+                );
+            };
+            match connectors.sharepoint(base_url, credential) {
+                Ok(sharepoint) => BuiltCall::SharePoint(sharepoint, call),
                 Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
             }
         }
@@ -2904,6 +2936,44 @@ fn parse_confluence_call(step: &PreparedConnectorStep) -> Result<ConfluenceCall,
     }
 }
 
+fn parse_sharepoint_call(step: &PreparedConnectorStep) -> Result<SharePointCall, String> {
+    let require_site = |capability: &str| -> Result<SiteId, String> {
+        if step.resource_kind != "site" {
+            return Err(format!(
+                "connector capability {capability} requires a resource of kind site holding a \
+                 Microsoft Graph site id"
+            ));
+        }
+        SiteId::parse(&step.resource_id).map_err(|_| {
+            format!(
+                "connector resource {} is not a valid Microsoft Graph site id",
+                step.resource_id
+            )
+        })
+    };
+    match step.capability.as_str() {
+        SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY => {
+            let site = require_site(SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY)?;
+            let query = SearchQuery::parse("*")
+                .map_err(|_| "connector document discovery query is invalid".to_owned())?;
+            DiscoverDocumentsRequest::new(site, query, CONNECTOR_DISCOVER_LIMIT)
+                .map(SharePointCall::DiscoverDocuments)
+                .map_err(|_| "connector document discovery bounds are invalid".to_owned())
+        }
+        SHAREPOINT_DISCOVER_LISTS_CAPABILITY => {
+            let site = require_site(SHAREPOINT_DISCOVER_LISTS_CAPABILITY)?;
+            DiscoverListsRequest::new(site, CONNECTOR_DISCOVER_LIMIT)
+                .map(SharePointCall::DiscoverLists)
+                .map_err(|_| "connector list discovery bounds are invalid".to_owned())
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY} and \
+             {SHAREPOINT_DISCOVER_LISTS_CAPABILITY}"
+        )),
+    }
+}
+
 async fn run_connector_call(
     call: BuiltCall,
     context: InvocationContext,
@@ -2915,6 +2985,9 @@ async fn run_connector_call(
         BuiltCall::Jira(jira, call) => run_jira_call(&jira, call, context).await,
         BuiltCall::Confluence(confluence, call) => {
             run_confluence_call(&confluence, call, context).await
+        }
+        BuiltCall::SharePoint(sharepoint, call) => {
+            run_sharepoint_call(&sharepoint, call, context).await
         }
     }
 }
@@ -3004,6 +3077,24 @@ async fn run_confluence_call(
         }
         ConfluenceCall::CollectPage(request) => {
             let output = Connector::<CollectPage>::execute(confluence, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+async fn run_sharepoint_call(
+    sharepoint: &SharePoint<Arc<dyn SharePointTransport>>,
+    call: SharePointCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        SharePointCall::DiscoverDocuments(request) => {
+            let output =
+                Connector::<DiscoverDocuments>::execute(sharepoint, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        SharePointCall::DiscoverLists(request) => {
+            let output = Connector::<DiscoverLists>::execute(sharepoint, request, context).await?;
             Ok(connector_call_success(&output))
         }
     }

@@ -33,6 +33,8 @@ mod jira_test;
 #[cfg(test)]
 mod lib_test;
 #[cfg(test)]
+mod sharepoint_test;
+#[cfg(test)]
 mod sonarqube_research_test;
 #[cfg(test)]
 mod sonarqube_test;
@@ -43,6 +45,7 @@ pub mod github_diagnosis;
 pub mod jenkins;
 pub mod jenkins_diagnosis;
 pub mod jira;
+pub mod sharepoint;
 pub mod sonarqube;
 pub mod sonarqube_research;
 
