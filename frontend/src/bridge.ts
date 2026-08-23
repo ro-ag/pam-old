@@ -19,6 +19,7 @@ import type {
   FlowSaveDto,
   FlowWorkspaceDto,
   ChatMessageDto,
+  HealthDto,
   ModelInferDto,
   ModelStatusDto,
   PamBridge,
@@ -76,11 +77,21 @@ export function withOperation(fence: CommandFence): CommandFence {
   return { ...fence, operationId: nextOperationId() };
 }
 
+// The reserved authority literal for daemon-scoped commands. Daemon-global
+// loaders always mint this fence; project-scoped commands reject it.
+export const DAEMON_AUTHORITY = "daemon";
+
+export function withDaemonOperation(): CommandFence {
+  return { projectHandle: DAEMON_AUTHORITY, generation: DAEMON_AUTHORITY, operationId: nextOperationId() };
+}
+
 export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
   return {
     mode: "native",
     bootstrap: () => invokeCommand<BootstrapResponse>("bootstrap", request({ operationId: nextOperationId() })),
     catalog: () => invokeCommand<CatalogDto>("catalog"),
+    daemonHealth: (fence) =>
+      invokeCommand<HealthDto>("daemon_health", request(flatFence(fence))),
     daemonActivity: (fence, limit) =>
       invokeCommand<ActivityDto>("daemon_activity", request({
         ...flatFence(fence),
@@ -117,9 +128,9 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
     refreshProject: (fence) =>
       invokeCommand<SnapshotDto>("refresh_project", request(flatFence(fence))),
     startDaemon: (fence) =>
-      invokeCommand<SnapshotDto>("start_daemon", request(flatFence(fence))),
+      invokeCommand<SnapshotDto | null>("start_daemon", request(flatFence(fence))),
     stopDaemon: (fence) =>
-      invokeCommand<SnapshotDto>("stop_daemon", request(flatFence(fence))),
+      invokeCommand<SnapshotDto | null>("stop_daemon", request(flatFence(fence))),
     registerGuiCaller: (fence) =>
       invokeCommand<SnapshotDto>("register_gui_caller", request(flatFence(fence))),
     decideApproval: (fence, approvalHandle, decision) =>

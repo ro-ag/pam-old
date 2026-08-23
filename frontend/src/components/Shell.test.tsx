@@ -4,8 +4,7 @@ import { Tooltip } from "radix-ui";
 import { createRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { fixtureBridge } from "../fixtures";
-import { selectControlCenter, type ProjectView } from "../selectors";
+import type { ProjectView } from "../selectors";
 import { ProjectMenu, ResizeSeparator, Toolbar } from "./Shell";
 
 const projects: ProjectView[] = [
@@ -145,15 +144,14 @@ describe("ProjectMenu", () => {
 describe("Toolbar", () => {
   it("changes theme family and variant from the toolbar theme menu", async () => {
     const user = userEvent.setup();
-    const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
     const onThemeChange = vi.fn();
     const onThemeModeChange = vi.fn();
     render(
       <Tooltip.Provider>
         <Toolbar
-          data={selectControlCenter(snapshot.data, catalog, true)}
+          projectName="payments-api"
+          queueCount={2}
+          fixture={true}
           collapsed={false}
           pending={false}
           theme="ventisquero"
@@ -178,6 +176,35 @@ describe("Toolbar", () => {
     await user.click(screen.getByRole("button", { name: "Theme: Ventisquero · light" }));
     await user.click(screen.getByRole("menuitemradio", { name: /^Dark/ }));
     expect(onThemeModeChange).toHaveBeenCalledWith("dark");
+  });
+
+  it("shows the global breadcrumb alone and hides the queue opener without a project", () => {
+    render(
+      <Tooltip.Provider>
+        <Toolbar
+          projectName={null}
+          queueCount={null}
+          fixture={false}
+          collapsed={false}
+          pending={false}
+          theme="ventisquero"
+          themeMode="light"
+          onThemeChange={vi.fn()}
+          onThemeModeChange={vi.fn()}
+          onToggleSidebar={vi.fn()}
+          onRefresh={vi.fn()}
+          onOpenCommand={vi.fn()}
+          onOpenQueue={vi.fn()}
+          toggleButtonRef={createRef()}
+          commandButtonRef={createRef()}
+          queueButtonRef={createRef()}
+        />
+      </Tooltip.Provider>,
+    );
+
+    expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
+    expect(screen.queryByRole("button", { name: "Open queue" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh daemon" })).toBeInTheDocument();
   });
 });
 

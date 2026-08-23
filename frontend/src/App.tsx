@@ -9,10 +9,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { answersFence, nextOperationId, sameFence, withOperation } from "./bridge";
+import { answersFence, DAEMON_AUTHORITY, nextOperationId, sameFence, withDaemonOperation, withOperation } from "./bridge";
 import type {
   ApprovalDecision,
   CommandFence,
+  HealthDto,
   ModelStatusDto,
   PamBridge,
   SnapshotDto,
@@ -27,9 +28,9 @@ import {
   writePersistedSidebarWidth,
   type LayoutStorage,
 } from "./layout";
-import type { AgentBriefView, ProjectView } from "./selectors";
-import { selectControlCenter } from "./selectors";
-import { ResizeSeparator, Sidebar, Toolbar } from "./components/Shell";
+import type { AgentBriefView } from "./selectors";
+import { selectControlCenter, selectDaemonView } from "./selectors";
+import { ProjectContextBar, ProjectPlaceholderView, ResizeSeparator, Sidebar, Toolbar } from "./components/Shell";
 import {
   ApprovalDrawer,
   CommandPalette,
@@ -134,9 +135,13 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const [overlays, dispatchOverlay] = useReducer(overlayReducer, null, createOverlayState);
   const [toast, setToast] = useState("");
   const [modelStatus, setModelStatus] = useState<ModelStatusDto | null>(null);
+  const [daemonHealth, setDaemonHealth] = useState<HealthDto | null>(null);
+  const [daemonBusy, setDaemonBusy] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const toastTimer = useRef<number | null>(null);
   const evidenceRequestSequence = useRef(0);
   const modelRequestSequence = useRef(0);
+  const healthRequestSequence = useRef(0);
   const modelChatReturnFocusRef = useRef<HTMLElement | null>(null);
   const dataCommandSequence = useRef(0);
   const bootstrapRequestSequence = useRef(0);
@@ -151,12 +156,16 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const previousCompactViewportRef = useRef(initialLayout.compactViewport);
   const fenceRef = useRef(state.activeFence);
   fenceRef.current = state.activeFence;
+  // With no active project the overlays run under the daemon authority, so
+  // global surfaces (palette, model chat) stay available with zero projects.
   const overlayAuthority: OverlayAuthority | null = state.activeFence
     ? {
         projectHandle: state.activeFence.projectHandle,
         generation: state.activeFence.generation,
       }
-    : null;
+    : state.catalog
+      ? { projectHandle: DAEMON_AUTHORITY, generation: DAEMON_AUTHORITY }
+      : null;
   const approvalHandle = state.data?.current.status === "approval_required"
     ? state.data.current.approval
     : null;
@@ -237,21 +246,37 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     writePersistedPamThemeMode(storageRef.current, nextMode);
   }, [theme]);
 
+  // The global daemon-health slice: probed at bootstrap, after lifecycle
+  // actions, and on toolbar refresh. The daemon authority never uses a
+  // project fence, so this works with zero projects.
+  const loadDaemonHealth = useCallback(async () => {
+    const sequence = ++healthRequestSequence.current;
+    try {
+      const health = await bridge.daemonHealth(withDaemonOperation());
+      if (sequence === healthRequestSequence.current) setDaemonHealth(health);
+    } catch (error) {
+      if (sequence === healthRequestSequence.current) {
+        setDaemonHealth({ status: "degraded", detail: presentError(error), recovery: null });
+      }
+    }
+  }, [bridge]);
+
   const bootstrap = useCallback(async () => {
     const sequence = ++bootstrapRequestSequence.current;
     dataCommandSequence.current += 1;
     dispatch({ type: "retry" });
     try {
-      const [response, catalog] = await Promise.all([bridge.bootstrap(), bridge.catalog()]);
+      const response = await bridge.bootstrap();
       if (sequence !== bootstrapRequestSequence.current) return;
-      dispatch({ type: "bootstrapSucceeded", response, catalog });
+      dispatch({ type: "bootstrapSucceeded", response });
+      void loadDaemonHealth();
     } catch (error) {
       if (sequence !== bootstrapRequestSequence.current) return;
       const syntheticFence = { projectHandle: "bootstrap", generation: "", operationId: "bootstrap" };
       dispatch({ type: "commandStarted", fence: syntheticFence });
       dispatch({ type: "commandFailed", fence: syntheticFence, message: presentError(error) });
     }
-  }, [bridge]);
+  }, [bridge, loadDaemonHealth]);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
 
@@ -279,11 +304,11 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     }
   }, [showToast]);
 
+  // Model status is daemon-global: always the daemon authority.
   const loadModelStatus = useCallback(async () => {
-    if (!fenceRef.current) return;
     const sequence = ++modelRequestSequence.current;
     try {
-      const response = await bridge.modelStatus(withOperation(fenceRef.current));
+      const response = await bridge.modelStatus(withDaemonOperation());
       if (sequence === modelRequestSequence.current) setModelStatus(response);
     } catch (error) {
       if (sequence === modelRequestSequence.current) {
@@ -294,18 +319,21 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
 
   const reloadModelStatus = useCallback(() => { void loadModelStatus(); }, [loadModelStatus]);
 
-  const activeProjectHandle = state.activeFence?.projectHandle ?? null;
+  const ready = state.catalog !== null;
   useEffect(() => {
-    if (activeProjectHandle) void loadModelStatus();
-    else setModelStatus(null);
-  }, [activeProjectHandle, loadModelStatus]);
+    if (ready) void loadModelStatus();
+  }, [ready, loadModelStatus]);
 
+  // ⌘R refreshes the global health slice and the active view's loaders; the
+  // project snapshot refresh happens only while a project is active.
   const refresh = useCallback(() => {
+    void loadDaemonHealth();
+    void loadModelStatus();
+    setRefreshTick((tick) => tick + 1);
     if (!fenceRef.current) return;
     const fence = withOperation(fenceRef.current);
     void executeDataCommand(fence, () => bridge.refreshProject(fence), "Project state refreshed");
-    void loadModelStatus();
-  }, [bridge, executeDataCommand, loadModelStatus]);
+  }, [bridge, executeDataCommand, loadDaemonHealth, loadModelStatus]);
 
   const mobileSidebarOpen = compactViewport && !state.sidebarCollapsed;
   const toggleSidebar = useCallback(() => {
@@ -381,29 +409,59 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [effectiveOverlays, mobileSidebarOpen, openOverlay, overlayAuthority, refresh, toggleSidebar]);
 
-  if (state.loadState === "loading" && !state.data) return <LoadingScreen />;
-  if (!state.data || !state.catalog || !state.activeFence) return <RecoveryScreen message={state.error ?? "The project control center is unavailable."} onRetry={() => void bootstrap()} />;
+  // The shell renders as soon as bootstrap returns: the LoadingScreen only
+  // exists pre-bootstrap and the RecoveryScreen only for real bootstrap
+  // errors. A missing snapshot is the global-first mode, not a failure.
+  if (!state.catalog) {
+    if (state.loadState === "recovering") {
+      return <RecoveryScreen message={state.error ?? "The daemon observatory is unavailable."} onRetry={() => void bootstrap()} />;
+    }
+    return <LoadingScreen />;
+  }
 
-  const data = selectControlCenter(state.data, state.catalog, bridge.mode === "fixture");
+  const projectData = state.data ? selectControlCenter(state.data, state.catalog, bridge.mode === "fixture") : null;
+  const projectActive = projectData !== null && state.activeFence !== null;
+  const daemon = projectData?.daemon ?? selectDaemonView(daemonHealth);
   const pending = state.pendingFence !== null;
-  const selectProject = (project: ProjectView) => {
-    if (project.handle === data.project.handle) return;
+  const busy = pending || daemonBusy;
+  const selectProject = (project: { handle: string; name: string }) => {
+    if (project.handle === state.data?.project.handle) return;
     const operationId = nextOperationId();
     const pendingFence = { projectHandle: project.handle, generation: "", operationId };
     void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`)
       .then((activated) => { if (activated) dispatch({ type: "navigate", view: "control-center" }); });
     if (mobileSidebarOpen) toggleSidebar();
   };
+  // Daemon lifecycle always runs under the daemon authority. The response is
+  // no snapshot, so we re-probe daemon_health; with a project active, the
+  // project refresh keeps the snapshot fresh too.
+  const runDaemonLifecycle = async (command: () => Promise<unknown>, successMessage: string) => {
+    setDaemonBusy(true);
+    try {
+      await command();
+      showToast(successMessage);
+    } catch (error) {
+      showToast(presentError(error));
+    } finally {
+      setDaemonBusy(false);
+    }
+    void loadDaemonHealth();
+    if (fenceRef.current) {
+      const fence = withOperation(fenceRef.current);
+      void executeDataCommand(fence, () => bridge.refreshProject(fence));
+    }
+  };
   const toggleDaemon = () => {
-    const fence = withOperation(state.activeFence!);
-    const stopping = data.daemon.state === "running";
-    void executeDataCommand(fence, () => stopping ? bridge.stopDaemon(fence) : bridge.startDaemon(fence), stopping ? "PAM is paused" : "PAM is back on watch");
+    const stopping = daemon.state === "running";
+    void runDaemonLifecycle(
+      () => stopping ? bridge.stopDaemon(withDaemonOperation()) : bridge.startDaemon(withDaemonOperation()),
+      stopping ? "PAM is paused" : "PAM is back on watch",
+    );
   };
   const restartDaemon = () => {
-    const fence = withOperation(state.activeFence!);
-    void executeDataCommand(fence, async () => {
-      const stopped = await bridge.stopDaemon(fence);
-      return bridge.startDaemon({ ...fence, generation: stopped.fence.generation });
+    void runDaemonLifecycle(async () => {
+      await bridge.stopDaemon(withDaemonOperation());
+      await bridge.startDaemon(withDaemonOperation());
     }, "PAM restarted");
   };
   const registerGuiCaller = () => {
@@ -454,8 +512,8 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     }
   };
   const decide = async (decision: ApprovalDecision) => {
-    const approval = data.current.approval;
-    if (!approval) return;
+    const approval = projectData?.current.approval;
+    if (!approval || !state.activeFence) return;
     const fence = withOperation(state.activeFence!);
     const sequence = ++dataCommandSequence.current;
     dispatch({ type: "commandStarted", fence });
@@ -482,7 +540,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const currentOverlay = activeOverlay(effectiveOverlays);
   const applicationOverlayOpen = currentOverlay !== null && currentOverlay.kind !== "project";
   const openQueue = (returnFocusTarget?: HTMLElement) => {
-    if (!overlayAuthority) return;
+    if (!overlayAuthority || !projectActive) return;
     const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
       ? document.activeElement
       : null;
@@ -520,11 +578,15 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
     { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘6" },
-    { id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." },
+    ...(projectActive
+      ? [{ id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." }]
+      : []),
     ...(chatModelId
       ? [{ id: "model-chat", label: "Chat with the model", description: "Review the local model in an ephemeral chat." }]
       : []),
-    { id: "refresh", label: "Refresh project", description: "Request current state from PAM.", shortcut: "⌘R" },
+    projectActive
+      ? { id: "refresh", label: "Refresh project", description: "Request current state from PAM.", shortcut: "⌘R" }
+      : { id: "refresh", label: "Refresh daemon", description: "Probe daemon health and reload the global views.", shortcut: "⌘R" },
   ];
   const runCommand = (id: string) => {
     const view = id === "view-control-center"
@@ -555,6 +617,26 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     }
   };
 
+  // Project context is contextual: this bar renders in the headers of the
+  // four project-shaped views, never in the global sidebar chrome.
+  const projectContextBar = projectData ? (
+    <ProjectContextBar
+      project={projectData.project}
+      projects={projectData.catalog}
+      menuOpen={effectiveOverlays.stack.some(({ kind }) => kind === "project")}
+      onMenuOpenChange={setProjectMenuOpen}
+      onSelect={selectProject}
+    />
+  ) : null;
+  const projectPlaceholder = (title: string, subtitle: string) => (
+    <ProjectPlaceholderView
+      title={title}
+      subtitle={subtitle}
+      projects={state.catalog?.projects ?? []}
+      onSelect={selectProject}
+    />
+  );
+
   const shellWidth = state.sidebarCollapsed ? 68 : state.sidebarWidth;
   const shellStyle: ShellStyle = { "--sidebar-size": `${shellWidth}px` };
   return (
@@ -566,14 +648,12 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         <a className="skip-link" href="#main-content" tabIndex={mobileSidebarOpen ? -1 : undefined}>Skip to content</a>
         <Sidebar
           containerRef={sidebarRef}
-          data={data}
+          daemon={daemon}
+          queueCount={projectData?.current.queue.length ?? 0}
           activeView={state.activeView}
           collapsed={state.sidebarCollapsed}
-          pending={pending}
+          pending={busy}
           trapFocus={mobileSidebarOpen}
-          projectMenuOpen={effectiveOverlays.stack.some(({ kind }) => kind === "project")}
-          onProjectMenuOpenChange={setProjectMenuOpen}
-          onSelectProject={selectProject}
           onNavigate={(view) => { dispatch({ type: "navigate", view }); if (mobileSidebarOpen) toggleSidebar(); }}
           onToggleDaemon={toggleDaemon}
           onRestartDaemon={restartDaemon}
@@ -582,7 +662,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         {mobileSidebarOpen && <button type="button" className="sidebar-scrim" aria-label="Close project sidebar" tabIndex={-1} onClick={toggleSidebar} />}
         <ResizeSeparator collapsed={state.sidebarCollapsed || compactViewport} width={state.sidebarWidth} viewportWidth={viewportWidth} onResizePreview={previewSidebarWidth} onResizeCommit={commitSidebarWidth} onToggle={toggleSidebar} />
         <section className="workspace" inert={mobileSidebarOpen || undefined} aria-hidden={mobileSidebarOpen || undefined}>
-          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} data={data} collapsed={state.sidebarCollapsed} pending={pending} theme={theme} themeMode={themeMode} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
+          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} projectName={projectData?.project.name ?? null} queueCount={projectData ? projectData.current.queue.length : null} fixture={projectData?.fixture ?? bridge.mode === "fixture"} collapsed={state.sidebarCollapsed} pending={busy} theme={theme} themeMode={themeMode} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
           <div className="workspace-body">
           {state.loadState === "recovering" && state.error && <div className="inline-recovery" role="alert"><WarningCircle size={18} /><span>{state.error}</span><button type="button" onClick={refresh}>Retry</button></div>}
           <AnimatePresence mode="wait" initial={false}>
@@ -594,9 +674,10 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.24, ease: [0.33, 1, 0.68, 1] }}
             >
-              {state.activeView === "control-center" && (
+              {state.activeView === "control-center" && (projectData && state.activeFence ? (
                 <ControlCenterView
-                  data={data}
+                  contextBar={projectContextBar}
+                  data={projectData}
                   onCopy={(brief) => void copyBrief(brief)}
                   onEvidence={(handle) => void loadEvidence(handle)}
                   onContinue={() => { dispatch({ type: "navigate", view: "flows" }); showToast("Flow workspace opened"); }}
@@ -605,24 +686,30 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   onRecoverDaemon={toggleDaemon}
                   onRefresh={refresh}
                   onRegisterCaller={registerGuiCaller}
-                  registrationBusy={pending}
+                  registrationBusy={busy}
                 />
-              )}
-              {state.activeView === "access" && <AccessView data={data} />}
-              {state.activeView === "skills" && (
+              ) : projectPlaceholder("Control center", "The project's queue, runs, and outcomes in one calm place."))}
+              {state.activeView === "access" && (projectData
+                ? <AccessView contextBar={projectContextBar} data={projectData} />
+                : projectPlaceholder("Access", "Narrow capabilities, visible to the developer."))}
+              {state.activeView === "skills" && (projectData && state.activeFence ? (
                 <SkillsView
                   key={`${state.activeFence.projectHandle}:${state.activeFence.generation}`}
                   bridge={bridge}
                   fence={state.activeFence}
+                  contextBar={projectContextBar}
                 />
-              )}
-              {state.activeView === "flows" && <FlowsView bridge={bridge} fence={state.activeFence} onError={showToast} onToast={showToast} />}
+              ) : projectPlaceholder("Skills", "What the agents carry with them, kept in view."))}
+              {state.activeView === "flows" && (projectData && state.activeFence
+                ? <FlowsView bridge={bridge} fence={state.activeFence} contextBar={projectContextBar} onError={showToast} onToast={showToast} />
+                : projectPlaceholder("Flows", "Repeatable work, with meaningful feedback."))}
               {state.activeView === "activity" && (
                 <ActivityView
-                  data={data}
+                  key={`activity:${refreshTick}`}
+                  daemon={daemon}
+                  projects={state.catalog.projects}
                   bridge={bridge}
-                  fence={state.activeFence}
-                  pending={pending}
+                  pending={busy}
                   modelStatus={modelStatus}
                   onReloadModel={reloadModelStatus}
                   onOpenModelChat={openModelChat}
@@ -630,11 +717,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                 />
               )}
               {state.activeView === "callers" && (
-                <ConnectionsView
-                  key={`${state.activeFence.projectHandle}:${state.activeFence.generation}`}
-                  bridge={bridge}
-                  fence={state.activeFence}
-                />
+                <ConnectionsView key={`connections:${refreshTick}`} bridge={bridge} />
               )}
             </motion.div>
           </AnimatePresence>
@@ -644,16 +727,19 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       {effectiveOverlays.stack.map((entry) => {
         if (entry.kind === "project") return null;
         const active = overlayLayer(effectiveOverlays, entry.id) === "active";
-        if (entry.kind === "queue") return <QueueDrawer active={active} data={data} key={entry.id} returnFocusTarget={queueReturnFocusRef.current} onClose={closeActiveOverlay} />;
+        if (entry.kind === "queue") {
+          if (!projectData) return null;
+          return <QueueDrawer active={active} data={projectData} key={entry.id} returnFocusTarget={queueReturnFocusRef.current} onClose={closeActiveOverlay} />;
+        }
         if (entry.kind === "approval") {
-          if (!data.current.approval || entry.approvalKey !== approvalKey) return null;
-          return <ApprovalDrawer active={active} busy={pending} data={data} error={state.error} key={entry.id} onDecision={(decision) => { void decide(decision); }} onClose={closeActiveOverlay} />;
+          if (!projectData?.current.approval || entry.approvalKey !== approvalKey) return null;
+          return <ApprovalDrawer active={active} busy={pending} data={projectData} error={state.error} key={entry.id} onDecision={(decision) => { void decide(decision); }} onClose={closeActiveOverlay} />;
         }
         if (entry.kind === "evidence") {
           return <EvidenceDrawer active={active} document={entry.document} loading={entry.loading} error={entry.error} key={entry.id} onRetry={entry.retryable ? () => { void loadEvidence(entry.handle); } : undefined} onClose={closeActiveOverlay} />;
         }
         if (entry.kind === "model-chat") {
-          return <ModelChatDrawer active={active} bridge={bridge} fence={state.activeFence!} modelId={entry.modelId} key={entry.id} returnFocusTarget={modelChatReturnFocusRef.current} onClose={closeActiveOverlay} />;
+          return <ModelChatDrawer active={active} bridge={bridge} modelId={entry.modelId} key={entry.id} returnFocusTarget={modelChatReturnFocusRef.current} onClose={closeActiveOverlay} />;
         }
         return <CommandPalette active={active} commands={commands} key={entry.id} returnFocusTarget={commandReturnFocusRef.current} onAction={runCommand} onClose={closeActiveOverlay} />;
       })}

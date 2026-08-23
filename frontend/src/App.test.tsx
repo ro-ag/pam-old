@@ -47,6 +47,10 @@ describe("daemon observatory", () => {
     const navigation = screen.getByRole("navigation", { name: "Primary" });
     expect(within(navigation).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
       .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Connections"]);
+    // Project context lives in the view headers now: no sidebar project menu.
+    const sidebar = screen.getByRole("complementary", { name: "Daemon navigation" });
+    expect(within(sidebar).queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "payments-api" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Resize project sidebar" })).toHaveAttribute("aria-valuenow", "248");
     expect(screen.getByRole("heading", { name: "Ready for the next agent" })).toBeInTheDocument();
     expect(screen.getByText("SOLVED")).toBeInTheDocument();
@@ -118,8 +122,9 @@ describe("daemon observatory", () => {
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => {
       const response = await originalBootstrap();
-      if (response.data.current.status === "available" && response.data.current.run) {
-        response.data.current.run.timeline = [];
+      const current = response.snapshot?.data.current;
+      if (current?.status === "available" && current.run) {
+        current.run.timeline = [];
       }
       return response;
     });
@@ -153,23 +158,27 @@ describe("daemon observatory", () => {
     expect(screen.queryByRole("heading", { name: "Ready for the next agent" })).not.toBeInTheDocument();
   });
 
-  it("adopts the server-rotated fence generation from lifecycle responses", async () => {
+  it("runs the daemon lifecycle under the daemon authority and re-probes health", async () => {
     const bridge = fixtureBridge();
-    const rotated = "12121212-1212-4121-8121-121212121212";
-    const originalStop = bridge.stopDaemon.bind(bridge);
-    bridge.stopDaemon = async (fence) => {
-      const response = await originalStop(fence);
-      return { ...response, fence: { ...response.fence, generation: rotated } };
-    };
+    const stop = vi.spyOn(bridge, "stopDaemon");
+    const health = vi.spyOn(bridge, "daemonHealth");
+    const refreshProject = vi.spyOn(bridge, "refreshProject");
     render(<App bridge={bridge} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "PAM is on watch" }));
 
     expect(await screen.findByRole("button", { name: "PAM is paused" })).toBeEnabled();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    // Bootstrap probes once; the lifecycle action re-probes.
+    await waitFor(() => expect(health).toHaveBeenCalledTimes(2));
+    // With a project active, the snapshot is refreshed under the project fence.
+    await waitFor(() => expect(refreshProject).toHaveBeenCalledTimes(1));
+    expect(refreshProject.mock.calls[0][0].projectHandle).not.toBe("daemon");
     expect(screen.queryByText(/did not match the latest project operation/)).not.toBeInTheDocument();
   });
 
-  it("keeps sidebar project browsing available while the daemon is offline", async () => {
+  it("keeps project browsing available from the context bar while the daemon is offline", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge("offline");
     const activate = vi.spyOn(bridge, "activateProject");
@@ -336,7 +345,7 @@ describe("daemon observatory", () => {
   it("activates only the newest overlay and restores its underlay and exact openers", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge();
-    const approvalSnapshot = await fixtureBridge("approval").bootstrap();
+    const approvalSnapshot = (await fixtureBridge("approval").bootstrap()).snapshot!;
     const refreshGate = deferred();
     bridge.refreshProject = vi.fn(async (fence) => {
       await refreshGate.promise;
@@ -405,7 +414,7 @@ describe("daemon observatory", () => {
 
       const workspace = document.querySelector<HTMLElement>(".workspace");
       const sidebar = screen.getByRole("complementary", { name: "Daemon navigation" });
-      const firstNav = within(sidebar).getByRole("button", { name: "payments-api" });
+      const firstNav = within(sidebar).getByRole("button", { name: "Control Center" });
       await waitFor(() => expect(firstNav).toHaveFocus());
       expect(workspace).toHaveAttribute("inert");
       expect(workspace).toHaveAttribute("aria-hidden", "true");
@@ -448,7 +457,7 @@ describe("daemon observatory", () => {
     try {
       const user = userEvent.setup();
       const bridge = fixtureBridge();
-      const approvalSnapshot = await fixtureBridge("approval").bootstrap();
+      const approvalSnapshot = (await fixtureBridge("approval").bootstrap()).snapshot!;
       const refreshGate = deferred();
       bridge.refreshProject = vi.fn(async (fence) => {
         await refreshGate.promise;
@@ -460,7 +469,7 @@ describe("daemon observatory", () => {
       await user.click(screen.getByRole("button", { name: "Refresh project" }));
       await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
       const sidebar = screen.getByRole("complementary", { name: "Daemon navigation" });
-      await waitFor(() => expect(within(sidebar).getByRole("button", { name: "payments-api" })).toHaveFocus());
+      await waitFor(() => expect(within(sidebar).getByRole("button", { name: "Control Center" })).toHaveFocus());
 
       await act(async () => { refreshGate.resolve(); });
       const dialog = await screen.findByRole("dialog", { name: "Approval required" });
@@ -708,11 +717,12 @@ describe("daemon observatory", () => {
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => {
       const response = await originalBootstrap();
-      if (response.data.current.status === "available" && response.data.current.run?.outcome) {
-        response.data.current.run.outcome.heading = "Run is blocked";
-        response.data.current.run.outcome.solved = false;
-        response.data.current.run.outcome.evidence = [];
-        response.data.current.run.outcome.sections = [
+      const current = response.snapshot?.data.current;
+      if (current?.status === "available" && current.run?.outcome) {
+        current.run.outcome.heading = "Run is blocked";
+        current.run.outcome.solved = false;
+        current.run.outcome.evidence = [];
+        current.run.outcome.sections = [
           { label: "SOLVED", summary: "The request did not complete.", satisfied: false },
           { label: "BLOCKED", summary: "Project policy blocked the write.", satisfied: true },
         ];
@@ -1147,5 +1157,107 @@ describe("daemon observatory", () => {
     await user.type(within(palette).getByRole("searchbox", { name: "Search commands" }), "chat");
     expect(within(palette).queryByRole("option", { name: /Chat with the model/ })).not.toBeInTheDocument();
     expect(within(palette).getByText("No matching commands.")).toBeInTheDocument();
+  });
+});
+
+describe("global-first workspace", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("boots to the shell with an empty catalog instead of a recovery screen", async () => {
+    render(<App bridge={fixtureBridge("global-only")} />);
+
+    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Open PAM from a Git repository/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "PAM needs a moment" })).not.toBeInTheDocument();
+    expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
+    // The daemon-health probe feeds the sidebar pill without any project.
+    expect(await screen.findByRole("button", { name: "PAM is on watch" })).toBeEnabled();
+  });
+
+  it("shows the project breadcrumb only while a project is active", async () => {
+    render(<App bridge={fixtureBridge()} />);
+    await screen.findByRole("heading", { name: "payments-api" });
+
+    expect(document.querySelector(".breadcrumb")).toHaveTextContent("payments-apiDaemon observatory");
+  });
+
+  it("serves Activity, model status, and chat with zero projects under the daemon authority", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("global-only");
+    const activity = vi.spyOn(bridge, "daemonActivity");
+    const status = vi.spyOn(bridge, "modelStatus");
+    const infer = vi.spyOn(bridge, "modelInfer");
+    render(<App bridge={bridge} initialView="activity" />);
+
+    expect(await screen.findByText("project.current")).toBeInTheDocument();
+    expect(activity.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    await waitFor(() => expect(status).toHaveBeenCalled());
+    expect(status.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+
+    await user.click(await screen.findByRole("button", { name: "Chat" }));
+    const drawer = await screen.findByRole("dialog", { name: "Model chat" });
+    await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "hello tide");
+    await user.click(within(drawer).getByRole("button", { name: "Send" }));
+
+    expect(await within(drawer).findByText(/You said: hello tide/)).toBeInTheDocument();
+    expect(infer.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+  });
+
+  it("serves Connections with zero projects under the daemon authority", async () => {
+    const bridge = fixtureBridge("global-only");
+    const callers = vi.spyOn(bridge, "callerRegistry");
+    render(<App bridge={bridge} initialView="callers" />);
+
+    expect(await screen.findByText("gui:pam-desktop")).toBeInTheDocument();
+    expect(callers.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+  });
+
+  it("shows the discovery hint in every project-shaped view with an empty catalog", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={fixtureBridge("global-only")} />);
+    await screen.findByRole("heading", { name: "No projects discovered yet" });
+
+    for (const [button, heading] of [["Access", "Access"], ["Skills", "Skills"], ["Flows", "Flows"]] as const) {
+      await user.click(screen.getByRole("button", { name: button }));
+      expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
+    }
+  });
+
+  it("offers an inline picker without an active project and activates the selection", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = vi.fn(async () => ({ ...(await originalBootstrap()), snapshot: null }));
+    render(<App bridge={bridge} initialView="skills" />);
+
+    expect(await screen.findByRole("heading", { name: "Pick a project to bring its queue into view." })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /payments-api/ }));
+
+    expect(await screen.findByRole("heading", { name: "payments-api" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Control center" })).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("Now watching payments-api");
+  });
+
+  it("runs the daemon lifecycle from the global pill and re-probes health", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("global-only");
+    const stop = vi.spyOn(bridge, "stopDaemon");
+    const start = vi.spyOn(bridge, "startDaemon");
+    const health = vi.spyOn(bridge, "daemonHealth");
+    render(<App bridge={bridge} />);
+
+    await user.click(await screen.findByRole("button", { name: "PAM is on watch" }));
+    expect(await screen.findByRole("button", { name: "PAM is paused" })).toBeEnabled();
+    expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+
+    await user.click(screen.getByRole("button", { name: "PAM is paused" }));
+    expect(await screen.findByRole("button", { name: "PAM is on watch" })).toBeEnabled();
+    expect(start.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    // Bootstrap probe plus one re-probe per lifecycle action.
+    await waitFor(() => expect(health).toHaveBeenCalledTimes(3));
   });
 });

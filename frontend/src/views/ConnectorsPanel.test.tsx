@@ -4,10 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { ConnectorsPanel } from "./ConnectorsPanel";
 
-async function connectorsProps(scenario: FixtureScenario = "solved") {
-  const bridge = fixtureBridge(scenario);
-  const snapshot = await bridge.bootstrap();
-  return { bridge, fence: snapshot.fence };
+function connectorsProps(scenario: FixtureScenario = "solved") {
+  return { bridge: fixtureBridge(scenario) };
 }
 
 function deferred<T>() {
@@ -18,7 +16,7 @@ function deferred<T>() {
 
 describe("ConnectorsPanel", () => {
   it("renders a configured connector with its credential and last-test pills", async () => {
-    const props = await connectorsProps();
+    const props = connectorsProps();
     render(<ConnectorsPanel {...props} />);
 
     const row = (await screen.findByText("github-actions")).closest("article")!;
@@ -29,7 +27,7 @@ describe("ConnectorsPanel", () => {
   });
 
   it("renders the dormant unconfigured connector state", async () => {
-    const props = await connectorsProps("connector-unconfigured");
+    const props = connectorsProps("connector-unconfigured");
     render(<ConnectorsPanel {...props} />);
 
     const row = (await screen.findByText("github-actions")).closest("article")!;
@@ -42,12 +40,12 @@ describe("ConnectorsPanel", () => {
   });
 
   it("shows the calm empty and offline registry states", async () => {
-    const empty = await connectorsProps("empty");
+    const empty = connectorsProps("empty");
     const { unmount } = render(<ConnectorsPanel {...empty} />);
     expect(await screen.findByText("No connectors are registered with the daemon yet.")).toBeInTheDocument();
     unmount();
 
-    const offline = await connectorsProps("offline");
+    const offline = connectorsProps("offline");
     render(<ConnectorsPanel {...offline} />);
     expect(await screen.findByText(/connector registry is not being served/)).toBeInTheDocument();
     expect(screen.getByText(/Start PAM to read the connectors/)).toBeInTheDocument();
@@ -55,7 +53,7 @@ describe("ConnectorsPanel", () => {
 
   it("saves the enabled switch and base URL through configure with exact params", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps("connector-unconfigured");
+    const props = connectorsProps("connector-unconfigured");
     const spy = vi.spyOn(props.bridge, "connectorConfigure");
     render(<ConnectorsPanel {...props} />);
 
@@ -65,7 +63,7 @@ describe("ConnectorsPanel", () => {
     await user.click(within(row).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy).toHaveBeenCalledWith(expect.anything(), {
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ projectHandle: "daemon", generation: "daemon" }), {
       connector: "github-actions",
       enabled: true,
       baseUrl: "https://api.github.com",
@@ -75,7 +73,7 @@ describe("ConnectorsPanel", () => {
 
   it("sets a credential without ever echoing the secret after submit", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps("connector-unconfigured");
+    const props = connectorsProps("connector-unconfigured");
     const spy = vi.spyOn(props.bridge, "connectorConfigure");
     render(<ConnectorsPanel {...props} />);
 
@@ -98,7 +96,7 @@ describe("ConnectorsPanel", () => {
 
   it("clears a stored credential only after an inline confirmation", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps();
+    const props = connectorsProps();
     const spy = vi.spyOn(props.bridge, "connectorConfigure");
     render(<ConnectorsPanel {...props} />);
 
@@ -121,7 +119,7 @@ describe("ConnectorsPanel", () => {
 
   it("tests the connection with a busy spinner and updates the row with the result", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps();
+    const props = connectorsProps();
     const pending = deferred<Awaited<ReturnType<typeof props.bridge.connectorTest>>>();
     const spy = vi.spyOn(props.bridge, "connectorTest").mockReturnValue(pending.promise);
     render(<ConnectorsPanel {...props} />);
@@ -129,7 +127,7 @@ describe("ConnectorsPanel", () => {
     const row = (await screen.findByText("github-actions")).closest("article")!;
     const testButton = within(row).getByRole("button", { name: "Test connection" });
     await user.click(testButton);
-    expect(spy).toHaveBeenCalledWith(expect.anything(), "github-actions");
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ projectHandle: "daemon", generation: "daemon" }), "github-actions");
     expect(testButton).toBeDisabled();
     expect(within(row).getByRole("button", { name: "Save" })).toBeDisabled();
     expect(testButton.querySelector(".is-spinning")).not.toBeNull();
@@ -142,7 +140,7 @@ describe("ConnectorsPanel", () => {
 
   it("renders a failed test result with its detail", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps("connector-unconfigured");
+    const props = connectorsProps("connector-unconfigured");
     render(<ConnectorsPanel {...props} />);
 
     const row = (await screen.findByText("github-actions")).closest("article")!;
@@ -153,7 +151,7 @@ describe("ConnectorsPanel", () => {
 
   it("renders blocked-grant recovery calmly for configure and test", async () => {
     const user = userEvent.setup();
-    const props = await connectorsProps("connector-blocked");
+    const props = connectorsProps("connector-blocked");
     render(<ConnectorsPanel {...props} />);
 
     const row = (await screen.findByText("github-actions")).closest("article")!;

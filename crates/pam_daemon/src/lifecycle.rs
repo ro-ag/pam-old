@@ -716,6 +716,20 @@ async fn handle_incoming(
         .await;
         return Ok(());
     }
+    if request.project_id.is_daemon_scope() && !capability_is_daemon_scoped(&request.capability) {
+        send_routed(
+            &outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                &request,
+                FailureCode::InvalidRequest,
+                "this operation needs a project; the reserved daemon scope cannot satisfy it",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    }
     if let (
         Capability::ApprovalDecide,
         RequestPayload::ApprovalDecide {
@@ -1016,6 +1030,28 @@ async fn handle_incoming(
             .await
         }
     }
+}
+
+/// Capabilities that operate on the daemon itself rather than any project.
+///
+/// These accept the reserved [`ProjectId::daemon_scope`] identity: policy and
+/// audit then record the "daemon" project, so grants recorded against it apply
+/// globally. Every other capability needs a real project and rejects the
+/// reserved scope before dispatch. None of these handlers read project state;
+/// `daemon.status` only counts the scope's (always empty) request queue.
+pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool {
+    matches!(
+        capability,
+        Capability::DaemonStatus
+            | Capability::DaemonStop
+            | Capability::DaemonActivity
+            | Capability::CallerList
+            | Capability::ModelStatus
+            | Capability::ModelInfer
+            | Capability::ConnectorList
+            | Capability::ConnectorConfigure
+            | Capability::ConnectorTest
+    )
 }
 
 const fn flow_submission_error_message(error: FlowSubmissionError) -> &'static str {
@@ -2383,23 +2419,13 @@ async fn handle_connector_list(
         let record = records
             .iter()
             .find(|record| record.connector_id == connector_id);
-        let credential_present = match connectors.credential_present(connector_id).await {
-            Ok(present) => present,
-            Err(error) => {
-                send_routed(
-                    outbound,
-                    incoming,
-                    vec![ServerMessage::Result(failure_result(
-                        request,
-                        FailureCode::Internal,
-                        error.message(),
-                    ))],
-                    None,
-                )
-                .await;
-                return Ok(());
-            }
-        };
+        // Presence is display-only: an unavailable secret backend (headless
+        // Linux without Secret Service) must not fail the whole listing.
+        // Configure and test still surface backend errors loudly.
+        let credential_present = connectors
+            .credential_present(connector_id)
+            .await
+            .unwrap_or(false);
         summaries.push(connector_summary(connector_id, record, credential_present));
     }
     send_routed(

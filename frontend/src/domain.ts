@@ -102,7 +102,13 @@ export interface SnapshotDataDto {
 }
 
 export type SnapshotDto = FencedResponse<SnapshotDataDto>;
-export type BootstrapResponse = SnapshotDto;
+
+// The bootstrap result: the discovered catalog plus an activated project
+// snapshot, or no snapshot at all in global-only mode (empty catalog).
+export interface BootstrapResponse {
+  catalog: CatalogDto;
+  snapshot: SnapshotDto | null;
+}
 
 export interface ApprovalDecisionResponseDto {
   disposition: "approved" | "denied" | "expired";
@@ -551,8 +557,9 @@ export type ConnectorTestDto =
 
 export interface PamBridge {
   readonly mode: BridgeMode;
-  bootstrap(): Promise<SnapshotDto>;
+  bootstrap(): Promise<BootstrapResponse>;
   catalog(): Promise<CatalogDto>;
+  daemonHealth(fence: CommandFence): Promise<HealthDto>;
   daemonActivity(fence: CommandFence, limit?: number): Promise<ActivityDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
   connectorRegistry(fence: CommandFence): Promise<ConnectorsDto>;
@@ -562,8 +569,8 @@ export interface PamBridge {
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
-  startDaemon(fence: CommandFence): Promise<SnapshotDto>;
-  stopDaemon(fence: CommandFence): Promise<SnapshotDto>;
+  startDaemon(fence: CommandFence): Promise<SnapshotDto | null>;
+  stopDaemon(fence: CommandFence): Promise<SnapshotDto | null>;
   registerGuiCaller(fence: CommandFence): Promise<SnapshotDto>;
   decideApproval(fence: CommandFence, approvalHandle: string, decision: ApprovalDecision): Promise<ApprovalDecisionResponseDto>;
   loadEvidence(fence: CommandFence, evidenceHandle: string): Promise<EvidenceDto>;

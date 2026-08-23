@@ -27,14 +27,14 @@ import {
   useEffect,
   useRef,
 } from "react";
-import type { ViewId } from "../domain";
+import type { ProjectSummaryDto, ViewId } from "../domain";
 import {
   clampSidebarWidth,
   minimumSidebarWidth,
   sidebarMaximumWidth,
   sidebarWidthFromKey,
 } from "../layout";
-import type { ControlCenterView, ProjectView } from "../selectors";
+import type { DaemonView, ProjectView } from "../selectors";
 import type { PamTheme, PamThemeMode } from "../theme";
 
 export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof Pulse }> = [
@@ -138,29 +138,98 @@ export function ProjectMenu({
   );
 }
 
+// Project context is contextual: this bar sits in the headers of the four
+// project-shaped views instead of the global sidebar chrome.
+export function ProjectContextBar({
+  project,
+  projects,
+  menuOpen,
+  onMenuOpenChange,
+  onSelect,
+}: {
+  project: ProjectView;
+  projects: ProjectView[];
+  menuOpen: boolean;
+  onMenuOpenChange: (open: boolean) => void;
+  onSelect: (project: ProjectView) => void;
+}) {
+  return (
+    <div className="project-context-bar">
+      <ProjectMenu
+        active={project}
+        projects={projects}
+        open={menuOpen}
+        onOpenChange={onMenuOpenChange}
+        onSelect={onSelect}
+      />
+      <span className="project-context-location">{project.rootLabel}</span>
+    </div>
+  );
+}
+
+// The calm project-shaped empty state: an inline picker when projects exist,
+// and a gentle discovery hint when the catalog is empty.
+export function ProjectPlaceholderView({
+  title,
+  subtitle,
+  projects,
+  onSelect,
+}: {
+  title: string;
+  subtitle: string;
+  projects: ProjectSummaryDto[];
+  onSelect: (project: ProjectSummaryDto) => void;
+}) {
+  return (
+    <main className="canvas" id="main-content">
+      <header className="project-header compact">
+        <div><h1>{title}</h1><p>{subtitle}</p></div>
+      </header>
+      <section className="empty-state">
+        <GitBranch size={38} aria-hidden="true" />
+        {projects.length === 0 ? (
+          <>
+            <h2>No projects discovered yet</h2>
+            <p>Open PAM from a Git repository and it will settle in here on its own. The daemon keeps watch either way.</p>
+          </>
+        ) : (
+          <>
+            <h2>Pick a project to bring its queue into view.</h2>
+            <div className="project-picker">
+              {projects.map((project) => (
+                <button type="button" className="button button--secondary" key={project.handle} onClick={() => onSelect(project)}>
+                  <GitBranch size={17} aria-hidden="true" />
+                  <span>{project.name}</span>
+                  <small>{project.location}</small>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
 export function Sidebar({
-  data,
+  daemon,
+  queueCount,
   activeView,
   collapsed,
   pending,
   trapFocus,
-  projectMenuOpen,
-  onProjectMenuOpenChange,
-  onSelectProject,
   onNavigate,
   onToggleDaemon,
   onRestartDaemon,
   onDismiss,
   containerRef,
 }: {
-  data: ControlCenterView;
+  daemon: DaemonView;
+  queueCount: number;
   activeView: ViewId;
   collapsed: boolean;
   pending: boolean;
   trapFocus: boolean;
-  projectMenuOpen: boolean;
-  onProjectMenuOpenChange: (open: boolean) => void;
-  onSelectProject: (project: ProjectView) => void;
   onNavigate: (view: ViewId) => void;
   onToggleDaemon: () => void;
   onRestartDaemon: () => void;
@@ -198,15 +267,6 @@ export function Sidebar({
         <img src="/assets/pam-mark.png" alt="" />
         {!collapsed && <span>PAM</span>}
       </div>
-      {!collapsed && (
-        <ProjectMenu
-          active={data.project}
-          projects={data.catalog}
-          open={projectMenuOpen}
-          onOpenChange={onProjectMenuOpenChange}
-          onSelect={onSelectProject}
-        />
-      )}
       <nav className="primary-nav" aria-label="Primary">
         {navItems.map(({ id, label, icon: Icon }) => (
           <Fragment key={id}>
@@ -221,9 +281,9 @@ export function Sidebar({
             >
               <Icon size={21} weight={activeView === id ? "bold" : "regular"} aria-hidden="true" />
               {!collapsed && <span>{label}</span>}
-              {!collapsed && id === "control-center" && data.current.queue.length > 0 && (
-                <span className="nav-count" aria-label={`${data.current.queue.length} queued`}>
-                  {data.current.queue.length}
+              {!collapsed && id === "control-center" && queueCount > 0 && (
+                <span className="nav-count" aria-label={`${queueCount} queued`}>
+                  {queueCount}
                 </span>
               )}
             </button>
@@ -235,16 +295,16 @@ export function Sidebar({
           <button
             type="button"
             className="daemon-control"
-            aria-pressed={data.daemon.state === "running"}
-            aria-label={collapsed ? data.daemon.detail : undefined}
-            title={collapsed ? data.daemon.detail : undefined}
-            disabled={pending || ["starting", "stopping", "unavailable"].includes(data.daemon.state)}
+            aria-pressed={daemon.state === "running"}
+            aria-label={collapsed ? daemon.detail : undefined}
+            title={collapsed ? daemon.detail : undefined}
+            disabled={pending || ["starting", "stopping", "unavailable"].includes(daemon.state)}
             onClick={onToggleDaemon}
           >
-            {data.daemon.state === "running" ? <StatusDot /> : <Power size={18} weight="bold" aria-hidden="true" />}
-            {!collapsed && <span>{data.daemon.detail}</span>}
+            {daemon.state === "running" ? <StatusDot /> : <Power size={18} weight="bold" aria-hidden="true" />}
+            {!collapsed && <span>{daemon.detail}</span>}
           </button>
-          {!collapsed && data.daemon.state === "running" && (
+          {!collapsed && daemon.state === "running" && (
             <button
               type="button"
               className="daemon-restart"
@@ -401,7 +461,9 @@ export function ThemeMenu({
 }
 
 export function Toolbar({
-  data,
+  projectName,
+  queueCount,
+  fixture,
   collapsed,
   pending,
   theme,
@@ -416,7 +478,9 @@ export function Toolbar({
   commandButtonRef,
   queueButtonRef,
 }: {
-  data: ControlCenterView;
+  projectName: string | null;
+  queueCount: number | null;
+  fixture: boolean;
   collapsed: boolean;
   pending: boolean;
   theme: PamTheme;
@@ -437,25 +501,31 @@ export function Toolbar({
         <SidebarSimple size={19} weight="bold" />
       </button>
       <div className="breadcrumb" data-tauri-drag-region>
-        <span>{data.project.name}</span>
-        <CaretRight size={12} aria-hidden="true" />
+        {projectName !== null && (
+          <>
+            <span>{projectName}</span>
+            <CaretRight size={12} aria-hidden="true" />
+          </>
+        )}
         <strong>Daemon observatory</strong>
       </div>
-      {import.meta.env.DEV && data.fixture && <span className="fixture-badge">Design fixture</span>}
+      {import.meta.env.DEV && fixture && <span className="fixture-badge">Design fixture</span>}
       <div className="toolbar-actions">
         <IconTooltip label="Search commands · ⌘K">
           <button ref={commandButtonRef} type="button" aria-label="Open command palette (⌘K)" onClick={(event) => onOpenCommand(event.currentTarget)}>
             <MagnifyingGlass size={18} />
           </button>
         </IconTooltip>
-        <IconTooltip label="Open project queue">
-          <button ref={queueButtonRef} type="button" aria-label="Open queue" onClick={(event) => onOpenQueue(event.currentTarget)}>
-            <Queue size={19} />
-            {data.current.queue.length > 0 && <span>{data.current.queue.length}</span>}
-          </button>
-        </IconTooltip>
-        <IconTooltip label="Refresh project · ⌘R">
-          <button type="button" aria-label="Refresh project" disabled={pending} onClick={onRefresh}>
+        {queueCount !== null && (
+          <IconTooltip label="Open project queue">
+            <button ref={queueButtonRef} type="button" aria-label="Open queue" onClick={(event) => onOpenQueue(event.currentTarget)}>
+              <Queue size={19} />
+              {queueCount > 0 && <span>{queueCount}</span>}
+            </button>
+          </IconTooltip>
+        )}
+        <IconTooltip label={projectName !== null ? "Refresh project · ⌘R" : "Refresh daemon · ⌘R"}>
+          <button type="button" aria-label={projectName !== null ? "Refresh project" : "Refresh daemon"} disabled={pending} onClick={onRefresh}>
             <ArrowClockwise className={pending ? "is-spinning" : ""} size={18} weight="bold" />
           </button>
         </IconTooltip>

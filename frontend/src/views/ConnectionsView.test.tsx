@@ -4,15 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { ConnectionsView } from "./ConnectionsView";
 
-async function connectionsProps(scenario: FixtureScenario = "solved") {
-  const bridge = fixtureBridge(scenario);
-  const snapshot = await bridge.bootstrap();
-  return { bridge, fence: snapshot.fence };
+function connectionsProps(scenario: FixtureScenario = "solved") {
+  return { bridge: fixtureBridge(scenario) };
 }
 
 describe("ConnectionsView", () => {
   it("hosts the Callers and Connectors panels behind tabs, callers first", async () => {
-    const props = await connectionsProps();
+    const props = connectionsProps();
     render(<ConnectionsView {...props} />);
 
     expect(screen.getByRole("heading", { name: "Connections" })).toBeInTheDocument();
@@ -24,7 +22,7 @@ describe("ConnectionsView", () => {
 
   it("switches to the Connectors panel on demand", async () => {
     const user = userEvent.setup();
-    const props = await connectionsProps();
+    const props = connectionsProps();
     render(<ConnectionsView {...props} />);
 
     await user.click(screen.getByRole("tab", { name: "Connectors" }));
@@ -34,7 +32,7 @@ describe("ConnectionsView", () => {
   });
 
   it("lists registered callers with registration dates and revoked badges", async () => {
-    const props = await connectionsProps();
+    const props = connectionsProps();
     render(<ConnectionsView {...props} />);
 
     expect(await screen.findByText("gui:pam-desktop")).toBeInTheDocument();
@@ -48,7 +46,7 @@ describe("ConnectionsView", () => {
 
   it("refreshes the caller registry on demand", async () => {
     const user = userEvent.setup();
-    const props = await connectionsProps();
+    const props = connectionsProps();
     const spy = vi.spyOn(props.bridge, "callerRegistry");
     render(<ConnectionsView {...props} />);
     await screen.findByText("gui:pam-desktop");
@@ -56,10 +54,20 @@ describe("ConnectionsView", () => {
 
     await user.click(screen.getByRole("button", { name: "Refresh callers" }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(spy.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    expect(spy.mock.calls[1][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    expect(spy.mock.calls[0][0].operationId).not.toBe(spy.mock.calls[1][0].operationId);
+  });
+
+  it("serves the caller registry with zero projects", async () => {
+    const props = connectionsProps("global-only");
+    render(<ConnectionsView {...props} />);
+
+    expect(await screen.findByText("gui:pam-desktop")).toBeInTheDocument();
   });
 
   it("explains the paused registry while the daemon is offline", async () => {
-    const props = await connectionsProps("offline");
+    const props = connectionsProps("offline");
     render(<ConnectionsView {...props} />);
 
     expect(await screen.findByText(/caller registry is not being served/)).toBeInTheDocument();

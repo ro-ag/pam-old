@@ -31,6 +31,7 @@
     "allow-connector-registry",
     "allow-connector-configure",
     "allow-connector-test",
+    "allow-daemon-health",
     "core:app:allow-set-app-theme"
   ]
 }

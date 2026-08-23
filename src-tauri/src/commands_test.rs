@@ -42,6 +42,29 @@ fn fenced_request_accepts_only_canonical_uuid_fields() {
 }
 
 #[test]
+fn fenced_request_accepts_the_reserved_daemon_authority_literals() {
+    let daemon_authority = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID
+    });
+    let daemon_operation = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": "daemon"
+    });
+    let lookalike = json!({
+        "projectHandle": "daemons",
+        "generation": "daemon",
+        "operationId": OPERATION_ID
+    });
+
+    assert!(serde_json::from_value::<FencedRequest>(daemon_authority).is_ok());
+    assert!(serde_json::from_value::<FencedRequest>(daemon_operation).is_err());
+    assert!(serde_json::from_value::<FencedRequest>(lookalike).is_err());
+}
+
+#[test]
 fn activation_requires_a_canonical_operation_uuid() {
     let malformed = json!({
         "projectHandle": PROJECT_HANDLE,
