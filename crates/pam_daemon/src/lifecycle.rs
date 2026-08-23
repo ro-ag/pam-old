@@ -24,6 +24,10 @@ use cap_std::fs::{Dir, OpenOptions};
 use nix::unistd::Uid;
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, InvocationContext,
+    aws::{
+        VerifyCredentials as AwsVerifyCredentials,
+        VerifyCredentialsRequest as AwsVerifyCredentialsRequest,
+    },
     confluence::{
         VerifyCredentials as ConfluenceVerifyCredentials,
         VerifyCredentialsRequest as ConfluenceVerifyCredentialsRequest,
@@ -96,8 +100,8 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    CONFLUENCE, ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SHAREPOINT, SONARQUBE,
-    built_in_connector_ids, is_built_in,
+    AWS, CONFLUENCE, ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SHAREPOINT,
+    SONARQUBE, built_in_connector_ids, is_built_in,
 };
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
@@ -2616,7 +2620,12 @@ async fn handle_connector_test(
     let base_url = record.and_then(|record| record.base_url);
     let detail = match connectors.load_credential(&connector).await {
         Ok(Some(token)) => {
-            run_connector_probe(connectors, &connector, base_url.as_deref(), token).await
+            run_connector_probe(connectors, &connector, base_url.as_deref(), Some(token)).await
+        }
+        // The AWS connector's stored value is only an optional profile name,
+        // so its probe runs against the CLI's default credential chain.
+        Ok(None) if connector == AWS => {
+            run_connector_probe(connectors, &connector, base_url.as_deref(), None).await
         }
         Ok(None) => Err(
             "no credential is stored for this connector; store one with connector.configure"
@@ -2688,11 +2697,12 @@ fn require_probe_base_url<'a>(
     })
 }
 
+#[allow(clippy::too_many_lines)] // One flat branch per built-in connector keeps the probe auditable.
 async fn run_connector_probe(
     connectors: &ConnectorRuntime,
     connector_id: &str,
     base_url: Option<&str>,
-    token: String,
+    token: Option<String>,
 ) -> Result<String, String> {
     let context = InvocationContext::new(
         Instant::now() + CONNECTOR_TEST_DEADLINE,
@@ -2701,6 +2711,26 @@ async fn run_connector_probe(
         None,
     )
     .map_err(|_| "connector probe context could not be constructed".to_owned())?;
+    if connector_id == AWS {
+        // The AWS probe needs no base URL and treats an absent stored value
+        // as "use the CLI's default credential chain".
+        let aws = connectors
+            .aws(token.as_deref())
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<AwsVerifyCredentials>::execute(
+            &aws,
+            AwsVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok("caller identity verified via the aws CLI".to_owned());
+    }
+    let Some(token) = token else {
+        return Err(
+            "no credential is stored for this connector; store one with connector.configure"
+                .to_owned(),
+        );
+    };
     if connector_id == JENKINS {
         let base_url = require_probe_base_url(connector_id, base_url)?;
         let jenkins = connectors

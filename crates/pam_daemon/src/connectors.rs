@@ -6,6 +6,7 @@
 
 use std::{fmt, sync::Arc};
 
+use pam_connectors::aws::{Aws, AwsCliRunner, TokioAwsCliRunner};
 use pam_connectors::confluence::{Confluence, ConfluenceTransport, ReqwestConfluenceTransport};
 use pam_connectors::github::{GitHubActions, GitHubTransport, ReqwestGitHubTransport};
 use pam_connectors::jenkins::{Jenkins, JenkinsTransport, ReqwestJenkinsTransport};
@@ -21,6 +22,7 @@ pub(crate) const SONARQUBE: &str = "sonarqube";
 pub(crate) const JIRA: &str = "jira";
 pub(crate) const CONFLUENCE: &str = "confluence";
 pub(crate) const SHAREPOINT: &str = "sharepoint";
+pub(crate) const AWS: &str = "aws";
 pub(crate) const GITHUB_DEFAULT_API_BASE: &str = "https://api.github.com/";
 pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
@@ -49,8 +51,12 @@ pub(crate) const CONFLUENCE_COLLECT_PAGE_CAPABILITY: &str = "pages.collect";
 pub(crate) const SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY: &str = "documents.discover";
 pub(crate) const SHAREPOINT_DISCOVER_LISTS_CAPABILITY: &str = "lists.discover";
 
+/// The flow-step capability names executable through the AWS CLI connector.
+pub(crate) const AWS_DISCOVER_COMMANDS_CAPABILITY: &str = "commands.discover";
+pub(crate) const AWS_COLLECT_COMMAND_CAPABILITY: &str = "commands.collect";
+
 #[must_use]
-pub(crate) fn built_in_connector_ids() -> [&'static str; 6] {
+pub(crate) fn built_in_connector_ids() -> [&'static str; 7] {
     [
         GITHUB_ACTIONS,
         JENKINS,
@@ -58,6 +64,7 @@ pub(crate) fn built_in_connector_ids() -> [&'static str; 6] {
         JIRA,
         CONFLUENCE,
         SHAREPOINT,
+        AWS,
     ]
 }
 
@@ -109,6 +116,8 @@ pub(crate) struct ConnectorRuntime {
     pub(crate) confluence_transport: Option<Arc<dyn ConfluenceTransport>>,
     #[cfg(test)]
     pub(crate) sharepoint_transport: Option<Arc<dyn SharePointTransport>>,
+    #[cfg(test)]
+    pub(crate) aws_runner: Option<Arc<dyn AwsCliRunner>>,
 }
 
 impl fmt::Debug for ConnectorRuntime {
@@ -137,6 +146,8 @@ impl ConnectorRuntime {
             confluence_transport: None,
             #[cfg(test)]
             sharepoint_transport: None,
+            #[cfg(test)]
+            aws_runner: None,
         }
     }
 
@@ -386,6 +397,33 @@ impl ConnectorRuntime {
         }
         production_sharepoint_transport(token)
     }
+
+    /// Builds the AWS CLI connector for an optional stored profile name.
+    ///
+    /// PAM stores no AWS keys: the optional stored value is only a profile
+    /// name passed to the CLI as `--profile`; when absent the CLI resolves
+    /// the operator's default credential chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the stored profile name is not a
+    /// bounded argument-safe value.
+    pub(crate) fn aws(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Aws<Arc<dyn AwsCliRunner>>, ConnectorSecretError> {
+        let runner = self.aws_runner_for();
+        Aws::with_profile_str(profile, runner).map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn aws_runner_for(&self) -> Arc<dyn AwsCliRunner> {
+        #[cfg(test)]
+        if let Some(runner) = &self.aws_runner {
+            return Arc::clone(runner);
+        }
+        production_aws_runner()
+    }
 }
 
 fn production_github_transport(
@@ -447,6 +485,12 @@ fn production_sharepoint_transport(
     let transport = ReqwestSharePointTransport::new(Some(token))
         .map_err(|_| ConnectorSecretError::InvalidSecret)?;
     Ok(Arc::new(transport))
+}
+
+fn production_aws_runner() -> Arc<dyn AwsCliRunner> {
+    // The runner spawns the local `aws` binary directly with daemon-controlled
+    // arguments: no shell, a hard timeout, and bounded output reads.
+    Arc::new(TokioAwsCliRunner::new())
 }
 
 fn connector_locator(connector_id: &str) -> Result<SecretLocator, ConnectorSecretError> {

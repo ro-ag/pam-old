@@ -7,8 +7,8 @@ use pam_core::CallerCredential;
 use pam_platform::{SecretBackend, SecretBackendError, SecretLocator};
 
 use super::connectors::{
-    CONFLUENCE, ConnectorRuntime, ConnectorSecretError, GITHUB_ACTIONS, JENKINS, JIRA, SHAREPOINT,
-    SONARQUBE, built_in_connector_ids, is_built_in,
+    AWS, CONFLUENCE, ConnectorRuntime, ConnectorSecretError, GITHUB_ACTIONS, JENKINS, JIRA,
+    SHAREPOINT, SONARQUBE, built_in_connector_ids, is_built_in,
 };
 
 #[derive(Default)]
@@ -60,7 +60,7 @@ fn runtime_with_memory_backend() -> (ConnectorRuntime, Arc<MemorySecretBackend>)
 }
 
 #[test]
-fn the_built_in_registry_contains_exactly_github_actions_jenkins_sonarqube_jira_confluence_and_sharepoint()
+fn the_built_in_registry_contains_exactly_github_actions_jenkins_sonarqube_jira_confluence_sharepoint_and_aws()
  {
     assert_eq!(
         built_in_connector_ids(),
@@ -70,7 +70,8 @@ fn the_built_in_registry_contains_exactly_github_actions_jenkins_sonarqube_jira_
             SONARQUBE,
             JIRA,
             CONFLUENCE,
-            SHAREPOINT
+            SHAREPOINT,
+            AWS
         ]
     );
     assert!(is_built_in("github-actions"));
@@ -79,6 +80,7 @@ fn the_built_in_registry_contains_exactly_github_actions_jenkins_sonarqube_jira_
     assert!(is_built_in("jira"));
     assert!(is_built_in("confluence"));
     assert!(is_built_in("sharepoint"));
+    assert!(is_built_in("aws"));
     assert!(!is_built_in("gitlab-ci"));
 }
 
