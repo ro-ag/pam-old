@@ -1,8 +1,8 @@
 import { ArrowClockwise, UserCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
-import { withOperation } from "../bridge";
-import type { CallersDto, CommandFence, PamBridge } from "../domain";
+import { withDaemonOperation } from "../bridge";
+import type { CallersDto, PamBridge } from "../domain";
 import { presentError } from "../state";
 import { ConnectorsPanel } from "./ConnectorsPanel";
 
@@ -15,23 +15,21 @@ function formatDate(registeredAtMs: number): string {
 
 export interface ConnectionsViewProps {
   bridge: PamBridge;
-  fence: CommandFence;
 }
 
-function CallersPanel({ bridge, fence }: ConnectionsViewProps) {
+function CallersPanel({ bridge }: ConnectionsViewProps) {
   const [callers, setCallers] = useState<CallersDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
-  fenceRef.current = fence;
 
   const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
     setBusy(true);
     setLoadError(null);
     try {
-      const response = await bridge.callerRegistry(withOperation(fenceRef.current));
+      // The caller registry is daemon-global: always the daemon authority.
+      const response = await bridge.callerRegistry(withDaemonOperation());
       if (sequence !== requestSequence.current) return;
       setCallers(response);
     } catch (error) {
@@ -90,7 +88,7 @@ function CallersPanel({ bridge, fence }: ConnectionsViewProps) {
   );
 }
 
-export function ConnectionsView({ bridge, fence }: ConnectionsViewProps) {
+export function ConnectionsView({ bridge }: ConnectionsViewProps) {
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
@@ -102,10 +100,10 @@ export function ConnectionsView({ bridge, fence }: ConnectionsViewProps) {
           <Tab id="connectors" className="flow-inspector-tab">Connectors</Tab>
         </TabList>
         <TabPanel id="callers" className="project-detail-panel">
-          <CallersPanel bridge={bridge} fence={fence} />
+          <CallersPanel bridge={bridge} />
         </TabPanel>
         <TabPanel id="connectors" className="project-detail-panel">
-          <ConnectorsPanel bridge={bridge} fence={fence} />
+          <ConnectorsPanel bridge={bridge} />
         </TabPanel>
       </Tabs>
     </main>

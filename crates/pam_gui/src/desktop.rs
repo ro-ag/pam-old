@@ -30,7 +30,8 @@ use crate::{
     access_config::{AccessConfigState, AccessConfigView},
     control_center::{
         HealthState, MAX_PROJECTS, bounded_name, load_credential, load_project_health_access,
-        load_project_surfaces, project_name, request_daemon_stop_authenticated,
+        load_project_surfaces, probe_health_authenticated, project_name,
+        request_daemon_stop_authenticated,
     },
     current::{
         ApprovalDecisionFailure, ApprovalDecisionView, CurrentState, CurrentUnavailableCode,
@@ -63,9 +64,11 @@ const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
 const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
 const MODEL_INFER_DEFAULT_OUTPUT_TOKENS: u32 = 512;
+/// The reserved client-side authority literal for daemon-scoped commands.
+const DAEMON_AUTHORITY: &str = "daemon";
 
 macro_rules! uuid_handle {
-    ($name:ident) => {
+    ($name:ident $(, $literal:literal)*) => {
         #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
@@ -95,7 +98,9 @@ macro_rules! uuid_handle {
             /// Rejects malformed or non-canonical UUID text.
             pub fn parse(value: impl Into<String>) -> DesktopResult<Self> {
                 let value = value.into();
-                validate_uuid(&value)?;
+                if !Self::ALLOWED_LITERALS.contains(&value.as_str()) {
+                    validate_uuid(&value)?;
+                }
                 Ok(Self(value))
             }
 
@@ -104,7 +109,12 @@ macro_rules! uuid_handle {
                 &self.0
             }
 
+            const ALLOWED_LITERALS: &'static [&'static str] = &[$($literal),*];
+
             fn validate(&self) -> DesktopResult<()> {
+                if Self::ALLOWED_LITERALS.contains(&self.0.as_str()) {
+                    return Ok(());
+                }
                 validate_uuid(&self.0)
             }
         }
@@ -117,8 +127,8 @@ macro_rules! uuid_handle {
     };
 }
 
-uuid_handle!(ProjectHandle);
-uuid_handle!(GenerationId);
+uuid_handle!(ProjectHandle, "daemon");
+uuid_handle!(GenerationId, "daemon");
 uuid_handle!(OperationId);
 uuid_handle!(ApprovalHandle);
 uuid_handle!(EvidenceHandleDto);
@@ -226,6 +236,15 @@ impl fmt::Display for DesktopErrorDto {
 impl std::error::Error for DesktopErrorDto {}
 
 pub type DesktopResult<T> = Result<T, DesktopErrorDto>;
+
+/// The bootstrap result: the discovered catalog plus an activated project
+/// snapshot, or no snapshot at all in global-only mode (empty catalog).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BootstrapDto {
+    pub catalog: CatalogDto,
+    pub snapshot: Option<SnapshotDto>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -821,6 +840,7 @@ struct DesktopState {
     active: Option<ActiveProject>,
     activation_operation: Option<OperationId>,
     used_operations: VecDeque<OperationId>,
+    daemon_operations: VecDeque<OperationId>,
     approvals: HashMap<ApprovalHandle, PendingApproval>,
     evidence: HashMap<EvidenceHandleDto, ProtocolEvidenceHandle>,
     flow_workspace: Option<FlowWorkspaceState>,
@@ -870,6 +890,7 @@ impl DesktopCore {
                 active: None,
                 activation_operation: None,
                 used_operations: VecDeque::new(),
+                daemon_operations: VecDeque::new(),
                 approvals: HashMap::new(),
                 evidence: HashMap::new(),
                 flow_workspace: None,
@@ -936,15 +957,26 @@ impl DesktopCore {
     }
 
     /// Discovers and activates the first valid startup project, preferring the
-    /// direct launch context before ordered ptrack catalog hints.
+    /// direct launch context before ordered ptrack catalog hints. An empty
+    /// catalog is not an error: bootstrap then reports global-only mode with
+    /// no snapshot.
     ///
     /// # Errors
     ///
-    /// Returns a bounded error when no project can be discovered, authority
-    /// setup fails, or a concurrent activation supersedes this operation.
-    pub async fn bootstrap(&self, operation: OperationId) -> DesktopResult<SnapshotDto> {
+    /// Returns a bounded error when a discovered candidate cannot be
+    /// activated, authority setup fails, or a concurrent activation
+    /// supersedes this operation.
+    pub async fn bootstrap(&self, operation: OperationId) -> DesktopResult<BootstrapDto> {
         operation.validate()?;
         let catalog = self.catalog().await;
+        self.bootstrap_with_catalog(operation, catalog).await
+    }
+
+    async fn bootstrap_with_catalog(
+        &self,
+        operation: OperationId,
+        catalog: CatalogDto,
+    ) -> DesktopResult<BootstrapDto> {
         let _command = self.command_gate.lock().await;
         let candidates = {
             let mut state = self.inner.lock().await;
@@ -962,6 +994,17 @@ impl DesktopCore {
                 .filter_map(|project| state.catalog.get(&project.handle).cloned())
                 .collect::<Vec<_>>()
         };
+
+        if candidates.is_empty() {
+            let mut state = self.inner.lock().await;
+            if state.activation_operation.as_ref() == Some(&operation) {
+                state.activation_operation = None;
+            }
+            return Ok(BootstrapDto {
+                catalog,
+                snapshot: None,
+            });
+        }
 
         let mut last_error = None;
         let mut selected = None;
@@ -1009,9 +1052,12 @@ impl DesktopCore {
         state.approvals.clear();
         state.evidence.clear();
         state.flow_workspace = None;
-        Ok(snapshot_from_surfaces(
-            &mut state, &active, operation, surfaces,
-        ))
+        Ok(BootstrapDto {
+            catalog,
+            snapshot: Some(snapshot_from_surfaces(
+                &mut state, &active, operation, surfaces,
+            )),
+        })
     }
 
     /// Activates one opaque catalog entry and loads one authenticated snapshot.
@@ -1101,15 +1147,24 @@ impl DesktopCore {
         self.finish_snapshot(fence, active, surfaces).await
     }
 
-    /// Starts the configured PAM daemon and returns a newly fenced snapshot.
+    /// Starts the configured PAM daemon. Under a project fence it returns a
+    /// newly fenced snapshot; under the daemon authority it returns no
+    /// snapshot and spawns from the user home directory.
     ///
     /// # Errors
     ///
     /// Returns a bounded error for stale authority or process startup failure.
-    pub async fn start_daemon(&self, fence: CommandFence) -> DesktopResult<SnapshotDto> {
+    pub async fn start_daemon(&self, fence: CommandFence) -> DesktopResult<Option<SnapshotDto>> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
-        let executable = self.inner.lock().await.daemon_executable.clone();
+        let scope = self.begin_scoped(&fence).await?;
+        let (executable, spawn_root) = {
+            let state = self.inner.lock().await;
+            let spawn_root = match &scope {
+                CommandScope::Project(active) => active.catalog.root.clone(),
+                CommandScope::Daemon => daemon_start_cwd(&state.startup_root),
+            };
+            (state.daemon_executable.clone(), spawn_root)
+        };
         // The daemon starts only with a control-center launch grant, and runs
         // detached in its own process group: closing the UI never stops it.
         let endpoint = pam_platform::LocalEndpoint::default_for_user();
@@ -1125,7 +1180,7 @@ impl DesktopCore {
             // live daemon still holds the ownership lock.
             .args(["daemon", "--recover"])
             .env(pam_platform::LAUNCH_GRANT_ENV, grant)
-            .current_dir(&active.catalog.root)
+            .current_dir(&spawn_root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -1149,40 +1204,57 @@ impl DesktopCore {
                 None,
             ));
         }
-        let surfaces = load_surfaces(active.project_id.clone()).await;
-        let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
-        state.daemon_child = Some(child);
-        finish_snapshot_locked(&mut state, fence, active, surfaces)
+        match scope {
+            CommandScope::Daemon => {
+                let mut state = self.inner.lock().await;
+                state.daemon_child = Some(child);
+                Ok(None)
+            }
+            CommandScope::Project(active) => {
+                let surfaces = load_surfaces(active.project_id.clone()).await;
+                let mut state = self.inner.lock().await;
+                ensure_active_matches(&state, &active, &fence)?;
+                state.daemon_child = Some(child);
+                finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
+            }
+        }
     }
 
-    /// Requests an authenticated daemon stop and returns a newly fenced snapshot.
+    /// Requests an authenticated daemon stop. Under a project fence it
+    /// returns a newly fenced snapshot; under the daemon authority it stops
+    /// the daemon in its reserved scope and returns no snapshot.
     ///
     /// # Errors
     ///
     /// Returns a bounded error for stale authority, missing credentials, or a
     /// rejected/failed daemon lifecycle exchange.
-    pub async fn stop_daemon(&self, fence: CommandFence) -> DesktopResult<SnapshotDto> {
+    pub async fn stop_daemon(&self, fence: CommandFence) -> DesktopResult<Option<SnapshotDto>> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let caller = caller_id(CallerKind::Gui)
             .map_err(|error| DesktopErrorDto::unavailable(error.to_string(), None))?;
         let credential = load_credential(caller.clone()).await.map_err(|detail| {
             DesktopErrorDto::unavailable(detail, Some(GUI_REGISTRATION_RECOVERY.to_owned()))
         })?;
-        request_daemon_stop_authenticated(
-            caller.clone(),
-            credential.clone(),
-            active.project_id.clone(),
-        )
-        .await
-        .map_err(|detail| DesktopErrorDto::unavailable(detail, None))?;
-        let surfaces =
-            load_surfaces_with_credential(caller, credential, active.project_id.clone()).await;
-        let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
-        reap_daemon_child(&mut state);
-        finish_snapshot_locked(&mut state, fence, active, surfaces)
+        request_daemon_stop_authenticated(caller.clone(), credential.clone(), scope.project_id())
+            .await
+            .map_err(|detail| DesktopErrorDto::unavailable(detail, None))?;
+        match scope {
+            CommandScope::Daemon => {
+                let mut state = self.inner.lock().await;
+                reap_daemon_child(&mut state);
+                Ok(None)
+            }
+            CommandScope::Project(active) => {
+                let surfaces =
+                    load_surfaces_with_credential(caller, credential, active.project_id.clone())
+                        .await;
+                let mut state = self.inner.lock().await;
+                ensure_active_matches(&state, &active, &fence)?;
+                reap_daemon_child(&mut state);
+                finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
+            }
+        }
     }
 
     /// Registers the GUI caller through the bundled PAM helper and refreshes
@@ -1364,22 +1436,17 @@ impl DesktopCore {
         limit: Option<u32>,
     ) -> DesktopResult<ActivityDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_daemon_activity(
-                    caller,
-                    credential,
-                    active.project_id.clone(),
-                    limit.unwrap_or(0),
-                )
-                .await
+                load_daemon_activity(caller, credential, scope.project_id(), limit.unwrap_or(0))
+                    .await
             }
             Err(state) => state,
         };
         let data = activity_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1393,16 +1460,16 @@ impl DesktopCore {
     /// Returns a bounded error when the fence is invalid, stale, or reused.
     pub async fn caller_registry(&self, fence: CommandFence) -> DesktopResult<CallersDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_caller_registry(caller, credential, active.project_id.clone()).await
+                load_caller_registry(caller, credential, scope.project_id()).await
             }
             Err(state) => state,
         };
         let data = callers_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1416,16 +1483,16 @@ impl DesktopCore {
     /// Returns a bounded error when the fence is invalid, stale, or reused.
     pub async fn model_status(&self, fence: CommandFence) -> DesktopResult<ModelStatusDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_model_status(caller, credential, active.project_id.clone()).await
+                load_model_status(caller, credential, scope.project_id()).await
             }
             Err(state) => state,
         };
         let data = model_status_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1449,7 +1516,7 @@ impl DesktopCore {
         max_output_tokens: Option<u32>,
     ) -> DesktopResult<ModelInferDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let messages = messages
             .into_iter()
             .map(|message| ModelMessage::new(message.role.into(), message.content))
@@ -1460,7 +1527,7 @@ impl DesktopCore {
             Ok((caller, credential)) => run_model_infer(
                 caller,
                 credential,
-                active.project_id.clone(),
+                scope.project_id(),
                 model,
                 messages,
                 max_output_tokens,
@@ -1471,7 +1538,7 @@ impl DesktopCore {
         };
         let data = model_infer_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1485,16 +1552,16 @@ impl DesktopCore {
     /// Returns a bounded error when the fence is invalid, stale, or reused.
     pub async fn connector_registry(&self, fence: CommandFence) -> DesktopResult<ConnectorsDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_connector_registry(caller, credential, active.project_id.clone()).await
+                load_connector_registry(caller, credential, scope.project_id()).await
             }
             Err(state) => state,
         };
         let data = connectors_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1516,12 +1583,12 @@ impl DesktopCore {
         params: ConnectorConfigureParams,
     ) -> DesktopResult<ConnectorConfigureDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => run_connector_configure(
                 caller,
                 credential,
-                active.project_id.clone(),
+                scope.project_id(),
                 params.connector,
                 params.enabled,
                 params.base_url,
@@ -1533,7 +1600,7 @@ impl DesktopCore {
         };
         let data = connector_configure_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1553,10 +1620,10 @@ impl DesktopCore {
         connector: String,
     ) -> DesktopResult<ConnectorTestDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let observed = match observatory_credential().await {
             Ok((caller, credential)) => {
-                run_connector_test(caller, credential, active.project_id.clone(), connector)
+                run_connector_test(caller, credential, scope.project_id(), connector)
                     .await
                     .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?
             }
@@ -1564,7 +1631,7 @@ impl DesktopCore {
         };
         let data = connector_test_dto(observed);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
@@ -1850,6 +1917,75 @@ impl DesktopCore {
         Ok(active)
     }
 
+    /// Authorizes one daemon-scoped command under the constant daemon
+    /// authority, without requiring an active project.
+    async fn begin_daemon(&self, fence: &CommandFence) -> DesktopResult<()> {
+        fence.operation_id.validate()?;
+        if fence.project_handle.as_str() != DAEMON_AUTHORITY
+            || fence.generation.as_str() != DAEMON_AUTHORITY
+        {
+            return Err(DesktopErrorDto::invalid_input(
+                "Daemon-scoped commands require the exact daemon authority fence.",
+            ));
+        }
+        let mut state = self.inner.lock().await;
+        if state
+            .daemon_operations
+            .iter()
+            .any(|operation| operation == &fence.operation_id)
+        {
+            return Err(DesktopErrorDto::new(
+                DesktopErrorKind::Conflict,
+                "This operation UUID was already used for the daemon scope.",
+                Some("Create a new operation UUID and retry.".to_owned()),
+            ));
+        }
+        state
+            .daemon_operations
+            .push_back(fence.operation_id.clone());
+        while state.daemon_operations.len() > MAX_OPERATIONS {
+            state.daemon_operations.pop_front();
+        }
+        Ok(())
+    }
+
+    /// Routes one fence to the daemon authority or the active project.
+    async fn begin_scoped(&self, fence: &CommandFence) -> DesktopResult<CommandScope> {
+        if is_daemon_fence(fence) {
+            self.begin_daemon(fence).await?;
+            Ok(CommandScope::Daemon)
+        } else {
+            Ok(CommandScope::Project(self.begin(fence).await?))
+        }
+    }
+
+    /// Probes daemon health under the daemon authority, without any project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the daemon authority fence is invalid or
+    /// its operation UUID was replayed.
+    pub async fn daemon_health(&self, fence: CommandFence) -> DesktopResult<HealthDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let health = match caller_id(CallerKind::Gui) {
+            Err(error) => HealthState::Degraded {
+                detail: error.to_string(),
+                recovery: None,
+            },
+            Ok(caller) => match load_credential(caller.clone()).await {
+                Err(detail) => HealthState::Degraded {
+                    detail,
+                    recovery: Some(GUI_REGISTRATION_RECOVERY.to_owned()),
+                },
+                Ok(credential) => {
+                    probe_health_authenticated(caller, credential, ProjectId::daemon_scope()).await
+                }
+            },
+        };
+        Ok(health_dto(health))
+    }
+
     async fn finish_snapshot(
         &self,
         fence: CommandFence,
@@ -1860,6 +1996,12 @@ impl DesktopCore {
         ensure_active_matches(&state, &active, &fence)?;
         finish_snapshot_locked(&mut state, fence, active, surfaces)
     }
+}
+
+/// A global daemon launch has no project root: it spawns from the user home
+/// directory, or the startup root when no home directory is known.
+fn daemon_start_cwd(fallback: &Path) -> PathBuf {
+    std::env::home_dir().unwrap_or_else(|| fallback.to_path_buf())
 }
 
 fn default_daemon_executable() -> PathBuf {
@@ -2020,6 +2162,39 @@ fn unavailable_bundle(
             detail,
             recovery,
         },
+    }
+}
+
+/// The authorized scope of one fenced command: the constant daemon authority
+/// or the active project generation.
+enum CommandScope {
+    Daemon,
+    Project(ActiveProject),
+}
+
+impl CommandScope {
+    fn project_id(&self) -> ProjectId {
+        match self {
+            Self::Daemon => ProjectId::daemon_scope(),
+            Self::Project(active) => active.project_id.clone(),
+        }
+    }
+}
+
+fn is_daemon_fence(fence: &CommandFence) -> bool {
+    fence.project_handle.as_str() == DAEMON_AUTHORITY
+        || fence.generation.as_str() == DAEMON_AUTHORITY
+}
+
+fn ensure_scope_matches(
+    state: &DesktopState,
+    scope: &CommandScope,
+    fence: &CommandFence,
+) -> DesktopResult<()> {
+    match scope {
+        // The daemon authority is constant: it never goes stale.
+        CommandScope::Daemon => Ok(()),
+        CommandScope::Project(active) => ensure_active_matches(state, active, fence),
     }
 }
 
@@ -3209,6 +3384,28 @@ pub(crate) async fn reserve_for_test(
 }
 
 #[cfg(test)]
+pub(crate) async fn reserve_daemon_for_test(
+    core: &DesktopCore,
+    fence: &CommandFence,
+) -> DesktopResult<()> {
+    core.begin_daemon(fence).await
+}
+
+#[cfg(test)]
+pub(crate) async fn bootstrap_with_catalog_for_test(
+    core: &DesktopCore,
+    operation: OperationId,
+    catalog: CatalogDto,
+) -> DesktopResult<BootstrapDto> {
+    core.bootstrap_with_catalog(operation, catalog).await
+}
+
+#[cfg(test)]
+pub(crate) fn daemon_start_cwd_for_test(fallback: &Path) -> PathBuf {
+    daemon_start_cwd(fallback)
+}
+
+#[cfg(test)]
 pub(crate) async fn switch_authority_for_test(
     core: &DesktopCore,
     project: ProjectHandle,
@@ -3237,6 +3434,7 @@ fn test_state() -> DesktopState {
         active: None,
         activation_operation: None,
         used_operations: VecDeque::new(),
+        daemon_operations: VecDeque::new(),
         approvals: HashMap::new(),
         evidence: HashMap::new(),
         flow_workspace: None,

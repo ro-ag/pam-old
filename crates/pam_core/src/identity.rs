@@ -75,3 +75,26 @@ identifier!(GrantId);
 identifier!(IdempotencyKey);
 identifier!(ProjectId);
 identifier!(RequestId);
+
+/// The reserved wire literal identifying the daemon scope.
+///
+/// Real project identities are UUID-validated where they are minted, so this
+/// literal can never collide with a stored project. Constructing
+/// `ProjectId::new("daemon")` yields a value equal to
+/// [`ProjectId::daemon_scope`]; project-scoped surfaces must reject it.
+const DAEMON_SCOPE_PROJECT_ID: &str = "daemon";
+
+impl ProjectId {
+    /// The reserved project identity for daemon-scoped operations that need no
+    /// real project.
+    #[must_use]
+    pub fn daemon_scope() -> Self {
+        Self::new(DAEMON_SCOPE_PROJECT_ID)
+    }
+
+    /// Reports whether this identity is the reserved daemon scope.
+    #[must_use]
+    pub fn is_daemon_scope(&self) -> bool {
+        self.0 == DAEMON_SCOPE_PROJECT_ID
+    }
+}

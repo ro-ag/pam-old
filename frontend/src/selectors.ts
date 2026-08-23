@@ -231,6 +231,15 @@ function healthView(health: HealthDto) {
   return { health: "attention" as const, daemon: { state: "unavailable" as const, detail: health.detail, model: null, modelMemory: null, queueDepth: null } };
 }
 
+// The daemon pill and Activity health cards read this when no project
+// snapshot exists; with an active project the snapshot health stays truthful.
+export function selectDaemonView(health: HealthDto | null): DaemonView {
+  if (health === null) {
+    return { state: "unavailable", detail: "Checking on PAM…", model: null, modelMemory: null, queueDepth: null };
+  }
+  return healthView(health).daemon;
+}
+
 function accessView(access: AccessConfigDto): AccessGrantView[] {
   if (access.status === "blocked") {
     return [{

@@ -17,6 +17,7 @@ import type {
   FlowSaveDataDto,
   FlowWorkspaceDataDto,
   ChatMessageDto,
+  HealthDto,
   ModelInferDto,
   ModelStatusDto,
   ModelSummaryDto,
@@ -193,6 +194,7 @@ const documentHandle = "88888888-8888-4888-8888-888888888888";
 
 export const fixtureScenarios = [
   "loading",
+  "global-only",
   "offline",
   "missing-credential",
   "approval",
@@ -564,7 +566,13 @@ function clone<T>(value: T): T {
 }
 
 export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
-  let active = projects[0];
+  const catalogProjects = scenario === "global-only" ? [] : projects;
+  let active: ProjectSummaryDto | null = catalogProjects[0] ?? null;
+  const requireActive = (): ProjectSummaryDto => {
+    if (!active) throw new Error("No fixture project is active for this project-scoped command.");
+    return active;
+  };
+  const isDaemonFence = (fence: CommandFence) => fence.projectHandle === "daemon" && fence.generation === "daemon";
   let generation = "99999999-9999-4999-8999-999999999999";
   let daemonRunning = scenario !== "offline";
   let savedSource = flowSource;
@@ -587,7 +595,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   ]);
   const driftKey = (key: SkillLibraryKeyDto) => `${key.entryId}:${key.version}:${key.agent}`;
   const fenceResponse = <T,>(fence: CommandFence, data: T) => ({ fence: clone(fence), data: clone(data) });
-  const currentFence = (operationId: string): CommandFence => ({ projectHandle: active.handle, generation, operationId });
+  const currentFence = (operationId: string): CommandFence => ({ projectHandle: requireActive().handle, generation, operationId });
   // Snapshot commands rotate the generation, exactly like the desktop core.
   let generationCounter = 0;
   const rotatedFence = (operationId: string): CommandFence => {
@@ -609,10 +617,20 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     async bootstrap() {
       if (scenario === "loading") return new Promise(() => {});
       if (scenario === "startup-error") throw new Error("The PAM daemon fixture is unavailable.");
-      return fenceResponse(currentFence("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), snapshot(active, daemonRunning, scenario));
+      return {
+        catalog: { projects: clone(catalogProjects), warning: null },
+        snapshot: active
+          ? fenceResponse(currentFence("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), snapshot(active, daemonRunning, scenario))
+          : null,
+      };
     },
     async catalog(): Promise<CatalogDto> {
-      return { projects: clone(projects), warning: null };
+      return { projects: clone(catalogProjects), warning: null };
+    },
+    async daemonHealth(_fence): Promise<HealthDto> {
+      return daemonRunning
+        ? { status: "healthy", daemonVersion: "fixture-0.1.0", queueDepth: 2 }
+        : { status: "offline" };
     },
     async daemonActivity(_fence, limit): Promise<ActivityDto> {
       if (!daemonRunning) {
@@ -765,7 +783,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       };
     },
     async activateProject(projectHandle, operationId) {
-      const selected = projects.find((project) => project.handle === projectHandle);
+      const selected = catalogProjects.find((project) => project.handle === projectHandle);
       if (!selected) throw new Error("The selected fixture project is unavailable.");
       active = selected;
       generation = projectHandle === projects[1].handle
@@ -775,12 +793,22 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           : "99999999-9999-4999-8999-999999999999";
       return fenceResponse(currentFence(operationId), snapshot(active, daemonRunning, scenario));
     },
-    async refreshProject(fence) { return fenceResponse(rotatedFence(fence.operationId), snapshot(active, daemonRunning, scenario)); },
-    async startDaemon(fence) { daemonRunning = true; return fenceResponse(rotatedFence(fence.operationId), snapshot(active, daemonRunning, scenario)); },
-    async stopDaemon(fence) { daemonRunning = false; return fenceResponse(rotatedFence(fence.operationId), snapshot(active, daemonRunning, scenario)); },
-    async registerGuiCaller(fence) { return fenceResponse(rotatedFence(fence.operationId), solvedSnapshot(active, daemonRunning)); },
+    async refreshProject(fence) { return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario)); },
+    // Under the daemon authority the lifecycle answers with no snapshot; a
+    // project fence still receives a freshly fenced snapshot.
+    async startDaemon(fence) {
+      daemonRunning = true;
+      if (isDaemonFence(fence)) return null;
+      return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario));
+    },
+    async stopDaemon(fence) {
+      daemonRunning = false;
+      if (isDaemonFence(fence)) return null;
+      return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario));
+    },
+    async registerGuiCaller(fence) { return fenceResponse(rotatedFence(fence.operationId), solvedSnapshot(requireActive(), daemonRunning)); },
     async decideApproval(fence, _approvalHandle: string, decision: ApprovalDecision) {
-      const data = solvedSnapshot(active, daemonRunning);
+      const data = solvedSnapshot(requireActive(), daemonRunning);
       if (decision === "deny") {
         data.current = {
           status: "unavailable",

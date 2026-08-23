@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "connector_registry",
     "connector_configure",
     "connector_test",
+    "daemon_health",
 ];
 
 fn main() {

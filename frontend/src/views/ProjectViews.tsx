@@ -20,7 +20,7 @@ import {
 } from "@phosphor-icons/react";
 import { Collapsible } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { StatusDot } from "../components/Shell";
 import type { AgentBriefView, ControlCenterView, TimelineItemView } from "../selectors";
 
@@ -274,9 +274,10 @@ export function CurrentView({
 
 export interface AccessViewProps {
   data: ControlCenterView;
+  contextBar?: ReactNode;
 }
 
-export function AccessView({ data }: AccessViewProps) {
+export function AccessView({ data, contextBar }: AccessViewProps) {
   const accessIcon = (id: string) => id === "model"
     ? Pulse
     : id === "policy"
@@ -289,7 +290,7 @@ export function AccessView({ data }: AccessViewProps) {
   return (
     <main className="canvas" id="main-content">
       <section className="project-detail-view">
-        <header className="project-header compact"><div><h1>Access</h1><p>Narrow capabilities, visible to the developer.</p></div></header>
+        <header className="project-header compact"><div><h1>Access</h1><p>Narrow capabilities, visible to the developer.</p></div>{contextBar}</header>
         <section className="panel access-panel" aria-labelledby="access-heading">
           <div className="panel-title"><div><span className="eyebrow">Project boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>
           <div className="access-list">

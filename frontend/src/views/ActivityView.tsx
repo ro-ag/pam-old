@@ -8,9 +8,9 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { withOperation } from "../bridge";
-import type { ActivityDto, ActivityEventDto, CommandFence, ModelStatusDto, PamBridge } from "../domain";
-import type { ControlCenterView } from "../selectors";
+import { withDaemonOperation } from "../bridge";
+import type { ActivityDto, ActivityEventDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
+import type { DaemonView } from "../selectors";
 import { presentError } from "../state";
 
 function formatClock(occurredAtMs: number): string {
@@ -27,9 +27,9 @@ export function formatModelSize(sizeBytes: number): string {
 }
 
 export interface ActivityViewProps {
-  data: ControlCenterView;
+  daemon: DaemonView;
+  projects: ProjectSummaryDto[];
   bridge: PamBridge;
-  fence: CommandFence;
   pending: boolean;
   modelStatus: ModelStatusDto | null;
   onReloadModel: () => void;
@@ -37,21 +37,20 @@ export interface ActivityViewProps {
   onStartDaemon: () => void;
 }
 
-export function ActivityView({ data, bridge, fence, pending, modelStatus, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
+export function ActivityView({ daemon, projects, bridge, pending, modelStatus, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
   const [activity, setActivity] = useState<ActivityDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
-  fenceRef.current = fence;
-  const offline = data.daemon.state === "stopped";
+  const offline = daemon.state === "stopped";
 
   const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
     setBusy(true);
     setLoadError(null);
     try {
-      const response = await bridge.daemonActivity(withOperation(fenceRef.current));
+      // The activity feed is daemon-global: always the daemon authority.
+      const response = await bridge.daemonActivity(withDaemonOperation());
       if (sequence !== requestSequence.current) return;
       setActivity(response);
     } catch (error) {
@@ -78,7 +77,7 @@ export function ActivityView({ data, bridge, fence, pending, modelStatus, onRelo
 
   const projectLabel = (projectId: string | null) => projectId === null
     ? "daemon"
-    : data.catalog.find((project) => project.handle === projectId)?.name ?? `${projectId.slice(0, 8)}…`;
+    : projects.find((project) => project.handle === projectId)?.name ?? `${projectId.slice(0, 8)}…`;
 
   const eventRow = (event: ActivityEventDto) => (
     <article key={event.sequence}>
@@ -106,17 +105,17 @@ export function ActivityView({ data, bridge, fence, pending, modelStatus, onRelo
       <section className="project-overview" aria-label="Daemon health">
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><Pulse size={21} weight="bold" /></span>
-          <div><small>Watch status</small><strong>{data.daemon.detail}</strong></div>
-          <span className={`state-pill state-pill--${data.daemon.state === "running" ? "healthy" : "attention"}`}>{data.daemon.state}</span>
+          <div><small>Watch status</small><strong>{daemon.detail}</strong></div>
+          <span className={`state-pill state-pill--${daemon.state === "running" ? "healthy" : "attention"}`}>{daemon.state}</span>
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><CheckCircle size={21} weight="bold" /></span>
-          <div><small>Daemon version</small><strong>{data.daemon.model ?? "Not reported"}</strong></div>
+          <div><small>Daemon version</small><strong>{daemon.model ?? "Not reported"}</strong></div>
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><Queue size={21} weight="bold" /></span>
-          <div><small>Queue depth</small><strong>{data.daemon.queueDepth ?? "Not reported"}</strong></div>
-          {data.daemon.queueDepth !== null && <span className="project-stat-value">{data.daemon.queueDepth}</span>}
+          <div><small>Queue depth</small><strong>{daemon.queueDepth ?? "Not reported"}</strong></div>
+          {daemon.queueDepth !== null && <span className="project-stat-value">{daemon.queueDepth}</span>}
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><Brain size={21} weight="bold" /></span>

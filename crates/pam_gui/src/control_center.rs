@@ -164,7 +164,7 @@ pub(crate) fn merge_projects(
     projects
 }
 
-async fn probe_health_authenticated(
+pub(crate) async fn probe_health_authenticated(
     caller_id: CallerId,
     credential: CallerCredential,
     project_id: ProjectId,

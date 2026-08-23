@@ -65,6 +65,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::connector_registry,
             commands::connector_configure,
             commands::connector_test,
+            commands::daemon_health,
         ])
         .run(tauri::generate_context!())?;
     Ok(())

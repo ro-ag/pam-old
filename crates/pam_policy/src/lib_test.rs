@@ -420,3 +420,73 @@ fn non_baseline_capabilities_still_deny_by_default() {
     assert_eq!(baseline_decision(&[], "shell.execute"), Decision::Denied);
     assert_eq!(baseline_decision(&[], "evidence.read"), Decision::Denied);
 }
+
+fn scope_decision(grants: &[Grant], project: &ProjectId, name: &str) -> Decision {
+    evaluate(
+        grants,
+        &CallerId::from("caller-1"),
+        project,
+        &capability(name),
+        &resource("connector:github-actions"),
+        100,
+    )
+}
+
+#[test]
+fn daemon_scope_grants_authorize_daemon_scope_requests() {
+    let allow = Grant {
+        project: ProjectId::daemon_scope(),
+        capability: capability("connector.configure"),
+        ..grant(Effect::Allow, ResourceScope::Any, ApprovalRequirement::None)
+    };
+
+    assert_eq!(
+        scope_decision(&[allow], &ProjectId::daemon_scope(), "connector.configure"),
+        Decision::Allowed
+    );
+}
+
+#[test]
+fn grants_never_cross_between_daemon_scope_and_real_projects() {
+    let project_allow = Grant {
+        capability: capability("connector.configure"),
+        ..grant(Effect::Allow, ResourceScope::Any, ApprovalRequirement::None)
+    };
+    let daemon_allow = Grant {
+        project: ProjectId::daemon_scope(),
+        capability: capability("connector.configure"),
+        ..grant(Effect::Allow, ResourceScope::Any, ApprovalRequirement::None)
+    };
+
+    // A per-project grant does not authorize the daemon scope, and vice versa.
+    assert_eq!(
+        scope_decision(
+            &[project_allow],
+            &ProjectId::daemon_scope(),
+            "connector.configure"
+        ),
+        Decision::Denied
+    );
+    assert_eq!(
+        scope_decision(
+            &[daemon_allow],
+            &ProjectId::from("project-1"),
+            "connector.configure"
+        ),
+        Decision::Denied
+    );
+}
+
+#[test]
+fn baseline_capabilities_stay_baseline_under_the_daemon_scope() {
+    for name in ["daemon.status", "daemon.activity", "connector.list"] {
+        assert_eq!(
+            scope_decision(&[], &ProjectId::daemon_scope(), name),
+            Decision::Allowed
+        );
+    }
+    assert_eq!(
+        scope_decision(&[], &ProjectId::daemon_scope(), "connector.configure"),
+        Decision::Denied
+    );
+}

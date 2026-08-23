@@ -9,11 +9,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { withOperation } from "../bridge";
+import { withDaemonOperation } from "../bridge";
 import type {
   ApprovalDecision,
   ChatMessageDto,
-  CommandFence,
   EvidenceDataDto,
   ModelUsageDto,
   PamBridge,
@@ -145,20 +144,17 @@ interface ChatTurn {
 export interface ModelChatDrawerProps {
   modelId: string;
   bridge: PamBridge;
-  fence: CommandFence;
   onClose: () => void;
   active?: boolean;
   returnFocusTarget?: HTMLElement | null;
 }
 
-export function ModelChatDrawer({ modelId, bridge, fence, onClose, active = true, returnFocusTarget }: ModelChatDrawerProps) {
+export function ModelChatDrawer({ modelId, bridge, onClose, active = true, returnFocusTarget }: ModelChatDrawerProps) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const requestSequence = useRef(0);
-  const fenceRef = useRef(fence);
-  fenceRef.current = fence;
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Closing the drawer discards any in-flight reply via the sequence guard.
@@ -184,7 +180,8 @@ export function ModelChatDrawer({ modelId, bridge, fence, onClose, active = true
     setBusy(true);
     const sequence = ++requestSequence.current;
     try {
-      const response = await bridge.modelInfer(withOperation(fenceRef.current), modelId, messages, CHAT_MAX_OUTPUT_TOKENS);
+      // Model chat is daemon-global: always the daemon authority.
+      const response = await bridge.modelInfer(withDaemonOperation(), modelId, messages, CHAT_MAX_OUTPUT_TOKENS);
       if (sequence !== requestSequence.current) return;
       if (response.status === "ok") {
         setTurns([...nextTurns, { role: "assistant", content: response.text, usage: response.usage }]);

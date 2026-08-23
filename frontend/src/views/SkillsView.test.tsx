@@ -8,7 +8,7 @@ describe("SkillsView", () => {
   it("hosts the three skill panels as Inventory, Library, and Audit tabs", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
+    const snapshot = (await bridge.bootstrap()).snapshot!;
     render(<SkillsView bridge={bridge} fence={snapshot.fence} />);
 
     expect(screen.getByRole("heading", { name: "Skills" })).toBeInTheDocument();

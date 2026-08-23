@@ -14,16 +14,18 @@ use super::{
     access_config::{AccessConfigState, map_diagnostics_for_test},
     current::{CurrentState, EvidencePreview, pending_approval_for_test},
     desktop::{
-        AccessConfigDto, ApprovalDecisionDispositionDto, CommandFence, CurrentDto,
+        AccessConfigDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto, CommandFence,
+        ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind, DesktopResult,
         EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowGraphDto, GenerationId,
         HealthDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
         active_core_for_test, activity_dto_for_test, approval_current_for_test,
-        approval_failure_retains_handle_for_test, bounded_detail_for_test, callers_dto_for_test,
-        clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
-        connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
-        evidence_dto_for_test, failure_kind_for_test, flow_compose_data_for_test,
-        flow_graph_data_for_test, gui_registration_current_for_test, model_infer_dto_for_test,
-        model_status_dto_for_test, post_save_reload_error_for_test, registration_contract_for_test,
+        approval_failure_retains_handle_for_test, bootstrap_with_catalog_for_test,
+        bounded_detail_for_test, callers_dto_for_test, clamp_model_output_tokens_for_test,
+        connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
+        current_dto_for_test, daemon_start_cwd_for_test, evidence_dto_for_test,
+        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
+        gui_registration_current_for_test, model_infer_dto_for_test, model_status_dto_for_test,
+        post_save_reload_error_for_test, registration_contract_for_test, reserve_daemon_for_test,
         reserve_for_test, switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
@@ -145,7 +147,7 @@ fn tagged_desktop_dtos_serialize_variant_fields_in_the_frontend_contract() {
 fn post_save_refresh_failure_truthfully_reports_that_publication_succeeded() {
     let error = post_save_reload_error_for_test(&FlowEditorError::TooManyRecoveryArtifacts);
 
-    assert_eq!(error.kind, super::desktop::DesktopErrorKind::Unavailable);
+    assert_eq!(error.kind, DesktopErrorKind::Unavailable);
     assert!(error.message.starts_with("The flow was saved, but "));
     assert_eq!(
         error.recovery.as_deref(),
@@ -237,7 +239,7 @@ async fn indeterminate_approval_failure_retains_the_exact_retry_handle() {
 
     assert!(retained);
     assert!(retry_authorized);
-    assert_eq!(error.kind, super::desktop::DesktopErrorKind::Unavailable);
+    assert_eq!(error.kind, DesktopErrorKind::Unavailable);
     assert_eq!(error.message, "The approval response was not observed.");
     assert!(!format!("{error:?}").contains("credential-secret"));
 }
@@ -298,7 +300,7 @@ async fn skill_inventory_rejects_a_stale_project_before_scanning() {
 
     let error = core.skill_inventory(stale).await.unwrap_err();
 
-    assert_eq!(error.kind, super::desktop::DesktopErrorKind::Stale);
+    assert_eq!(error.kind, DesktopErrorKind::Stale);
 }
 
 #[tokio::test]
@@ -321,8 +323,8 @@ async fn skill_audit_commands_reject_a_stale_project_before_storage_or_scan_work
         .await
         .unwrap_err();
 
-    assert_eq!(load_error.kind, super::desktop::DesktopErrorKind::Stale);
-    assert_eq!(run_error.kind, super::desktop::DesktopErrorKind::Stale);
+    assert_eq!(load_error.kind, DesktopErrorKind::Stale);
+    assert_eq!(run_error.kind, DesktopErrorKind::Stale);
 }
 
 #[test]
@@ -796,4 +798,194 @@ fn oversized_flow_documents_are_invalid_in_both_directions() {
         flow_compose_data_for_test(&oversized),
         FlowComposeDto::Invalid { .. }
     ));
+}
+
+fn daemon_fence(operation: OperationId) -> CommandFence {
+    CommandFence::new(
+        ProjectHandle::parse("daemon").unwrap(),
+        GenerationId::parse("daemon").unwrap(),
+        operation,
+    )
+}
+
+fn empty_catalog() -> CatalogDto {
+    CatalogDto {
+        projects: Vec::new(),
+        warning: None,
+    }
+}
+
+#[track_caller]
+fn assert_daemon_replay_conflict<T>(result: DesktopResult<T>) {
+    let error = result.err().expect("a replayed daemon operation must fail");
+    assert_eq!(error.kind, DesktopErrorKind::Conflict);
+    assert!(error.message.contains("daemon scope"));
+}
+
+#[test]
+fn the_daemon_literal_is_reserved_to_project_handle_and_generation() {
+    assert!(ProjectHandle::parse("daemon").is_ok());
+    assert!(GenerationId::parse("daemon").is_ok());
+    assert!(OperationId::parse("daemon").is_err());
+    assert!(ProjectHandle::parse("daemons").is_err());
+    assert!(GenerationId::parse("Daemon").is_err());
+}
+
+#[tokio::test]
+async fn daemon_fence_authorizes_without_an_active_project_and_blocks_replay() {
+    let core = DesktopCore::new("/bounded/test");
+    let fence = daemon_fence(OperationId::new());
+
+    reserve_daemon_for_test(&core, &fence).await.unwrap();
+
+    let replay = reserve_daemon_for_test(&core, &fence).await.unwrap_err();
+    assert_eq!(replay.kind, DesktopErrorKind::Conflict);
+
+    let fresh = daemon_fence(OperationId::new());
+    reserve_daemon_for_test(&core, &fresh).await.unwrap();
+}
+
+#[tokio::test]
+async fn daemon_authority_requires_both_reserved_literals() {
+    let core = DesktopCore::new("/bounded/test");
+    let mixed_generation = CommandFence::new(
+        ProjectHandle::parse("daemon").unwrap(),
+        GenerationId::new(),
+        OperationId::new(),
+    );
+    let mixed_handle = CommandFence::new(
+        ProjectHandle::new(),
+        GenerationId::parse("daemon").unwrap(),
+        OperationId::new(),
+    );
+
+    for fence in [mixed_generation, mixed_handle] {
+        let error = reserve_daemon_for_test(&core, &fence).await.unwrap_err();
+        assert_eq!(error.kind, DesktopErrorKind::InvalidInput);
+    }
+}
+
+#[tokio::test]
+async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() {
+    // A replayed daemon operation conflicts before any credential or daemon
+    // I/O, which proves each command routes through the daemon authority
+    // (a project-fenced path would fail with "No project is active" instead).
+    let core = DesktopCore::new("/bounded/test");
+    let operation = OperationId::new();
+    reserve_daemon_for_test(&core, &daemon_fence(operation.clone()))
+        .await
+        .unwrap();
+    let fence = || daemon_fence(operation.clone());
+
+    assert_daemon_replay_conflict(core.daemon_activity(fence(), None).await);
+    assert_daemon_replay_conflict(core.caller_registry(fence()).await);
+    assert_daemon_replay_conflict(core.model_status(fence()).await);
+    assert_daemon_replay_conflict(
+        core.model_infer(fence(), "vendor/name".to_owned(), Vec::new(), None)
+            .await,
+    );
+    assert_daemon_replay_conflict(core.connector_registry(fence()).await);
+    assert_daemon_replay_conflict(
+        core.connector_configure(
+            fence(),
+            ConnectorConfigureParams {
+                connector: "github-actions".to_owned(),
+                enabled: None,
+                base_url: None,
+                credential: None,
+            },
+        )
+        .await,
+    );
+    assert_daemon_replay_conflict(
+        core.connector_test(fence(), "github-actions".to_owned())
+            .await,
+    );
+    assert_daemon_replay_conflict(core.daemon_health(fence()).await);
+    assert_daemon_replay_conflict(core.start_daemon(fence()).await);
+    assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
+}
+
+#[tokio::test]
+async fn project_scoped_commands_reject_the_daemon_authority() {
+    let project = ProjectHandle::new();
+    let generation = GenerationId::new();
+    let core = active_core_for_test(&project, generation);
+
+    let reserve = reserve_for_test(&core, &daemon_fence(OperationId::new()))
+        .await
+        .unwrap_err();
+    let inventory = core
+        .skill_inventory(daemon_fence(OperationId::new()))
+        .await
+        .unwrap_err();
+
+    assert_eq!(reserve.kind, DesktopErrorKind::Stale);
+    assert_eq!(inventory.kind, DesktopErrorKind::Stale);
+}
+
+#[tokio::test]
+async fn bootstrap_with_an_empty_catalog_reports_global_mode_without_error() {
+    let core = DesktopCore::new("/bounded/test");
+
+    let first = bootstrap_with_catalog_for_test(&core, OperationId::new(), empty_catalog())
+        .await
+        .unwrap();
+    // The activation guard is released: a later bootstrap still works.
+    let second = bootstrap_with_catalog_for_test(&core, OperationId::new(), empty_catalog())
+        .await
+        .unwrap();
+
+    for dto in [first, second] {
+        assert!(dto.snapshot.is_none());
+        assert!(dto.catalog.projects.is_empty());
+    }
+    // No project was activated: project fences remain rejected.
+    let fence = CommandFence::new(
+        ProjectHandle::new(),
+        GenerationId::new(),
+        OperationId::new(),
+    );
+    let error = reserve_for_test(&core, &fence).await.unwrap_err();
+    assert_eq!(error.kind, DesktopErrorKind::Stale);
+    // The daemon authority still works in global mode.
+    reserve_daemon_for_test(&core, &daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+}
+
+#[test]
+fn bootstrap_dto_serializes_a_nullable_snapshot_in_the_frontend_contract() {
+    let dto = BootstrapDto {
+        catalog: empty_catalog(),
+        snapshot: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "catalog": { "projects": [], "warning": null },
+            "snapshot": null
+        })
+    );
+}
+
+#[test]
+fn daemon_health_reuses_the_standalone_health_contract() {
+    assert_eq!(
+        serde_json::to_value(HealthDto::Offline).unwrap(),
+        serde_json::json!({ "status": "offline" })
+    );
+}
+
+#[test]
+fn global_daemon_start_prefers_the_user_home_directory() {
+    let fallback = std::path::Path::new("/bounded/fallback");
+
+    let cwd = daemon_start_cwd_for_test(fallback);
+
+    match std::env::home_dir() {
+        Some(home) => assert_eq!(cwd, home),
+        None => assert_eq!(cwd, fallback),
+    }
 }

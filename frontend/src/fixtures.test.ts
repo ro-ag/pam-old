@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withDaemonOperation } from "./bridge";
 import { fixtureBridge, fixtureScenario } from "./fixtures";
 
 describe("visual QA fixture scenarios", () => {
@@ -13,7 +14,7 @@ describe("visual QA fixture scenarios", () => {
     void fixtureBridge("loading").bootstrap().then(() => { loadingResolved = true; });
     await Promise.resolve();
     expect(loadingResolved).toBe(false);
-    const missing = await fixtureBridge("missing-credential").bootstrap();
+    const missing = (await fixtureBridge("missing-credential").bootstrap()).snapshot!;
     expect(missing.data.health).toMatchObject({
       status: "degraded",
       recovery: "Use Register GUI caller in PAM.",
@@ -27,12 +28,12 @@ describe("visual QA fixture scenarios", () => {
   });
 
   it("renders distinct offline, approval, queued, empty, blocked, and active wire states", async () => {
-    const offline = await fixtureBridge("offline").bootstrap();
-    const approval = await fixtureBridge("approval").bootstrap();
-    const queued = await fixtureBridge("queued").bootstrap();
-    const empty = await fixtureBridge("empty").bootstrap();
-    const currentBlocked = await fixtureBridge("current-blocked").bootstrap();
-    const active = await fixtureBridge("active").bootstrap();
+    const offline = (await fixtureBridge("offline").bootstrap()).snapshot!;
+    const approval = (await fixtureBridge("approval").bootstrap()).snapshot!;
+    const queued = (await fixtureBridge("queued").bootstrap()).snapshot!;
+    const empty = (await fixtureBridge("empty").bootstrap()).snapshot!;
+    const currentBlocked = (await fixtureBridge("current-blocked").bootstrap()).snapshot!;
+    const active = (await fixtureBridge("active").bootstrap()).snapshot!;
 
     expect(offline.data.health.status).toBe("offline");
     expect(offline.data.current.status).toBe("unavailable");
@@ -52,7 +53,7 @@ describe("visual QA fixture scenarios", () => {
 
   it("serves daemon activity and the caller registry while running, and calm failures while paused", async () => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
+    const snapshot = (await bridge.bootstrap()).snapshot!;
 
     const activity = await bridge.daemonActivity(snapshot.fence, 2);
     expect(activity).toMatchObject({ status: "ok", truncated: true });
@@ -69,7 +70,7 @@ describe("visual QA fixture scenarios", () => {
     }
 
     const offline = fixtureBridge("offline");
-    const offlineSnapshot = await offline.bootstrap();
+    const offlineSnapshot = (await offline.bootstrap()).snapshot!;
     expect(offlineSnapshot.data.health.status).toBe("offline");
     expect(await offline.daemonActivity(offlineSnapshot.fence)).toMatchObject({
       status: "unavailable",
@@ -81,6 +82,21 @@ describe("visual QA fixture scenarios", () => {
     });
   });
 
+  it("serves the global-only bootstrap with no snapshot and a live daemon authority", async () => {
+    const bridge = fixtureBridge("global-only");
+    const response = await bridge.bootstrap();
+
+    expect(response.catalog.projects).toHaveLength(0);
+    expect(response.snapshot).toBeNull();
+    expect(await bridge.daemonHealth(withDaemonOperation())).toMatchObject({ status: "healthy" });
+    expect(await bridge.daemonActivity(withDaemonOperation())).toMatchObject({ status: "ok" });
+
+    expect(await bridge.stopDaemon(withDaemonOperation())).toBeNull();
+    expect(await bridge.daemonHealth(withDaemonOperation())).toEqual({ status: "offline" });
+    expect(await bridge.startDaemon(withDaemonOperation())).toBeNull();
+    expect(await bridge.daemonHealth(withDaemonOperation())).toMatchObject({ status: "healthy" });
+  });
+
   it("keeps startup transport failure separate from protocol snapshots", async () => {
     await expect(fixtureBridge("startup-error").bootstrap()).rejects.toThrow(
       "The PAM daemon fixture is unavailable.",
@@ -88,9 +104,9 @@ describe("visual QA fixture scenarios", () => {
   });
 
   it("keeps unresolved, blocked, and cancelled terminal reports distinct from solved", async () => {
-    const unresolved = await fixtureBridge("unresolved").bootstrap();
-    const blocked = await fixtureBridge("blocked").bootstrap();
-    const cancelled = await fixtureBridge("cancelled").bootstrap();
+    const unresolved = (await fixtureBridge("unresolved").bootstrap()).snapshot!;
+    const blocked = (await fixtureBridge("blocked").bootstrap()).snapshot!;
+    const cancelled = (await fixtureBridge("cancelled").bootstrap()).snapshot!;
     const outcome = (value: typeof unresolved) => value.data.current.status === "available"
       ? value.data.current.run?.outcome
       : null;
@@ -101,8 +117,8 @@ describe("visual QA fixture scenarios", () => {
   });
 
   it("keeps Access policy denial separate from available diagnostics", async () => {
-    const available = await fixtureBridge("access-available").bootstrap();
-    const blocked = await fixtureBridge("access-blocked").bootstrap();
+    const available = (await fixtureBridge("access-available").bootstrap()).snapshot!;
+    const blocked = (await fixtureBridge("access-blocked").bootstrap()).snapshot!;
 
     expect(available.data.access.status).toBe("available");
     expect(blocked.data.access).toMatchObject({
@@ -112,7 +128,7 @@ describe("visual QA fixture scenarios", () => {
   });
 
   it("covers bounded text, failure, binary metadata, and truncation evidence", async () => {
-    const solved = await fixtureBridge("solved").bootstrap();
+    const solved = (await fixtureBridge("solved").bootstrap()).snapshot!;
     const handle = solved.data.current.status === "available"
       ? solved.data.current.run?.outcome?.evidence[0]
       : null;
@@ -134,16 +150,16 @@ describe("visual QA fixture scenarios", () => {
 
   it("provides evaluated, deterministic-only, failed, and empty skill-audit fixtures", async () => {
     const evaluatedBridge = fixtureBridge("solved");
-    const evaluatedSnapshot = await evaluatedBridge.bootstrap();
+    const evaluatedSnapshot = (await evaluatedBridge.bootstrap()).snapshot!;
     const evaluated = await evaluatedBridge.loadSkillAudit(evaluatedSnapshot.fence);
     const deterministicBridge = fixtureBridge("skill-audit-no-evaluator");
-    const deterministicSnapshot = await deterministicBridge.bootstrap();
+    const deterministicSnapshot = (await deterministicBridge.bootstrap()).snapshot!;
     const deterministic = await deterministicBridge.loadSkillAudit(deterministicSnapshot.fence);
     const failedBridge = fixtureBridge("skill-audit-failed");
-    const failedSnapshot = await failedBridge.bootstrap();
+    const failedSnapshot = (await failedBridge.bootstrap()).snapshot!;
     const failed = await failedBridge.loadSkillAudit(failedSnapshot.fence);
     const emptyBridge = fixtureBridge("skill-audit-empty");
-    const emptySnapshot = await emptyBridge.bootstrap();
+    const emptySnapshot = (await emptyBridge.bootstrap()).snapshot!;
     const empty = await emptyBridge.loadSkillAudit(emptySnapshot.fence);
 
     expect(evaluated.data?.footprint.rankedArtifacts[0]).toMatchObject({
@@ -208,7 +224,7 @@ describe("visual QA fixture scenarios", () => {
 
   it("provides exact metadata-only skill-library actions without echoing source authority", async () => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
+    const snapshot = (await bridge.bootstrap()).snapshot!;
     const fence = snapshot.fence;
     const loaded = await bridge.manageSkillLibrary(fence, { action: "load" });
 

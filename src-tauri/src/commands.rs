@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use pam_gui::{
-    ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallersDto,
-    CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
+    ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto,
+    CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
     ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DesktopCore, DesktopErrorDto,
     EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto,
     FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId,
-    ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
-    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    HealthDto, ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle,
+    SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -241,7 +241,7 @@ fn fence(
 pub(crate) async fn bootstrap(
     state: State<'_, DesktopState>,
     request: BootstrapRequest,
-) -> Result<SnapshotDto, DesktopErrorDto> {
+) -> Result<BootstrapDto, DesktopErrorDto> {
     state.core.bootstrap(request.operation_id).await
 }
 
@@ -273,7 +273,7 @@ pub(crate) async fn refresh_project(
 pub(crate) async fn start_daemon(
     state: State<'_, DesktopState>,
     request: FencedRequest,
-) -> Result<SnapshotDto, DesktopErrorDto> {
+) -> Result<Option<SnapshotDto>, DesktopErrorDto> {
     state.core.start_daemon(request.into_fence()).await
 }
 
@@ -281,8 +281,16 @@ pub(crate) async fn start_daemon(
 pub(crate) async fn stop_daemon(
     state: State<'_, DesktopState>,
     request: FencedRequest,
-) -> Result<SnapshotDto, DesktopErrorDto> {
+) -> Result<Option<SnapshotDto>, DesktopErrorDto> {
     state.core.stop_daemon(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_health(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<HealthDto, DesktopErrorDto> {
+    state.core.daemon_health(request.into_fence()).await
 }
 
 #[tauri::command]

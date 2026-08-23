@@ -1,8 +1,7 @@
 import { ArrowClockwise, PlugsConnected } from "@phosphor-icons/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { withOperation } from "../bridge";
+import { withDaemonOperation } from "../bridge";
 import type {
-  CommandFence,
   ConnectorConfigureParams,
   ConnectorCredentialAction,
   ConnectorSummaryDto,
@@ -198,26 +197,24 @@ function ConnectorRow({
 
 export interface ConnectorsPanelProps {
   bridge: PamBridge;
-  fence: CommandFence;
 }
 
-export function ConnectorsPanel({ bridge, fence }: ConnectorsPanelProps) {
+export function ConnectorsPanel({ bridge }: ConnectorsPanelProps) {
   const [registry, setRegistry] = useState<ConnectorsDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
   const [testDetails, setTestDetails] = useState<Record<string, string | null>>({});
-  const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
-  fenceRef.current = fence;
 
   const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
     setBusy(true);
     setLoadError(null);
     try {
-      const response = await bridge.connectorRegistry(withOperation(fenceRef.current));
+      // The connector registry is daemon-global: always the daemon authority.
+      const response = await bridge.connectorRegistry(withDaemonOperation());
       if (sequence !== requestSequence.current) return;
       setRegistry(response);
     } catch (error) {
@@ -243,7 +240,7 @@ export function ConnectorsPanel({ bridge, fence }: ConnectorsPanelProps) {
     setPending({ connector: params.connector, action: "configure" });
     setRowErrors((current) => ({ ...current, [params.connector]: null }));
     try {
-      const response = await bridge.connectorConfigure(withOperation(fenceRef.current), params);
+      const response = await bridge.connectorConfigure(withDaemonOperation(), params);
       if (sequence !== requestSequence.current) return false;
       if (response.status === "ok") {
         updateSummary(response.connector);
@@ -267,7 +264,7 @@ export function ConnectorsPanel({ bridge, fence }: ConnectorsPanelProps) {
     setRowErrors((current) => ({ ...current, [connector]: null }));
     setTestDetails((current) => ({ ...current, [connector]: null }));
     try {
-      const response = await bridge.connectorTest(withOperation(fenceRef.current), connector);
+      const response = await bridge.connectorTest(withDaemonOperation(), connector);
       if (sequence !== requestSequence.current) return;
       if (response.status === "ok") {
         setTestDetails((current) => ({ ...current, [connector]: response.detail }));

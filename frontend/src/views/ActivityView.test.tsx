@@ -1,19 +1,21 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { withDaemonOperation } from "../bridge";
 import type { ModelStatusDto } from "../domain";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
-import { selectControlCenter } from "../selectors";
+import { selectControlCenter, selectDaemonView } from "../selectors";
 import { ActivityView, formatModelSize } from "./ActivityView";
 
 async function activityProps(scenario: FixtureScenario = "solved", modelStatus: ModelStatusDto | null = null) {
   const bridge = fixtureBridge(scenario);
-  const snapshot = await bridge.bootstrap();
-  const catalog = await bridge.catalog();
+  const { snapshot, catalog } = await bridge.bootstrap();
   return {
     bridge,
-    fence: snapshot.fence,
-    data: selectControlCenter(snapshot.data, catalog, true),
+    daemon: snapshot
+      ? selectControlCenter(snapshot.data, catalog, true).daemon
+      : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
+    projects: catalog.projects,
     pending: false,
     modelStatus,
     onReloadModel: vi.fn(),
@@ -55,6 +57,24 @@ describe("ActivityView", () => {
 
     await user.click(screen.getByRole("button", { name: "Refresh activity" }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+  });
+
+  it("always loads the feed under the exact daemon authority", async () => {
+    const props = await activityProps();
+    const spy = vi.spyOn(props.bridge, "daemonActivity");
+    render(<ActivityView {...props} />);
+    await screen.findByText("project.current");
+
+    expect(spy.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+  });
+
+  it("serves the feed with zero projects using opaque project labels", async () => {
+    const props = await activityProps("global-only");
+    render(<ActivityView {...props} />);
+
+    expect(props.projects).toHaveLength(0);
+    expect(await screen.findByText("project.current")).toBeInTheDocument();
+    expect(screen.getByText(/gui:pam-desktop · 11111111…/)).toBeInTheDocument();
   });
 
   it("renders the exact empty feed without inventing events", async () => {

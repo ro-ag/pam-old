@@ -1,4 +1,4 @@
-import type { CatalogDto, CommandFence, SnapshotDataDto, SnapshotDto, ViewId } from "./domain";
+import type { BootstrapResponse, CatalogDto, CommandFence, SnapshotDataDto, SnapshotDto, ViewId } from "./domain";
 import { answersFence, sameFence } from "./bridge";
 import { clampSidebarWidth } from "./layout";
 
@@ -19,7 +19,7 @@ export interface AppState {
 }
 
 export type AppAction =
-  | { type: "bootstrapSucceeded"; response: SnapshotDto; catalog: CatalogDto }
+  | { type: "bootstrapSucceeded"; response: BootstrapResponse }
   | { type: "commandStarted"; fence: CommandFence }
   | { type: "commandSucceeded"; response: SnapshotDto }
   | { type: "commandFailed"; fence: CommandFence; message: string }
@@ -43,13 +43,15 @@ export const initialState: AppState = {
 
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
+    // The app is ready once bootstrap returns, even with no snapshot: global
+    // views run under the daemon authority and project context is contextual.
     case "bootstrapSucceeded":
       return {
         ...state,
         loadState: "ready",
-        data: action.response.data,
-        catalog: action.catalog,
-        activeFence: action.response.fence,
+        data: action.response.snapshot?.data ?? null,
+        catalog: action.response.catalog,
+        activeFence: action.response.snapshot?.fence ?? null,
         pendingFence: null,
         error: null,
       };

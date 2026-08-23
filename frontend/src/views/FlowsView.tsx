@@ -6,7 +6,7 @@ import {
   ListChecks,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { sameFence, withOperation } from "../bridge";
 import type {
@@ -39,11 +39,12 @@ const freshHistory = (): DefinitionHistory => ({ past: [], future: [], lastEditM
 export interface FlowsViewProps {
   bridge: PamBridge;
   fence: CommandFence;
+  contextBar?: ReactNode;
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }
 
-export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
+export function FlowsView({ bridge, fence, contextBar, onError, onToast }: FlowsViewProps) {
   const [workspace, setWorkspace] = useState<FlowWorkspaceDataDto | null>(null);
   const [selected, setSelected] = useState<FlowDocumentDataDto | null>(null);
   const [draft, setDraft] = useState("");
@@ -342,7 +343,7 @@ export function FlowsView({ bridge, fence, onError, onToast }: FlowsViewProps) {
 
   return (
     <main className="canvas" id="main-content">
-      <header className="project-header compact"><div><h1>Flows</h1><p>Repeatable work, with meaningful feedback.</p></div></header>
+      <header className="project-header compact"><div><h1>Flows</h1><p>Repeatable work, with meaningful feedback.</p></div>{contextBar}</header>
       {loadError && !workspace ? (
         <section className="panel loading-panel is-error" role="alert">
           <WarningCircle size={25} />

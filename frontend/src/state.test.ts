@@ -9,24 +9,33 @@ describe("app reducer", () => {
 
   it("discards a stale response instead of changing the active project", async () => {
     const response = await fixtureBridge().bootstrap();
-    const catalog = await fixtureBridge().catalog();
-    const ready = appReducer(initialState, { type: "bootstrapSucceeded", response, catalog });
-    const pendingFence = { ...response.fence, operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+    const snapshot = response.snapshot!;
+    const ready = appReducer(initialState, { type: "bootstrapSucceeded", response });
+    const pendingFence = { ...snapshot.fence, operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
     const pending = appReducer(ready, { type: "commandStarted", fence: pendingFence });
     const stale = {
-      ...response,
-      fence: { ...response.fence, operationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+      ...snapshot,
+      fence: { ...snapshot.fence, operationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
     };
 
     expect(appReducer(pending, { type: "commandSucceeded", response: stale })).toBe(pending);
   });
 
+  it("is ready without a snapshot when the catalog is empty", async () => {
+    const response = await fixtureBridge("global-only").bootstrap();
+    const ready = appReducer(initialState, { type: "bootstrapSucceeded", response });
+
+    expect(ready.loadState).toBe("ready");
+    expect(ready.catalog?.projects).toHaveLength(0);
+    expect(ready.data).toBeNull();
+    expect(ready.activeFence).toBeNull();
+  });
+
   it("accepts activation only when opaque handle and operation match", async () => {
     const bridge = fixtureBridge();
     const bootstrap = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
-    const ready = appReducer(initialState, { type: "bootstrapSucceeded", response: bootstrap, catalog });
-    const project = catalog.projects[1];
+    const ready = appReducer(initialState, { type: "bootstrapSucceeded", response: bootstrap });
+    const project = bootstrap.catalog.projects[1];
     const operationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const pendingFence = { projectHandle: project.handle, generation: "", operationId };
     const pending = appReducer(ready, { type: "commandStarted", fence: pendingFence });

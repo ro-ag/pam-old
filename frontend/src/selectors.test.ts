@@ -5,8 +5,8 @@ import { runState, selectControlCenter } from "./selectors";
 describe("native DTO selectors", () => {
   it("derives display state without widening the native wire contract", async () => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     const view = selectControlCenter(snapshot.data, catalog, bridge.mode === "fixture");
 
     expect(Object.keys(snapshot.data).sort()).toEqual(["access", "catalogWarning", "current", "health", "project"]);
@@ -21,8 +21,8 @@ describe("native DTO selectors", () => {
 
   it("preserves exact blocked recovery text", async () => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     snapshot.data.current = {
       status: "blocked",
       failure: { kind: "blocked", code: "policy_denied", detail: "Project policy denied the request.", recovery: "Review the project policy." },
@@ -37,8 +37,8 @@ describe("native DTO selectors", () => {
 
   it("preserves policy-blocked access separately from unavailable configuration", async () => {
     const bridge = fixtureBridge("access-blocked");
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     const blocked = selectControlCenter(snapshot.data, catalog, false).access[0];
     expect(blocked).toMatchObject({ name: "Access policy", state: "policy-gated" });
     expect(blocked?.summary).toContain("Policy gated.");
@@ -63,8 +63,8 @@ describe("native DTO selectors", () => {
     ],
   ])("preserves access truth with %s", async (_case, truth, expected) => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     if (snapshot.data.access.status !== "available") {
       throw new Error("available access fixture missing");
     }
@@ -78,8 +78,8 @@ describe("native DTO selectors", () => {
 
   it("maps durable leased, cancellation, and cancelled request states exactly", async () => {
     const bridge = fixtureBridge("active");
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     expect(selectControlCenter(snapshot.data, catalog, true).current.activeRun?.state).toBe("running");
 
     if (snapshot.data.current.status !== "available" || !snapshot.data.current.run) {
@@ -97,8 +97,8 @@ describe("native DTO selectors", () => {
 
   it("uses authoritative timeline kinds instead of inferring semantics from labels or evidence", async () => {
     const bridge = fixtureBridge();
-    const snapshot = await bridge.bootstrap();
-    const catalog = await bridge.catalog();
+    const { snapshot: bootSnapshot, catalog } = await bridge.bootstrap();
+    const snapshot = bootSnapshot!;
     if (snapshot.data.current.status !== "available" || !snapshot.data.current.run) {
       throw new Error("solved fixture missing run");
     }

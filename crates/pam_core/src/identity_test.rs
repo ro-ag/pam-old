@@ -12,6 +12,27 @@ fn identifiers_preserve_their_text_values() {
 }
 
 #[test]
+fn daemon_scope_uses_the_reserved_wire_literal() {
+    let scope = ProjectId::daemon_scope();
+
+    assert_eq!(scope.as_str(), "daemon");
+    assert!(scope.is_daemon_scope());
+    assert!(!ProjectId::from("project").is_daemon_scope());
+}
+
+#[test]
+fn daemon_scope_construction_is_canonical() {
+    // Any construction of the reserved literal is the same identity, so a
+    // spoofed "daemon" project id cannot be distinguished from the scope and
+    // is subject to the same project-scoped rejections.
+    assert_eq!(ProjectId::from("daemon"), ProjectId::daemon_scope());
+    assert_eq!(
+        ProjectId::new(String::from("daemon")),
+        ProjectId::daemon_scope()
+    );
+}
+
+#[test]
 fn caller_credential_debug_output_is_redacted() {
     let credential = CallerCredential::new("credential-secret");
 

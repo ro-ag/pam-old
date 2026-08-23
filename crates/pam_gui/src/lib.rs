@@ -31,18 +31,18 @@ mod skill_library_test;
 
 pub use desktop::{
     AccessConfigDto, ActivityDto, ActivityEventDto, ApprovalDecisionDispositionDto,
-    ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallerDto, CallersDto,
-    CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams, ConnectorSummaryDto,
-    ConnectorTestDto, ConnectorsDto, CurrentDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
-    DesktopResult, EvidenceDataDto, EvidenceDto, EvidenceHandleDto, FailureDto, FailureKindDto,
-    FlowComposeDto, FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto,
-    FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
-    FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
-    FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelUsageDto,
-    OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
-    RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
-    TimelineKindDto,
+    ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto, CallerDto,
+    CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
+    ConnectorSummaryDto, ConnectorTestDto, ConnectorsDto, CurrentDto, DesktopCore, DesktopErrorDto,
+    DesktopErrorKind, DesktopResult, EvidenceDataDto, EvidenceDto, EvidenceHandleDto, FailureDto,
+    FailureKindDto, FlowComposeDto, FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto,
+    FlowDocumentDto, FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto,
+    FlowIdentityDto, FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto,
+    FlowVersionDiffDto, FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto,
+    GenerationId, HealthDto, ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto,
+    ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle,
+    ProjectSummaryDto, RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
+    TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential

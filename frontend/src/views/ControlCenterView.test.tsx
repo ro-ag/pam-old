@@ -6,10 +6,9 @@ import { ControlCenterView } from "./ControlCenterView";
 
 async function controlCenterProps() {
   const bridge = fixtureBridge();
-  const snapshot = await bridge.bootstrap();
-  const catalog = await bridge.catalog();
+  const { snapshot, catalog } = await bridge.bootstrap();
   return {
-    data: selectControlCenter(snapshot.data, catalog, true),
+    data: selectControlCenter(snapshot!.data, catalog, true),
     onCopy: vi.fn(),
     onEvidence: vi.fn(),
     onContinue: vi.fn(),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTauriBridge, sameFence } from "./bridge";
+import { createTauriBridge, sameFence, withDaemonOperation } from "./bridge";
 import type { CommandFence } from "./domain";
 import { afterMergeDefinition } from "./fixtures";
 
@@ -123,12 +123,24 @@ describe("Tauri bridge ABI", () => {
     await bridge.daemonActivity(fence, 25);
     await bridge.daemonActivity(fence);
     await bridge.callerRegistry(fence);
+    await bridge.daemonHealth(fence);
 
     expect(calls).toEqual([
       ["daemon_activity", { request: { ...fence, limit: 25 } }],
       ["daemon_activity", { request: { ...fence, limit: null } }],
       ["caller_registry", { request: fence }],
+      ["daemon_health", { request: fence }],
     ]);
+  });
+
+  it("mints the exact daemon authority fence with a fresh operation per call", () => {
+    const first = withDaemonOperation();
+    const second = withDaemonOperation();
+
+    expect(first).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    expect(second).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    expect(first.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.operationId).not.toBe(second.operationId);
   });
 
   it("keeps the connector commands on the fixed request ABI with credential passthrough", async () => {
