@@ -35,19 +35,20 @@ use crate::{
     AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
     ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome, AuthorizationAudit,
     AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
-    CallerRegistration, CallerRevocation, CancelOutcome, EventRecord, EvidenceMetadata,
-    EvidencePruneOutcome, EvidenceRetention, ExpectedOperationKind, FlowAuthorizationOutcome,
-    FlowAuthorizationRecoveryOutcome, FlowCheckpoint, FlowCheckpointDisposition,
-    FlowCheckpointSaveOutcome, FlowEffectAuthorization, FlowTerminalResult, GrantRevocation, Lease,
-    LeasedRequest, MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES,
-    MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES,
-    MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES,
-    MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_FLOW_TRANSITION_BYTES, MAX_PROJECT_CURRENT_QUEUED,
+    CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
+    EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention, ExpectedOperationKind,
+    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, FlowCheckpoint,
+    FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
+    FlowTerminalResult, GrantRevocation, Lease, LeasedRequest, MAX_AUDIT_ACTION_BYTES,
+    MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
+    MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
+    MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES,
+    MAX_FLOW_TRANSITION_BYTES, MAX_PROJECT_CURRENT_QUEUED,
     MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent,
     ProjectPolicy, ProjectRequestSummary, ProjectWorkload, PutEvidence, PutGrant,
     RecentAuditEvents, Replay, RequestSnapshot, RequestState, SaveFlowCheckpoint,
     SkillInventoryDrift, StoreError, StoredAgentArtifact, StoredResult, StoredSkillsAuditReport,
-    TerminalState,
+    TerminalState, UpsertConnectorConfig,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -58,7 +59,7 @@ const STATUS_OPERATION_KIND: &str = "status";
 const LEGACY_STATUS_OPERATION_KIND: &str = "daemon_status";
 const FLOW_CAPABILITY_NAME: &str = "flow.run";
 const EFFECT_APPROVAL_AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
-pub(super) const LATEST_SCHEMA_VERSION: u32 = 12;
+pub(super) const LATEST_SCHEMA_VERSION: u32 = 13;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_initial.sql")),
     (2, include_str!("../migrations/0002_evidence.sql")),
@@ -84,6 +85,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         12,
         include_str!("../migrations/0012_skills_audit_reports.sql"),
     ),
+    (13, include_str!("../migrations/0013_connectors.sql")),
 ];
 
 type Response<T> = oneshot::Sender<Result<T, StoreError>>;
@@ -241,6 +243,68 @@ impl Store {
     pub async fn list_callers(&self) -> Result<Vec<CallerRegistration>, StoreError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Caller(CallerCommand::List {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Lists every stored connector configuration row. Credentials never live in
+    /// durable state, so none can be returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn list_connectors(&self) -> Result<Vec<ConnectorRecord>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Connector(ConnectorCommand::List {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Merges a partial connector configuration into durable state.
+    ///
+    /// Absent fields keep their stored values; a missing row starts disabled with
+    /// no base URL. Returns the resulting row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid connector identity, an oversized base URL,
+    /// an invalid timestamp, or unavailable durable state.
+    pub async fn upsert_connector_config(
+        &self,
+        config: UpsertConnectorConfig,
+    ) -> Result<ConnectorRecord, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Connector(ConnectorCommand::Upsert {
+            config,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Records the outcome of the most recent connector self-test.
+    ///
+    /// A missing configuration row is created disabled so the outcome is never lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid connector identity, an invalid timestamp,
+    /// or unavailable durable state.
+    pub async fn record_connector_test(
+        &self,
+        connector_id: String,
+        status: ConnectorTestStatus,
+        now_ms: u64,
+    ) -> Result<ConnectorRecord, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Connector(ConnectorCommand::RecordTest {
+            connector_id,
+            status,
+            now_ms,
             response: response_tx,
         }))
         .await?;
@@ -1509,6 +1573,7 @@ async fn receive<T>(response: oneshot::Receiver<Result<T, StoreError>>) -> Resul
 
 enum Command {
     Caller(CallerCommand),
+    Connector(ConnectorCommand),
     Policy(PolicyCommand),
     Audit(AuditCommand),
     Model(ModelCommand),
@@ -1662,6 +1727,22 @@ enum SkillsAuditReportCommand {
     },
 }
 
+enum ConnectorCommand {
+    List {
+        response: Response<Vec<ConnectorRecord>>,
+    },
+    Upsert {
+        config: UpsertConnectorConfig,
+        response: Response<ConnectorRecord>,
+    },
+    RecordTest {
+        connector_id: String,
+        status: ConnectorTestStatus,
+        now_ms: u64,
+        response: Response<ConnectorRecord>,
+    },
+}
+
 enum CallerCommand {
     Register {
         caller_id: CallerId,
@@ -1802,6 +1883,7 @@ fn run_worker(mut connection: Connection, mut commands: tokio_mpsc::Receiver<Com
     while let Some(command) = commands.blocking_recv() {
         match command {
             Command::Caller(command) => run_caller_command(&mut connection, command),
+            Command::Connector(command) => run_connector_command(&mut connection, command),
             Command::Policy(command) => run_policy_command(&mut connection, command),
             Command::Audit(command) => run_audit_command(&mut connection, command),
             Command::Model(command) => run_model_command(&mut connection, command),
@@ -1975,6 +2057,24 @@ fn run_caller_command(connection: &mut Connection, command: CallerCommand) {
             response,
         } => respond(response, revoke_caller(connection, &caller_id, now_ms)),
         CallerCommand::List { response } => respond(response, list_callers(connection)),
+    }
+}
+
+fn run_connector_command(connection: &mut Connection, command: ConnectorCommand) {
+    match command {
+        ConnectorCommand::List { response } => respond(response, list_connectors(connection)),
+        ConnectorCommand::Upsert { config, response } => {
+            respond(response, upsert_connector_config(connection, &config));
+        }
+        ConnectorCommand::RecordTest {
+            connector_id,
+            status,
+            now_ms,
+            response,
+        } => respond(
+            response,
+            record_connector_test(connection, &connector_id, status, now_ms),
+        ),
     }
 }
 
@@ -4916,6 +5016,168 @@ fn list_callers(connection: &Connection) -> Result<Vec<CallerRegistration>, Stor
             })
         })
         .collect()
+}
+
+const MAX_CONNECTOR_ID_BYTES: usize = 128;
+const MAX_CONNECTOR_BASE_URL_BYTES: usize = 1024;
+
+fn validate_connector_id(connector_id: &str) -> Result<(), StoreError> {
+    if connector_id.is_empty()
+        || connector_id.len() > MAX_CONNECTOR_ID_BYTES
+        || connector_id.chars().any(char::is_control)
+    {
+        return Err(StoreError::InvalidState(
+            "connector identity must be 1 to 128 control-free UTF-8 bytes".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn list_connectors(connection: &Connection) -> Result<Vec<ConnectorRecord>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT connector_id, enabled, base_url, last_test_status, last_test_at_ms, updated_at_ms
+         FROM connectors
+         ORDER BY connector_id ASC",
+    )?;
+    let rows = statement.query_map([], connector_record_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(connector_record)
+        .collect()
+}
+
+type ConnectorRow = (
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    i64,
+);
+
+fn connector_record_from_row(row: &rusqlite::Row<'_>) -> Result<ConnectorRow, rusqlite::Error> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+
+fn connector_record(row: ConnectorRow) -> Result<ConnectorRecord, StoreError> {
+    let (connector_id, enabled, base_url, last_test_status, last_test_at, updated_at) = row;
+    let last_test_status = last_test_status
+        .as_deref()
+        .map(|status| match status {
+            "passed" => Ok(ConnectorTestStatus::Passed),
+            "failed" => Ok(ConnectorTestStatus::Failed),
+            _ => Err(StoreError::InvalidState(
+                "stored connector test status is invalid".to_owned(),
+            )),
+        })
+        .transpose()?;
+    Ok(ConnectorRecord {
+        connector_id,
+        enabled: enabled != 0,
+        base_url,
+        last_test_status,
+        last_test_at_ms: last_test_at.map(unsigned_integer).transpose()?,
+        updated_at_ms: unsigned_integer(updated_at)?,
+    })
+}
+
+fn load_connector(
+    connection: &Connection,
+    connector_id: &str,
+) -> Result<Option<ConnectorRecord>, StoreError> {
+    connection
+        .query_row(
+            "SELECT connector_id, enabled, base_url, last_test_status, last_test_at_ms,
+                    updated_at_ms
+             FROM connectors WHERE connector_id = ?1",
+            [connector_id],
+            connector_record_from_row,
+        )
+        .optional()?
+        .map(connector_record)
+        .transpose()
+}
+
+fn upsert_connector_config(
+    connection: &mut Connection,
+    config: &UpsertConnectorConfig,
+) -> Result<ConnectorRecord, StoreError> {
+    validate_connector_id(&config.connector_id)?;
+    if config.base_url.as_ref().is_some_and(|url| {
+        url.len() < "https://x".len() || url.len() > MAX_CONNECTOR_BASE_URL_BYTES
+    }) {
+        return Err(StoreError::InvalidState(
+            "connector base URL exceeds its bounded byte limit".to_owned(),
+        ));
+    }
+    let updated_at = sql_integer(config.now_ms)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = load_connector(&transaction, &config.connector_id)?;
+    let merged = ConnectorRecord {
+        connector_id: config.connector_id.clone(),
+        enabled: config
+            .enabled
+            .unwrap_or_else(|| existing.as_ref().is_some_and(|record| record.enabled)),
+        base_url: config
+            .base_url
+            .clone()
+            .or_else(|| existing.as_ref().and_then(|record| record.base_url.clone())),
+        last_test_status: existing.as_ref().and_then(|record| record.last_test_status),
+        last_test_at_ms: existing.as_ref().and_then(|record| record.last_test_at_ms),
+        updated_at_ms: config.now_ms,
+    };
+    transaction.execute(
+        "INSERT INTO connectors(
+            connector_id, enabled, base_url, last_test_status, last_test_at_ms, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(connector_id) DO UPDATE SET
+            enabled = excluded.enabled,
+            base_url = excluded.base_url,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            merged.connector_id,
+            i64::from(merged.enabled),
+            merged.base_url,
+            merged.last_test_status.map(ConnectorTestStatus::as_str),
+            merged.last_test_at_ms.map(sql_integer).transpose()?,
+            updated_at,
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(merged)
+}
+
+fn record_connector_test(
+    connection: &mut Connection,
+    connector_id: &str,
+    status: ConnectorTestStatus,
+    now_ms: u64,
+) -> Result<ConnectorRecord, StoreError> {
+    validate_connector_id(connector_id)?;
+    let tested_at = sql_integer(now_ms)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+        "INSERT INTO connectors(
+            connector_id, enabled, base_url, last_test_status, last_test_at_ms, updated_at_ms
+         ) VALUES (?1, 0, NULL, ?2, ?3, ?3)
+         ON CONFLICT(connector_id) DO UPDATE SET
+            last_test_status = excluded.last_test_status,
+            last_test_at_ms = excluded.last_test_at_ms,
+            updated_at_ms = excluded.updated_at_ms",
+        params![connector_id, status.as_str(), tested_at],
+    )?;
+    let record = load_connector(&transaction, connector_id)?.ok_or_else(|| {
+        StoreError::InvalidState("connector test outcome was not persisted".to_owned())
+    })?;
+    transaction.commit()?;
+    Ok(record)
 }
 
 fn credential_digest(credential: &CallerCredential) -> [u8; 32] {

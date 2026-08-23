@@ -147,6 +147,34 @@ fn locator_is_stable_bounded_and_distinguishes_adjacent_callers() {
 }
 
 #[test]
+fn connector_locators_never_collide_with_caller_locators() {
+    let connector = SecretLocator::for_connector("github-actions").unwrap();
+    let repeated = SecretLocator::for_connector("github-actions").unwrap();
+    let caller_with_same_context =
+        SecretLocator::for_caller(&CallerId::new("github-actions")).unwrap();
+
+    assert_eq!(connector, repeated);
+    assert_ne!(connector, caller_with_same_context);
+    assert!(connector.as_str().starts_with("pam.connector.v1."));
+    assert_eq!(connector.as_str().len(), "pam.connector.v1.".len() + 64);
+    assert_ne!(
+        connector.as_str()["pam.connector.v1.".len()..],
+        caller_with_same_context.as_str()["pam.caller.v1.".len()..],
+        "domain separation must change the digest, not only the prefix"
+    );
+    assert_eq!(
+        SecretLocator::for_connector("").unwrap_err().kind(),
+        SecretStoreErrorKind::InvalidLocator
+    );
+    assert_eq!(
+        SecretLocator::for_connector(&"x".repeat(MAX_SECRET_CONTEXT_BYTES + 1))
+            .unwrap_err()
+            .kind(),
+        SecretStoreErrorKind::InvalidLocator
+    );
+}
+
+#[test]
 fn locators_separate_callers_at_the_length_boundary() {
     let maximum = "x".repeat(MAX_SECRET_CONTEXT_BYTES);
 

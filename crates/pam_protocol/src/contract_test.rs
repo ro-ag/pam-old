@@ -7,7 +7,8 @@ use pam_flow::{MAX_FLOW_DOCUMENT_BYTES, MAX_RUN_ID_BYTES};
 use super::{
     ApprovalDecision, ApprovalDecisionDisposition, ApprovalDecisionResult, BriefItem,
     BriefProvenance, BriefResult, CallerListResult, CallerSummary, CancellationDisposition,
-    CancellationResult, Capability, ConfigurationPresence, DaemonLifecycleResult, Event,
+    CancellationResult, Capability, ConfigurationPresence, ConnectorCredentialAction,
+    ConnectorListResult, ConnectorSecret, ConnectorSummary, DaemonLifecycleResult, Event,
     EventEnvelope, EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention,
     ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FLOW_PROJECT_ROOT_BYTES,
     MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_TOKENS,
@@ -1125,4 +1126,145 @@ fn truth_contract_distinguishes_all_documented_outcomes() {
         };
         assert!(matches!(body, ResultBody::Success { .. }));
     }
+}
+
+fn connector_configure_request(credential: Option<ConnectorCredentialAction>) -> RequestEnvelope {
+    RequestEnvelope::connector_configure(
+        RequestId::from("connector-configure-1"),
+        CallerId::from("cli-1"),
+        ProjectId::from("project-1"),
+        IdempotencyKey::from("connector-configure-key"),
+        "github-actions",
+        Some(true),
+        Some("https://ghe.example.test/api/v3".to_owned()),
+        credential,
+    )
+    .unwrap()
+}
+
+#[test]
+fn connector_list_is_authenticated_and_policy_named() {
+    let request = RequestEnvelope::connector_list(
+        RequestId::from("connector-list-1"),
+        CallerId::from("cli-1"),
+        ProjectId::from("project-1"),
+        IdempotencyKey::from("connector-list-key"),
+    );
+
+    assert_eq!(request.capability, Capability::ConnectorList);
+    assert_eq!(request.capability.policy_name(), "connector.list");
+    assert_eq!(request.payload, RequestPayload::ConnectorList);
+    assert!(request.authentication.is_none());
+}
+
+#[test]
+fn connector_configure_is_bounded_policy_named_and_debug_redacted() {
+    let secret = "ghp_super-secret-connector-token";
+    let request = connector_configure_request(Some(ConnectorCredentialAction::Set {
+        secret: ConnectorSecret::new(secret).unwrap(),
+    }))
+    .authenticated(CallerCredential::new("caller-credential"));
+
+    assert_eq!(request.capability, Capability::ConnectorConfigure);
+    assert_eq!(request.capability.policy_name(), "connector.configure");
+    let debug = format!("{request:?}");
+    assert!(
+        !debug.contains(secret),
+        "debug output must redact the secret"
+    );
+    assert!(debug.contains("[REDACTED]"));
+
+    // The wire encoding carries the secret to the daemon, exactly once, and a
+    // decoded copy re-validates its bounds.
+    let encoded = rmp_serde::to_vec_named(&request).unwrap();
+    assert!(
+        encoded
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes())
+    );
+    let decoded: RequestEnvelope = rmp_serde::from_slice(&encoded).unwrap();
+    decoded.validate_connector_request().unwrap();
+}
+
+#[test]
+fn connector_configure_rejects_invalid_identities_urls_and_secrets() {
+    for connector in [
+        "",
+        "Bad.Connector",
+        "-leading",
+        "double..dot",
+        &"x".repeat(129),
+    ] {
+        let error = RequestEnvelope::connector_configure(
+            RequestId::from("bad-connector"),
+            CallerId::from("cli-1"),
+            ProjectId::from("project-1"),
+            IdempotencyKey::from("bad-connector-key"),
+            connector,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error, ProtocolContractError::InvalidConnectorIdentity);
+    }
+    for base_url in [
+        "http://insecure.example.test",
+        "https://",
+        "https://user@host.example.test",
+        "https://host.example.test/#fragment",
+        "https://host.example.test/?query=1",
+        &format!("https://host.example.test/{}", "a".repeat(1024)),
+    ] {
+        let error = RequestEnvelope::connector_configure(
+            RequestId::from("bad-url"),
+            CallerId::from("cli-1"),
+            ProjectId::from("project-1"),
+            IdempotencyKey::from("bad-url-key"),
+            "github-actions",
+            None,
+            Some((*base_url).to_owned()),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error, ProtocolContractError::InvalidConnectorBaseUrl);
+    }
+    for secret in [String::new(), "x".repeat(4097), "line\nbreak".to_owned()] {
+        assert_eq!(
+            ConnectorSecret::new(secret).unwrap_err(),
+            ProtocolContractError::InvalidConnectorSecret
+        );
+    }
+}
+
+#[test]
+fn connector_test_is_policy_named_and_results_carry_no_secret_fields() {
+    let request = RequestEnvelope::connector_test(
+        RequestId::from("connector-test-1"),
+        CallerId::from("cli-1"),
+        ProjectId::from("project-1"),
+        IdempotencyKey::from("connector-test-key"),
+        "github-actions",
+    )
+    .unwrap();
+    assert_eq!(request.capability.policy_name(), "connector.test");
+
+    let result = ResultBody::Success {
+        truth: OperationTruth::Observed,
+        payload: ResultPayload::ConnectorList(ConnectorListResult {
+            connectors: vec![ConnectorSummary {
+                connector_id: "github-actions".to_owned(),
+                enabled: true,
+                base_url: None,
+                credential_present: true,
+                last_test_status: Some("passed".to_owned()),
+                last_test_at_ms: Some(10),
+            }],
+        }),
+    };
+    let encoded = rmp_serde::to_vec_named(&result).unwrap();
+    let rendered = String::from_utf8_lossy(&encoded).into_owned();
+    // Presence is the only credential fact this contract can carry.
+    assert!(rendered.contains("credential_present"));
+    assert!(!rendered.contains("secret"));
 }

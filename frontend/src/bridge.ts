@@ -6,6 +6,10 @@ import type {
   CallersDto,
   CatalogDto,
   CommandFence,
+  ConnectorConfigureDto,
+  ConnectorConfigureParams,
+  ConnectorTestDto,
+  ConnectorsDto,
   EvidenceDto,
   FlowComposeDto,
   FlowDefinitionJson,
@@ -84,6 +88,18 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     callerRegistry: (fence) =>
       invokeCommand<CallersDto>("caller_registry", request(flatFence(fence))),
+    connectorRegistry: (fence) =>
+      invokeCommand<ConnectorsDto>("connector_registry", request(flatFence(fence))),
+    connectorConfigure: (fence, params: ConnectorConfigureParams) =>
+      invokeCommand<ConnectorConfigureDto>("connector_configure", request({
+        ...flatFence(fence),
+        ...params,
+      })),
+    connectorTest: (fence, connector) =>
+      invokeCommand<ConnectorTestDto>("connector_test", request({
+        ...flatFence(fence),
+        connector,
+      })),
     modelStatus: (fence) =>
       invokeCommand<ModelStatusDto>("model_status", request(flatFence(fence))),
     modelInfer: (fence, model, messages: ChatMessageDto[], maxOutputTokens) =>

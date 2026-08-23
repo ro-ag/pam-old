@@ -128,6 +128,43 @@ pub enum CallerRevocation {
     UnknownCaller,
 }
 
+/// One durable connector configuration row. Credentials never live here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectorRecord {
+    pub connector_id: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub last_test_status: Option<ConnectorTestStatus>,
+    pub last_test_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+}
+
+/// Recorded outcome of the most recent connector self-test.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectorTestStatus {
+    Passed,
+    Failed,
+}
+
+impl ConnectorTestStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Partial connector configuration update; absent fields keep their stored value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpsertConnectorConfig {
+    pub connector_id: String,
+    pub enabled: Option<bool>,
+    pub base_url: Option<String>,
+    pub now_ms: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectPolicy {
     pub project_id: ProjectId,

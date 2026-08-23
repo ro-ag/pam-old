@@ -3,9 +3,10 @@ use pam_core::{
 };
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalChallenge, CallerListResult, CallerSummary,
-    ConfigurationPresence, FailureCode, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason,
-    ModelGenerationResult, ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult,
-    OperationTruth, PacState, RequestEnvelope,
+    ConfigurationPresence, ConnectorConfigureResult, ConnectorListResult, ConnectorSummary,
+    ConnectorTestDisposition, ConnectorTestResult, FailureCode, MAX_MODEL_OUTPUT_TOKENS,
+    ModelFinishReason, ModelGenerationResult, ModelStatusResult, ModelSummary, ModelUsage,
+    NetworkDiagnosticsResult, OperationTruth, PacState, RequestEnvelope,
 };
 use std::sync::atomic::AtomicUsize;
 
@@ -18,11 +19,12 @@ use super::{
         HealthDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
         active_core_for_test, activity_dto_for_test, approval_current_for_test,
         approval_failure_retains_handle_for_test, bounded_detail_for_test, callers_dto_for_test,
-        clamp_model_output_tokens_for_test, current_dto_for_test, evidence_dto_for_test,
-        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
-        gui_registration_current_for_test, model_infer_dto_for_test, model_status_dto_for_test,
-        post_save_reload_error_for_test, registration_contract_for_test, reserve_for_test,
-        switch_authority_for_test,
+        clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
+        connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
+        evidence_dto_for_test, failure_kind_for_test, flow_compose_data_for_test,
+        flow_graph_data_for_test, gui_registration_current_for_test, model_infer_dto_for_test,
+        model_status_dto_for_test, post_save_reload_error_for_test, registration_contract_for_test,
+        reserve_for_test, switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -618,6 +620,128 @@ fn model_output_token_requests_are_clamped_to_the_protocol_budget() {
     ] {
         assert_eq!(clamp_model_output_tokens_for_test(requested), expected);
     }
+}
+
+fn connector_summary() -> ConnectorSummary {
+    ConnectorSummary {
+        connector_id: "github-actions".to_owned(),
+        enabled: true,
+        base_url: Some("https://api.github.com".to_owned()),
+        credential_present: true,
+        last_test_status: Some("passed".to_owned()),
+        last_test_at_ms: Some(123),
+    }
+}
+
+#[test]
+fn connectors_dto_serializes_the_exact_frontend_ok_contract_without_secrets() {
+    let dto = connectors_dto_for_test(ObservatoryState::Available(ConnectorListResult {
+        connectors: vec![connector_summary()],
+    }));
+
+    let encoded = serde_json::to_string(&dto).unwrap();
+    assert!(!encoded.contains("secret"));
+    assert!(!encoded.contains("\"credential\""));
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "connectors": [{
+                "connectorId": "github-actions",
+                "enabled": true,
+                "baseUrl": "https://api.github.com",
+                "credentialPresent": true,
+                "lastTestStatus": "passed",
+                "lastTestAtMs": 123
+            }]
+        })
+    );
+}
+
+#[test]
+fn connector_configure_dto_serializes_the_exact_frontend_ok_contract() {
+    let dto =
+        connector_configure_dto_for_test(ObservatoryState::Available(ConnectorConfigureResult {
+            connector: ConnectorSummary {
+                base_url: None,
+                last_test_status: None,
+                last_test_at_ms: None,
+                ..connector_summary()
+            },
+        }));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "connector": {
+                "connectorId": "github-actions",
+                "enabled": true,
+                "baseUrl": null,
+                "credentialPresent": true,
+                "lastTestStatus": null,
+                "lastTestAtMs": null
+            }
+        })
+    );
+}
+
+#[test]
+fn connector_test_dto_serializes_the_exact_frontend_ok_contract() {
+    let dto = connector_test_dto_for_test(ObservatoryState::Available(ConnectorTestResult {
+        connector_id: "github-actions".to_owned(),
+        status: ConnectorTestDisposition::Passed,
+        detail: "Reached the connector endpoint.".to_owned(),
+    }));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "connectorId": "github-actions",
+            "result": "passed",
+            "detail": "Reached the connector endpoint."
+        })
+    );
+}
+
+#[test]
+fn connector_denials_are_blocked_with_recovery_and_transport_is_unavailable() {
+    let blocked = connector_configure_dto_for_test(ObservatoryState::Blocked {
+        code: FailureCode::Forbidden,
+        detail: "Policy denies connector.configure.".to_owned(),
+        recovery: Some("Grant connector.configure to the GUI caller.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(blocked).unwrap(),
+        serde_json::json!({
+            "status": "blocked",
+            "failure": {
+                "kind": "blocked",
+                "code": "forbidden",
+                "detail": "Policy denies connector.configure.",
+                "recovery": "Grant connector.configure to the GUI caller."
+            }
+        })
+    );
+
+    let unavailable = connector_test_dto_for_test(ObservatoryState::Unavailable {
+        code: None,
+        detail: "The PAM daemon is not running.".to_owned(),
+        recovery: Some("Start the PAM daemon.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(unavailable).unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": null,
+                "detail": "The PAM daemon is not running.",
+                "recovery": "Start the PAM daemon."
+            }
+        })
+    );
 }
 
 fn repo_flow_source() -> String {

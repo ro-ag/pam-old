@@ -28,14 +28,16 @@ use pam_store::{
 use tokio::{process::Command, sync::oneshot};
 
 use super::{
+    connectors::ConnectorRuntime,
     flow::{
         CommandExecution, CommandRejection, FLOW_OPERATION_KIND, FlowProcessing,
-        FlowSubmissionError, PreparedCommand, PreparedFlowSubmission, WorkspaceAuthority,
-        WorkspaceFingerprint, WorkspaceFingerprintLease, await_workspace_fingerprint_with_lease,
-        execute_command, execute_command_in_workspace, flow_policy_resource,
-        hash_relative_after_authority_open, persist_update_reconciling_cancellation,
-        prepare_command, prepare_flow_submission, process_flow, run_bounded_listing,
-        safe_environment_name, validated_git_args, workspace_fingerprint,
+        FlowSubmissionError, PreparedCommand, PreparedEffect, PreparedFlowSubmission,
+        WorkspaceAuthority, WorkspaceFingerprint, WorkspaceFingerprintLease,
+        await_workspace_fingerprint_with_lease, execute_command, execute_command_in_workspace,
+        flow_policy_resource, hash_relative_after_authority_open,
+        persist_update_reconciling_cancellation, prepare_command, prepare_effect,
+        prepare_flow_submission, process_flow, run_bounded_listing, safe_environment_name,
+        validated_git_args, workspace_fingerprint,
     },
     lifecycle::{DaemonConfig, decode_stored_result, serve_until_with_delay},
 };
@@ -278,6 +280,7 @@ fn start_daemon_with_delay(
             model: None,
             state_path: Some(state_path),
             brief_provider: None,
+            connector_secret_backend: None,
             bypass_authentication: true,
             bypass_policy: true,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
@@ -307,6 +310,7 @@ fn start_secure_daemon(
             model: None,
             state_path: Some(state_path),
             brief_provider: None,
+            connector_secret_backend: None,
             bypass_authentication: false,
             bypass_policy: false,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
@@ -338,6 +342,7 @@ fn start_daemon_with_preflight_limit(
             model: None,
             state_path: Some(state_path),
             brief_provider: None,
+            connector_secret_backend: None,
             bypass_authentication: true,
             bypass_policy: true,
             flow_preflight_capacity: capacity,
@@ -1487,6 +1492,7 @@ async fn persisted_operation_root_tamper_cannot_reuse_the_original_authorization
         &reopened,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -1757,6 +1763,7 @@ async fn terminal_checkpoint_truth_wins_a_late_cancellation_before_scheduler_fin
         &store,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -1842,6 +1849,7 @@ async fn revoked_flow_authorization_blocks_durably_before_effect_start() {
         &store,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2067,6 +2075,7 @@ async fn assert_terminal_checkpoint_restart(cancel_before_run: bool) {
         &store,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2099,6 +2108,7 @@ async fn assert_terminal_checkpoint_restart(cancel_before_run: bool) {
         &reopened,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2222,6 +2232,7 @@ async fn nonterminal_legacy_checkpoint_upgrades_and_advances_after_restart() {
         &reopened,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2283,6 +2294,7 @@ async fn terminal_legacy_checkpoint_replays_conservative_truth_after_restart() {
         &store,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2334,6 +2346,7 @@ async fn terminal_legacy_checkpoint_replays_conservative_truth_after_restart() {
         &reopened,
         Duration::from_mins(1),
         Duration::from_millis(100),
+        &ConnectorRuntime::default(),
     )
     .await
     .unwrap();
@@ -2437,17 +2450,21 @@ async fn unsupported_definitions_are_rejected_without_durable_acceptance() {
             command_step("cargo", r#""build""#, ""),
             &workspace,
         ),
+        // Read-only connector steps are supported now; stateful connector
+        // execution stays rejected at submission.
         flow_request(
-            "connector-flow",
+            "stateful-connector-flow",
             definition(
                 r#"
 [[steps]]
 id = "connector"
-description = "Unsupported connector."
+description = "Unsupported stateful connector."
 timeout_seconds = 10
-effect = "read_only"
-semantic = "observe"
-action = { type = "connector", connector = "github.actions", capability = "runs.read", resource = { kind = "workflow_run", id = "github:ro-ag/pam/runs/1" } }
+effect = "stateful"
+semantic = "change"
+approval = "required"
+idempotency_key = "stateful-connector"
+action = { type = "connector", connector = "github-actions", capability = "runs.rerun", resource = { kind = "run", id = "ro-ag/pam/1" } }
 "#,
             ),
             &workspace,
@@ -3066,4 +3083,283 @@ async fn command_timeout_kills_the_child_while_heartbeats_keep_the_lease_live() 
 
     store.shutdown().await.unwrap();
     fs::remove_dir_all(runtime).unwrap();
+}
+
+fn connector_step_definition(capability: &str, kind: &str, id: &str) -> String {
+    definition(&format!(
+        r#"
+[[steps]]
+id = "connector"
+description = "Read remote CI facts."
+timeout_seconds = 10
+effect = "read_only"
+semantic = "observe"
+action = {{ type = "connector", connector = "github-actions", capability = "{capability}", resource = {{ kind = "{kind}", id = "{id}" }} }}
+"#
+    ))
+}
+
+const CONNECTOR_TEST_TOKEN: &str = "ghp_flow-executor-secret-token";
+
+struct StaticGitHubTransport {
+    body: &'static str,
+}
+
+impl pam_connectors::github::GitHubTransport for StaticGitHubTransport {
+    fn get<'a>(
+        &'a self,
+        _request: pam_connectors::github::TransportRequest,
+        _context: &'a pam_connectors::InvocationContext,
+    ) -> pam_connectors::ConnectorFuture<
+        'a,
+        Result<pam_connectors::github::TransportResponse, pam_connectors::ConnectorFailure>,
+    > {
+        Box::pin(async move {
+            Ok(pam_connectors::github::TransportResponse::new(
+                200,
+                Vec::new(),
+                self.body.as_bytes().to_vec(),
+            ))
+        })
+    }
+
+    fn post<'a>(
+        &'a self,
+        _request: pam_connectors::github::TransportRequest,
+        _context: &'a pam_connectors::InvocationContext,
+    ) -> pam_connectors::ConnectorFuture<
+        'a,
+        Result<pam_connectors::github::TransportResponse, pam_connectors::ConnectorFailure>,
+    > {
+        Box::pin(async move { Err(pam_connectors::ConnectorFailure::cancelled()) })
+    }
+}
+
+const DISCOVER_BODY: &str = r#"{"total_count":1,"workflow_runs":[{"id":42,"run_attempt":1,"name":"ci","status":"completed","conclusion":"failure","html_url":"https://github.com/ro-ag/pam/actions/runs/42","head_branch":"main","head_sha":"0123456789abcdef","created_at":"2026-08-20T00:00:00Z","updated_at":"2026-08-20T00:01:00Z"}]}"#;
+
+fn connector_runtime_with(
+    transport: Option<StaticGitHubTransport>,
+) -> (ConnectorRuntime, ArcMemoryBackend) {
+    let secrets: ArcMemoryBackend =
+        std::sync::Arc::new(super::connectors_test::MemorySecretBackend::default());
+    let mut runtime = ConnectorRuntime::new(Some(std::sync::Arc::clone(&secrets) as _));
+    if let Some(transport) = transport {
+        runtime.github_transport = Some(std::sync::Arc::new(transport));
+    }
+    (runtime, secrets)
+}
+
+type ArcMemoryBackend = std::sync::Arc<super::connectors_test::MemorySecretBackend>;
+
+async fn terminal_connector_flow(
+    name: &str,
+    capability_definition: String,
+    connectors: &ConnectorRuntime,
+    enable_connector: bool,
+) -> (TerminalState, pam_protocol::ResultEnvelope) {
+    let runtime = test_runtime(name);
+    let _ = fs::remove_dir_all(&runtime);
+    fs::create_dir_all(&runtime).unwrap();
+    let workspace = create_workspace(&runtime);
+    let state_path = runtime.join("state.sqlite3");
+    let store = Store::open(&state_path).unwrap();
+    let request = flow_request(name, capability_definition, &workspace);
+    let RequestPayload::FlowRun { definition, .. } = &request.payload else {
+        unreachable!()
+    };
+    let prepared = prepare_flow_submission(definition, &workspace)
+        .await
+        .unwrap();
+    let now = test_now_ms();
+    authorize_flow_fixture(
+        &store,
+        &request,
+        prepared.operation,
+        &prepared.policy_resource,
+        now,
+    )
+    .await;
+    if enable_connector {
+        store
+            .upsert_connector_config(pam_store::UpsertConnectorConfig {
+                connector_id: "github-actions".to_owned(),
+                enabled: Some(true),
+                base_url: None,
+                now_ms: now,
+            })
+            .await
+            .unwrap();
+    }
+    let mut leased = store
+        .claim(name, now.saturating_add(1), 60_000)
+        .await
+        .unwrap()
+        .unwrap();
+    let processing = process_flow(
+        &mut leased,
+        &store,
+        Duration::from_mins(1),
+        Duration::from_millis(100),
+        connectors,
+    )
+    .await
+    .unwrap();
+    store.shutdown().await.unwrap();
+    fs::remove_dir_all(runtime).unwrap();
+    let FlowProcessing::Terminal {
+        terminal_state,
+        result,
+        ..
+    } = processing
+    else {
+        panic!("connector flow must reach a terminal result")
+    };
+    (terminal_state, *result)
+}
+
+fn flow_step_result(result: &pam_protocol::ResultEnvelope) -> EffectResult {
+    let ResultBody::Success {
+        payload: ResultPayload::FlowRun(flow),
+        ..
+    } = &result.body
+    else {
+        panic!("connector flow must produce a typed flow result: {result:?}")
+    };
+    flow.steps()[0]
+        .result()
+        .expect("connector step must record an effect result")
+        .clone()
+}
+
+#[tokio::test]
+async fn read_only_connector_step_executes_and_yields_evidence() {
+    let (connectors, _secrets) = connector_runtime_with(Some(StaticGitHubTransport {
+        body: DISCOVER_BODY,
+    }));
+    connectors
+        .set_credential("github-actions", CONNECTOR_TEST_TOKEN.to_owned())
+        .await
+        .unwrap();
+    let (terminal_state, result) = terminal_connector_flow(
+        "connector-discover",
+        connector_step_definition("runs.discover-failed", "repository", "ro-ag/pam"),
+        &connectors,
+        true,
+    )
+    .await;
+
+    assert_eq!(terminal_state, TerminalState::Succeeded);
+    let step = flow_step_result(&result);
+    assert!(matches!(step.kind(), pam_flow::EffectResultKind::Succeeded));
+    assert!(step.report().summary().contains("found 1 failed"));
+    assert!(!step.report().evidence().is_empty());
+    assert!(
+        step.report()
+            .evidence()
+            .iter()
+            .all(|handle| handle.as_str().starts_with("evidence://connector-output/"))
+    );
+    // The stored credential never leaks into the terminal result.
+    let encoded = pam_protocol::encode(&ServerMessage::Result(result)).unwrap();
+    assert!(
+        !encoded
+            .windows(CONNECTOR_TEST_TOKEN.len())
+            .any(|window| window == CONNECTOR_TEST_TOKEN.as_bytes())
+    );
+}
+
+#[tokio::test]
+async fn disabled_connector_step_fails_with_calm_recovery_guidance() {
+    let (connectors, _secrets) = connector_runtime_with(Some(StaticGitHubTransport {
+        body: DISCOVER_BODY,
+    }));
+    let (terminal_state, result) = terminal_connector_flow(
+        "connector-disabled",
+        connector_step_definition("runs.discover-failed", "repository", "ro-ag/pam"),
+        &connectors,
+        false,
+    )
+    .await;
+
+    assert_eq!(terminal_state, TerminalState::Failed);
+    let step = flow_step_result(&result);
+    assert!(matches!(
+        step.kind(),
+        pam_flow::EffectResultKind::Failed { retryable: false }
+    ));
+    let summary = step.report().summary();
+    assert!(summary.contains("not enabled"), "summary: {summary}");
+    assert!(
+        summary.contains("GUI Connectors surface"),
+        "summary: {summary}"
+    );
+}
+
+#[tokio::test]
+async fn credentialless_connector_step_fails_without_touching_the_transport() {
+    let (connectors, _secrets) = connector_runtime_with(None);
+    let (terminal_state, result) = terminal_connector_flow(
+        "connector-credentialless",
+        connector_step_definition("runs.discover-failed", "repository", "ro-ag/pam"),
+        &connectors,
+        true,
+    )
+    .await;
+
+    assert_eq!(terminal_state, TerminalState::Failed);
+    let step = flow_step_result(&result);
+    let summary = step.report().summary();
+    assert!(
+        summary.contains("no stored credential"),
+        "summary: {summary}"
+    );
+    assert!(summary.contains("pam connector CLI"), "summary: {summary}");
+}
+
+#[test]
+fn stateful_connector_effects_are_rejected_by_the_executor() {
+    let source = definition(
+        r#"
+[[steps]]
+id = "connector"
+description = "Attempt a stateful connector effect."
+timeout_seconds = 10
+effect = "stateful"
+semantic = "change"
+approval = "required"
+idempotency_key = "stateful-connector"
+action = { type = "connector", connector = "github-actions", capability = "runs.rerun", resource = { kind = "run", id = "ro-ag/pam/1" } }
+"#,
+    );
+    let parsed = FlowDefinition::parse_toml(&source).unwrap();
+    let mut run =
+        FlowRun::start(RunId::parse("stateful-connector").unwrap(), parsed.clone()).unwrap();
+    let update = run.next_decision(1).unwrap();
+    let RunDecision::AwaitApproval { token, .. } = update.decision() else {
+        panic!("stateful steps must await approval first")
+    };
+    run.resolve_approval(*token, pam_flow::ApprovalDecision::Approve)
+        .unwrap();
+    let update = run.next_decision(2).unwrap();
+    let RunDecision::EvaluateEffect { effect, .. } = update.decision() else {
+        panic!("approved stateful steps must evaluate their effect")
+    };
+    assert_eq!(
+        prepare_effect(Path::new("/"), &parsed, effect).err(),
+        Some(CommandRejection::StatefulConnector)
+    );
+}
+
+#[test]
+fn read_only_connector_steps_prepare_as_connector_effects() {
+    let source = connector_step_definition("runs.collect-logs", "run", "ro-ag/pam/42");
+    let (parsed, effect) = first_effect(&source);
+    let Ok(PreparedEffect::Connector(step)) = prepare_effect(Path::new("/"), &parsed, &effect)
+    else {
+        panic!("read-only connector steps must prepare as connector effects")
+    };
+    assert_eq!(step.connector, "github-actions");
+    assert_eq!(step.capability, "runs.collect-logs");
+    assert_eq!(step.resource_kind, "run");
+    assert_eq!(step.resource_id, "ro-ag/pam/42");
 }

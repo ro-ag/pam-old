@@ -41,7 +41,7 @@ import {
   RecoveryScreen,
 } from "./components/Surfaces";
 import { ActivityView } from "./views/ActivityView";
-import { CallersView } from "./views/CallersView";
+import { ConnectionsView } from "./views/ConnectionsView";
 import { ControlCenterView } from "./views/ControlCenterView";
 import { FlowsView } from "./views/FlowsView";
 import { AccessView } from "./views/ProjectViews";
@@ -519,7 +519,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
-    { id: "view-callers", label: "Open Callers", description: "Show the callers registered with the daemon.", shortcut: "⌘6" },
+    { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘6" },
     { id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." },
     ...(chatModelId
       ? [{ id: "model-chat", label: "Chat with the model", description: "Review the local model in an ephemeral chat." }]
@@ -630,7 +630,11 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                 />
               )}
               {state.activeView === "callers" && (
-                <CallersView bridge={bridge} fence={state.activeFence} />
+                <ConnectionsView
+                  key={`${state.activeFence.projectHandle}:${state.activeFence.generation}`}
+                  bridge={bridge}
+                  fence={state.activeFence}
+                />
               )}
             </motion.div>
           </AnimatePresence>

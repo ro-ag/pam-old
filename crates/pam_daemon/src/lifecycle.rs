@@ -22,6 +22,10 @@ use cap_std::fs::PermissionsExt as _;
 use cap_std::fs::{Dir, OpenOptions};
 #[cfg(unix)]
 use nix::unistd::Uid;
+use pam_connectors::{
+    CancellationToken, Connector, ConnectorFailure, InvocationContext,
+    github::{VerifyCredentials, VerifyCredentialsRequest},
+};
 use pam_core::{
     APPLICATION_VERSION, ApprovalId, ContentDigest, EvidenceHandle, ProjectId, RequestId,
 };
@@ -35,7 +39,8 @@ use pam_platform::{
     CorporateHttpClientFactory, CorporateHttpClientRequirements, IncomingRequest, LocalEndpoint,
     PacDiagnostic, ProxyBypassDiagnostic, ProxyDiagnosticStatus, ProxyEnvironmentVariable,
     ProxyInputIssueKind, ProxyRouteDiagnostic, ProxySource, ReqwestCorporateHttpClientFactory,
-    ServerTransport, TransportError, TransportErrorKind, diagnose_process_proxy, user_data_dir,
+    SecretBackend, ServerTransport, TransportError, TransportErrorKind, diagnose_process_proxy,
+    user_data_dir,
 };
 use pam_policy::{CapabilityName, InvalidResourceName, ResourceName, redact_audit_detail};
 use pam_protocol::{
@@ -43,11 +48,13 @@ use pam_protocol::{
     ApprovalDecision as ProtocolApprovalDecision, ApprovalDecisionDisposition,
     ApprovalDecisionResult, BriefProvenance, BriefResult, CallerListResult, CallerSummary,
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
-    DaemonLifecycleResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
-    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode,
-    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
-    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
-    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
+    ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
+    ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, Event, EventEnvelope,
+    EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, ExpectedTargetKind,
+    Failure, FailureCode, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
+    ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth,
+    PROTOCOL_VERSION, PacState, ProjectCurrentResult,
+    ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ReplayResult, RequestEnvelope,
     RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability,
     StatusResult, decode_request_envelope, decode_server_message_envelope, encode,
@@ -56,10 +63,10 @@ use pam_store::{
     AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision as StoreApprovalDecision,
     ApprovalDecisionOutcome, AuditEventRecord, AuthorizationAudit, AuthorizationOutcome,
     AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
-    CancelOutcome, EventRecord, ExpectedOperationKind, FlowAuthorizationOutcome,
-    FlowAuthorizationRecoveryOutcome, LeasedRequest, ProjectCurrent as StoreProjectCurrent,
-    ProjectRequestSummary as StoreProjectRequestSummary, Replay, RequestSnapshot, RequestState,
-    Store, StoreError, TerminalState,
+    CancelOutcome, ConnectorRecord, ConnectorTestStatus, EventRecord, ExpectedOperationKind,
+    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, LeasedRequest,
+    ProjectCurrent as StoreProjectCurrent, ProjectRequestSummary as StoreProjectRequestSummary,
+    Replay, RequestSnapshot, RequestState, Store, StoreError, TerminalState,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::{
@@ -68,6 +75,9 @@ use tokio::{
 };
 
 use crate::DaemonError;
+use crate::connectors::{
+    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, built_in_connector_ids, is_built_in,
+};
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
     decode_flow_transition, flow_result_truth, prepare_flow_submission, process_flow,
@@ -147,6 +157,17 @@ pub(crate) enum TestStatusDispatch {
     Durable,
 }
 
+/// Injectable connector credential-store override, primarily for isolated
+/// tests. Its debug output never exposes the backend.
+#[derive(Clone)]
+pub struct ConnectorSecretOverride(pub Arc<dyn SecretBackend + Send + Sync>);
+
+impl fmt::Debug for ConnectorSecretOverride {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConnectorSecretOverride([REDACTED])")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
     pub endpoint: LocalEndpoint,
@@ -158,6 +179,10 @@ pub struct DaemonConfig {
     pub state_path: Option<PathBuf>,
     /// Supplies planning context for read-only brief requests.
     pub brief_provider: Option<Arc<dyn BriefProvider>>,
+    /// Overrides the native credential store for daemon-owned connector
+    /// secrets, primarily for isolated tests. `None` uses the operating
+    /// system's credential store.
+    pub connector_secret_backend: Option<ConnectorSecretOverride>,
     #[cfg(test)]
     pub(crate) bypass_authentication: bool,
     #[cfg(test)]
@@ -181,6 +206,7 @@ impl Default for DaemonConfig {
             model: None,
             state_path: None,
             brief_provider: None,
+            connector_secret_backend: None,
             #[cfg(test)]
             bypass_authentication: false,
             #[cfg(test)]
@@ -333,6 +359,12 @@ where
     let policy_required = !config.bypass_policy;
     #[cfg(not(test))]
     let policy_required = true;
+    let connectors = ConnectorRuntime::new(
+        config
+            .connector_secret_backend
+            .clone()
+            .map(|override_backend| override_backend.0),
+    );
     let mut server = ServerTransport::bind(&config.endpoint).await?;
     let (loaded_model, model_worker) = start_model_service(&store, config.model.clone()).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
@@ -343,6 +375,7 @@ where
         scheduler_rx,
         outbound_tx.clone(),
         processing_delay,
+        connectors.clone(),
     ));
     let mut subscriptions = HashMap::<RequestId, Vec<Subscription>>::new();
 
@@ -379,6 +412,7 @@ where
                 let request_brief_provider = Arc::clone(&brief_provider);
                 let request_model = loaded_model.clone();
                 let request_flow_preflight_admission = Arc::clone(&flow_preflight_admission);
+                let request_connectors = connectors.clone();
                 handlers.spawn(async move {
                     handle_incoming(
                         incoming,
@@ -392,6 +426,7 @@ where
                         request_flow_preflight_admission,
                         flow_preflight_delay,
                         durable_status,
+                        request_connectors,
                     )
                     .await
                 });
@@ -652,6 +687,7 @@ async fn handle_incoming(
     flow_preflight_admission: Arc<Semaphore>,
     flow_preflight_delay: Duration,
     durable_status: bool,
+    connectors: ConnectorRuntime,
 ) -> Result<(), DaemonError> {
     let Ok(request) = decode_request_envelope(incoming.payload()) else {
         return Ok(());
@@ -882,6 +918,42 @@ async fn handle_incoming(
         }
         (Capability::ModelStatus, RequestPayload::ModelStatus) => {
             handle_model_status(&request, incoming, &outbound, loaded_model.as_ref()).await
+        }
+        (Capability::ConnectorList, RequestPayload::ConnectorList) => {
+            handle_connector_list(&request, incoming, &store, &outbound, &connectors).await
+        }
+        (
+            Capability::ConnectorConfigure,
+            RequestPayload::ConnectorConfigure {
+                connector,
+                enabled,
+                base_url,
+                credential,
+            },
+        ) => {
+            handle_connector_configure(
+                &request,
+                connector.clone(),
+                *enabled,
+                base_url.clone(),
+                credential.clone(),
+                incoming,
+                &store,
+                &outbound,
+                &connectors,
+            )
+            .await
+        }
+        (Capability::ConnectorTest, RequestPayload::ConnectorTest { connector }) => {
+            handle_connector_test(
+                &request,
+                connector.clone(),
+                incoming,
+                &store,
+                &outbound,
+                &connectors,
+            )
+            .await
         }
         (Capability::FlowRun, RequestPayload::FlowRun { .. }) => {
             handle_flow_run(
@@ -1124,12 +1196,22 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
             | (Capability::ModelInfer, RequestPayload::ModelInfer { .. })
             | (Capability::ModelStatus, RequestPayload::ModelStatus)
             | (Capability::FlowRun, RequestPayload::FlowRun { .. })
+            | (Capability::ConnectorList, RequestPayload::ConnectorList)
+            | (
+                Capability::ConnectorConfigure,
+                RequestPayload::ConnectorConfigure { .. }
+            )
+            | (
+                Capability::ConnectorTest,
+                RequestPayload::ConnectorTest { .. }
+            )
     );
     capability_matches
         && (!matches!(request.capability, Capability::ApprovalDecide)
             || request.approval_id.is_none())
         && request.validate_model_request().is_ok()
         && request.validate_flow_request().is_ok()
+        && request.validate_connector_request().is_ok()
 }
 
 async fn append_request_audit(
@@ -1266,6 +1348,9 @@ pub(super) fn policy_resource(
         | RequestPayload::CallerList
         | RequestPayload::ModelStatus => "daemon".to_owned(),
         RequestPayload::ProjectCurrent => "project".to_owned(),
+        RequestPayload::ConnectorList => "connector".to_owned(),
+        RequestPayload::ConnectorConfigure { connector, .. }
+        | RequestPayload::ConnectorTest { connector } => format!("connector:{connector}"),
         RequestPayload::ApprovalDecide { .. } => "approval".to_owned(),
         RequestPayload::Brief => format!("project:{}", request.project_id),
         RequestPayload::NetworkDiagnostics => "network:configuration".to_owned(),
@@ -1476,6 +1561,9 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::DaemonActivity
         | Capability::CallerList
         | Capability::ModelStatus
+        | Capability::ConnectorList
+        | Capability::ConnectorConfigure
+        | Capability::ConnectorTest
         | Capability::CancelRequest
         | Capability::ReplayEvents => format!(
             "pam approval approve {approval_id}; PAM has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request"
@@ -2228,6 +2316,360 @@ async fn handle_model_status(
     };
     send_routed(outbound, incoming, vec![message], None).await;
     Ok(())
+}
+
+const CONNECTOR_TEST_DEADLINE: Duration = Duration::from_secs(10);
+const MAX_CONNECTOR_TEST_DETAIL_BYTES: usize = 1024;
+
+fn connector_summary(
+    connector_id: &str,
+    record: Option<&ConnectorRecord>,
+    credential_present: bool,
+) -> ConnectorSummary {
+    ConnectorSummary {
+        connector_id: connector_id.to_owned(),
+        enabled: record.is_some_and(|record| record.enabled),
+        base_url: record.and_then(|record| record.base_url.clone()),
+        credential_present,
+        last_test_status: record
+            .and_then(|record| record.last_test_status)
+            .map(|status| status.as_str().to_owned()),
+        last_test_at_ms: record.and_then(|record| record.last_test_at_ms),
+    }
+}
+
+async fn append_connector_audit(
+    store: &Store,
+    request: &RequestEnvelope,
+    action: &str,
+    outcome: &str,
+    detail: &str,
+) -> Result<(), StoreError> {
+    let occurred_at_ms = now_ms();
+    store
+        .append_audit_event(AppendAuditEvent {
+            event_id: request_audit_event_id(request, action, occurred_at_ms),
+            project_id: request.project_id.clone(),
+            caller_id: request.caller_id.clone(),
+            action: action.to_owned(),
+            decision: "allow".to_owned(),
+            outcome: outcome.to_owned(),
+            redacted_detail: redact_audit_detail(detail.as_bytes()),
+            occurred_at_ms,
+            retain_until_ms: occurred_at_ms
+                .saturating_add(duration_ms(AUDIT_RETENTION))
+                .min(i64::MAX as u64),
+        })
+        .await?;
+    Ok(())
+}
+
+async fn handle_connector_list(
+    request: &RequestEnvelope,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    connectors: &ConnectorRuntime,
+) -> Result<(), DaemonError> {
+    let records = match store.list_connectors().await {
+        Ok(records) => records,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let mut summaries = Vec::new();
+    for connector_id in built_in_connector_ids() {
+        let record = records
+            .iter()
+            .find(|record| record.connector_id == connector_id);
+        let credential_present = match connectors.credential_present(connector_id).await {
+            Ok(present) => present,
+            Err(error) => {
+                send_routed(
+                    outbound,
+                    incoming,
+                    vec![ServerMessage::Result(failure_result(
+                        request,
+                        FailureCode::Internal,
+                        error.message(),
+                    ))],
+                    None,
+                )
+                .await;
+                return Ok(());
+            }
+        };
+        summaries.push(connector_summary(connector_id, record, credential_present));
+    }
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Observed,
+            ResultPayload::ConnectorList(ConnectorListResult {
+                connectors: summaries,
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // Credential change, persistence, and audit stay in one auditable path.
+async fn handle_connector_configure(
+    request: &RequestEnvelope,
+    connector: String,
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    credential: Option<ConnectorCredentialAction>,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    connectors: &ConnectorRuntime,
+) -> Result<(), DaemonError> {
+    if !is_built_in(&connector) {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::NotFound,
+                "connector is not built into this daemon",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    }
+    // Apply the credential change first so a persisted `enabled` flag can never
+    // point at a credential that failed to store.
+    let credential_change = match &credential {
+        Some(ConnectorCredentialAction::Set { secret }) => {
+            let result = connectors
+                .set_credential(&connector, secret.expose_secret().to_owned())
+                .await;
+            if let Err(error) = result {
+                send_routed(
+                    outbound,
+                    incoming,
+                    vec![ServerMessage::Result(failure_result(
+                        request,
+                        FailureCode::Internal,
+                        error.message(),
+                    ))],
+                    None,
+                )
+                .await;
+                return Ok(());
+            }
+            "set"
+        }
+        Some(ConnectorCredentialAction::Clear) => {
+            if let Err(error) = connectors.clear_credential(&connector).await {
+                send_routed(
+                    outbound,
+                    incoming,
+                    vec![ServerMessage::Result(failure_result(
+                        request,
+                        FailureCode::Internal,
+                        error.message(),
+                    ))],
+                    None,
+                )
+                .await;
+                return Ok(());
+            }
+            "cleared"
+        }
+        None => "unchanged",
+    };
+    let record = match store
+        .upsert_connector_config(pam_store::UpsertConnectorConfig {
+            connector_id: connector.clone(),
+            enabled,
+            base_url: base_url.clone(),
+            now_ms: now_ms(),
+        })
+        .await
+    {
+        Ok(record) => record,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    // The credential value itself never reaches the audit ledger.
+    append_connector_audit(
+        store,
+        request,
+        "connector.configure",
+        "configured",
+        &format!(
+            "connector={connector} enabled={} base_url_changed={} credential={credential_change}",
+            record.enabled,
+            base_url.is_some(),
+        ),
+    )
+    .await?;
+    let credential_present = connectors
+        .credential_present(&connector)
+        .await
+        .unwrap_or(false);
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ConnectorConfigure(ConnectorConfigureResult {
+                connector: connector_summary(&connector, Some(&record), credential_present),
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+async fn handle_connector_test(
+    request: &RequestEnvelope,
+    connector: String,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    connectors: &ConnectorRuntime,
+) -> Result<(), DaemonError> {
+    if !is_built_in(&connector) {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::NotFound,
+                "connector is not built into this daemon",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    }
+    let record = match store.list_connectors().await {
+        Ok(records) => records
+            .into_iter()
+            .find(|record| record.connector_id == connector),
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let base_url = record.and_then(|record| record.base_url);
+    let detail = match connectors.load_credential(&connector).await {
+        Ok(Some(token)) => run_connector_probe(connectors, base_url.as_deref(), token).await,
+        Ok(None) => Err(
+            "no credential is stored for this connector; store one with connector.configure"
+                .to_owned(),
+        ),
+        Err(error) => Err(error.message().to_owned()),
+    };
+    let (status, disposition, detail) = match detail {
+        Ok(detail) => (
+            ConnectorTestStatus::Passed,
+            ConnectorTestDisposition::Passed,
+            detail,
+        ),
+        Err(detail) => (
+            ConnectorTestStatus::Failed,
+            ConnectorTestDisposition::Failed,
+            detail,
+        ),
+    };
+    let detail = bounded_connector_detail(detail);
+    if let Err(error) = store
+        .record_connector_test(connector.clone(), status, now_ms())
+        .await
+    {
+        send_store_failure(outbound, incoming, request, &error).await;
+        return Ok(());
+    }
+    append_connector_audit(
+        store,
+        request,
+        "connector.test",
+        status.as_str(),
+        &format!("connector={connector} status={}", status.as_str()),
+    )
+    .await?;
+    let truth = match disposition {
+        ConnectorTestDisposition::Passed => OperationTruth::Verified,
+        ConnectorTestDisposition::Failed => OperationTruth::Observed,
+    };
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            truth,
+            ResultPayload::ConnectorTest(ConnectorTestResult {
+                connector_id: connector,
+                status: disposition,
+                detail,
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Runs the bounded read-only probe. Returns sanitized detail text either way;
+/// credential values and remote bodies never appear in it.
+async fn run_connector_probe(
+    connectors: &ConnectorRuntime,
+    base_url: Option<&str>,
+    token: String,
+) -> Result<String, String> {
+    let github = connectors
+        .github(base_url, token)
+        .map_err(|error| error.message().to_owned())?;
+    let context = InvocationContext::new(
+        Instant::now() + CONNECTOR_TEST_DEADLINE,
+        CancellationToken::new(),
+        1,
+        None,
+    )
+    .map_err(|_| "connector probe context could not be constructed".to_owned())?;
+    let probe = Connector::<VerifyCredentials>::execute(
+        &github,
+        VerifyCredentialsRequest::default(),
+        context,
+    );
+    let outcome = tokio::time::timeout(CONNECTOR_TEST_DEADLINE + Duration::from_secs(2), probe)
+        .await
+        .map_err(|_| "connector probe deadline elapsed".to_owned())?;
+    match outcome {
+        Ok(_) => Ok(format!(
+            "credential verified against {}",
+            base_url.unwrap_or(GITHUB_DEFAULT_API_BASE)
+        )),
+        Err(failure) => Err(connector_probe_failure(&failure)),
+    }
+}
+
+fn connector_probe_failure(failure: &ConnectorFailure) -> String {
+    format!("{:?}: {}", failure.kind(), failure.message())
+}
+
+fn bounded_connector_detail(mut detail: String) -> String {
+    let mut length = detail.len().min(MAX_CONNECTOR_TEST_DETAIL_BYTES);
+    while !detail.is_char_boundary(length) {
+        length -= 1;
+    }
+    detail.truncate(length);
+    detail
 }
 
 /// Maps the daemon's model surface into the caller-facing status contract.
@@ -3260,7 +3702,10 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::ReadEvidence { .. }
         | RequestPayload::ModelInfer { .. }
         | RequestPayload::ModelStatus
-        | RequestPayload::FlowRun { .. } => None,
+        | RequestPayload::FlowRun { .. }
+        | RequestPayload::ConnectorList
+        | RequestPayload::ConnectorConfigure { .. }
+        | RequestPayload::ConnectorTest { .. } => None,
     }
 }
 
@@ -3386,6 +3831,7 @@ async fn run_scheduler(
     mut wakeups: mpsc::Receiver<()>,
     outbound: mpsc::Sender<Outbound>,
     processing_delay: Duration,
+    connectors: ConnectorRuntime,
 ) -> Result<(), DaemonError> {
     let mut workers = JoinSet::new();
     let mut recovery = tokio::time::interval(RECOVERY_INTERVAL);
@@ -3420,6 +3866,7 @@ async fn run_scheduler(
             };
             let worker_store = store.clone();
             let worker_outbound = outbound.clone();
+            let worker_connectors = connectors.clone();
             workers.spawn(async move {
                 process_leased(
                     leased,
@@ -3427,6 +3874,7 @@ async fn run_scheduler(
                     worker_outbound,
                     processing_delay,
                     LEASE_DURATION,
+                    worker_connectors,
                 )
                 .await
             });
@@ -3496,6 +3944,7 @@ async fn process_leased(
     outbound: mpsc::Sender<Outbound>,
     processing_delay: Duration,
     lease_duration: Duration,
+    connectors: ConnectorRuntime,
 ) -> Result<(), DaemonError> {
     if !processing_delay.is_zero() {
         let mut processing = std::pin::pin!(tokio::time::sleep(processing_delay));
@@ -3557,7 +4006,15 @@ async fn process_leased(
                 None,
             )
         } else if leased.operation_kind == FLOW_OPERATION_KIND {
-            match process_flow(&mut leased, &store, lease_duration, LEASE_HEARTBEAT).await {
+            match process_flow(
+                &mut leased,
+                &store,
+                lease_duration,
+                LEASE_HEARTBEAT,
+                &connectors,
+            )
+            .await
+            {
                 Err(StoreError::StaleLease(_)) | Ok(FlowProcessing::StaleLease) => return Ok(()),
                 Err(error) => return Err(error.into()),
                 Ok(FlowProcessing::Terminal {

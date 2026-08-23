@@ -6,6 +6,10 @@ import type {
   CallersDto,
   CatalogDto,
   CommandFence,
+  ConnectorConfigureDto,
+  ConnectorSummaryDto,
+  ConnectorTestDto,
+  ConnectorsDto,
   EvidenceDataDto,
   FlowDefinitionJson,
   FlowDocumentDataDto,
@@ -213,6 +217,8 @@ export const fixtureScenarios = [
   "skill-audit-failed",
   "skill-audit-load-error",
   "model-infer-blocked",
+  "connector-unconfigured",
+  "connector-blocked",
 ] as const;
 
 export type FixtureScenario = typeof fixtureScenarios[number];
@@ -562,6 +568,11 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   let generation = "99999999-9999-4999-8999-999999999999";
   let daemonRunning = scenario !== "offline";
   let savedSource = flowSource;
+  const connectors: ConnectorSummaryDto[] = [
+    scenario === "connector-unconfigured" || scenario === "connector-blocked"
+      ? { connectorId: "github-actions", enabled: false, baseUrl: null, credentialPresent: false, lastTestStatus: null, lastTestAtMs: null }
+      : { connectorId: "github-actions", enabled: true, baseUrl: "https://api.github.com", credentialPresent: true, lastTestStatus: "passed", lastTestAtMs: 1_777_001_100_000 },
+  ];
   const flowGraphSources = new Map<string, FlowDefinitionJson>([
     [normalizeFlowSource(flowSource), afterMergeDefinition],
   ]);
@@ -682,6 +693,76 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         };
       }
       return clone({ status: "ok" as const, callers: registeredCallers });
+    },
+    async connectorRegistry(_fence): Promise<ConnectorsDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so the connector registry is not being served.",
+            recovery: "Start PAM to read the connectors.",
+          },
+        };
+      }
+      if (scenario === "empty") return { status: "ok", connectors: [] };
+      return clone({ status: "ok" as const, connectors });
+    },
+    async connectorConfigure(_fence, params): Promise<ConnectorConfigureDto> {
+      if (scenario === "connector-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "connector_configure_blocked",
+            detail: "Project policy has not granted connector.configure to this caller yet.",
+            recovery: "pam access grant connector.configure for this GUI caller and project, then retry.",
+          },
+        };
+      }
+      const summary = connectors.find((candidate) => candidate.connectorId === params.connector);
+      if (!summary) {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "unknown_connector", detail: "This connector is not registered with the daemon.", recovery: null },
+        };
+      }
+      if (params.enabled !== undefined) summary.enabled = params.enabled;
+      if (params.baseUrl !== undefined) summary.baseUrl = params.baseUrl === "" ? null : params.baseUrl;
+      if (params.credential) summary.credentialPresent = params.credential.action === "set";
+      return clone({ status: "ok" as const, connector: summary });
+    },
+    async connectorTest(_fence, connector): Promise<ConnectorTestDto> {
+      if (scenario === "connector-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "connector_test_blocked",
+            detail: "Project policy has not granted connector.test to this caller yet.",
+            recovery: "pam access grant connector.test for this GUI caller and project, then retry.",
+          },
+        };
+      }
+      const summary = connectors.find((candidate) => candidate.connectorId === connector);
+      if (!summary) {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "unknown_connector", detail: "This connector is not registered with the daemon.", recovery: null },
+        };
+      }
+      const result = summary.credentialPresent && summary.baseUrl !== null ? "passed" : "failed";
+      summary.lastTestStatus = result;
+      summary.lastTestAtMs = 1_777_002_000_000;
+      return {
+        status: "ok",
+        connectorId: connector,
+        result,
+        detail: result === "passed"
+          ? "The connector answered the bounded test call."
+          : "The test needs a base URL and a stored credential before it can reach out.",
+      };
     },
     async activateProject(projectHandle, operationId) {
       const selected = projects.find((project) => project.handle === projectHandle);

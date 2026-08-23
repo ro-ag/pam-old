@@ -430,7 +430,7 @@ test.describe("Skills audit tab", () => {
     const navigationLabels = await page.getByRole("navigation", { name: "Primary" })
       .getByRole("button")
       .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
-    expect(navigationLabels).toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Callers"]);
+    expect(navigationLabels).toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Connections"]);
     const geometry = await page.evaluate(() => {
       const width = (selector: string) => document.querySelector<HTMLElement>(selector)?.getBoundingClientRect().width ?? -1;
       const workspace = document.querySelector<HTMLElement>(".workspace")?.getBoundingClientRect();

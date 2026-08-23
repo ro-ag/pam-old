@@ -22,6 +22,9 @@ const COMMANDS: &[&str] = &[
     "open_flow",
     "validate_flow",
     "save_flow",
+    "connector_registry",
+    "connector_configure",
+    "connector_test",
 ];
 
 fn main() {

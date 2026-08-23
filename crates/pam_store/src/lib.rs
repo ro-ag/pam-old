@@ -21,10 +21,10 @@ pub use model::{
     AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
     ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome, AuthorizationAudit,
     AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
-    CallerRegistration, CallerRevocation, CancelOutcome, EventRecord, EvidenceMetadata,
-    EvidencePruneOutcome, EvidenceRedaction, EvidenceRetention, ExpectedOperationKind,
-    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, FlowCheckpoint,
-    FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
+    CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
+    EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRedaction, EvidenceRetention,
+    ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
+    FlowCheckpoint, FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
     FlowTerminalResult, GrantRevocation, Lease, LeasedRequest, MAX_AUDIT_ACTION_BYTES,
     MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
     MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
@@ -34,6 +34,7 @@ pub use model::{
     MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent, ProjectPolicy, ProjectRequestSummary,
     ProjectWorkload, PutEvidence, PutGrant, RecentAuditEvents, Replay, RequestSnapshot,
     RequestState, SaveFlowCheckpoint, StoredResult, StoredSkillsAuditReport, TerminalState,
+    UpsertConnectorConfig,
 };
 pub use pam_model::{ModelKey, RegisteredModel};
 pub use store::{EffectApprovalCapability, Store};

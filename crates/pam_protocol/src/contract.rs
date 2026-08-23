@@ -27,6 +27,9 @@ const MAX_FLOW_REQUEST_ATTACHMENT_BYTES: usize =
 pub const MAX_FLOW_PROJECT_ROOT_BYTES: usize = 4 * 1024;
 pub const MAX_PROJECT_CURRENT_QUEUED: usize = 64;
 pub const MAX_PROJECT_OPERATION_KIND_BYTES: usize = 128;
+pub const MAX_CONNECTOR_ID_BYTES: usize = 128;
+pub const MAX_CONNECTOR_BASE_URL_BYTES: usize = 1024;
+pub const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RequestEnvelope {
@@ -194,6 +197,128 @@ impl RequestEnvelope {
             idempotency_key,
             deadline_unix_ms: None,
             payload: RequestPayload::ModelStatus,
+        }
+    }
+
+    /// Creates an authenticated connector registry listing request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The result never contains credential values.
+    #[must_use]
+    pub fn connector_list(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::ConnectorList,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ConnectorList,
+        }
+    }
+
+    /// Creates an authenticated, policy-gated connector configuration change.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The optional credential value is redacted from debug output
+    /// and never returned by any result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid connector identity or a base URL
+    /// that is not bounded credential-free HTTPS.
+    #[allow(clippy::too_many_arguments)] // Mirrors the wire payload one-to-one.
+    pub fn connector_configure(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        connector: impl Into<String>,
+        enabled: Option<bool>,
+        base_url: Option<String>,
+        credential: Option<ConnectorCredentialAction>,
+    ) -> Result<Self, ProtocolContractError> {
+        let request = Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::ConnectorConfigure,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ConnectorConfigure {
+                connector: connector.into(),
+                enabled,
+                base_url,
+                credential,
+            },
+        };
+        request.validate_connector_request()?;
+        Ok(request)
+    }
+
+    /// Creates an authenticated, policy-gated connector self-test request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The result carries a bounded, redacted status detail only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid connector identity.
+    pub fn connector_test(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        connector: impl Into<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        let request = Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::ConnectorTest,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ConnectorTest {
+                connector: connector.into(),
+            },
+        };
+        request.validate_connector_request()?;
+        Ok(request)
+    }
+
+    /// Revalidates a bounded connector payload after deserialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid connector identity or base URL.
+    pub fn validate_connector_request(&self) -> Result<(), ProtocolContractError> {
+        match &self.payload {
+            RequestPayload::ConnectorConfigure {
+                connector,
+                base_url,
+                ..
+            } => {
+                validate_connector_id(connector)?;
+                base_url
+                    .as_deref()
+                    .map_or(Ok(()), validate_connector_base_url)
+            }
+            RequestPayload::ConnectorTest { connector } => validate_connector_id(connector),
+            _ => Ok(()),
         }
     }
 
@@ -741,6 +866,9 @@ pub enum Capability {
     ModelInfer,
     ModelStatus,
     FlowRun,
+    ConnectorList,
+    ConnectorConfigure,
+    ConnectorTest,
 }
 
 impl Capability {
@@ -764,6 +892,9 @@ impl Capability {
             Self::ModelInfer => "model.infer",
             Self::ModelStatus => "model.status",
             Self::FlowRun => "flow.run",
+            Self::ConnectorList => "connector.list",
+            Self::ConnectorConfigure => "connector.configure",
+            Self::ConnectorTest => "connector.test",
         }
     }
 }
@@ -955,6 +1086,75 @@ pub enum RequestPayload {
         definition: FlowDefinitionDocument,
         project_root: FlowProjectRoot,
     },
+    ConnectorList,
+    ConnectorConfigure {
+        connector: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential: Option<ConnectorCredentialAction>,
+    },
+    ConnectorTest {
+        connector: String,
+    },
+}
+
+/// One credential change carried by a connector configuration request.
+///
+/// The secret value never appears in debug output and never crosses any result
+/// contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ConnectorCredentialAction {
+    Set { secret: ConnectorSecret },
+    Clear,
+}
+
+/// Bounded connector secret transported without exposing its value in debug logs.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ConnectorSecret(String);
+
+impl<'de> Deserialize<'de> for ConnectorSecret {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let secret = String::deserialize(deserializer)?;
+        Self::new(secret).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for ConnectorSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConnectorSecret([REDACTED])")
+    }
+}
+
+impl ConnectorSecret {
+    /// Creates a nonempty, control-free secret within its transport budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolContractError::InvalidConnectorSecret`] for empty,
+    /// oversized, or control-bearing values.
+    pub fn new(secret: impl Into<String>) -> Result<Self, ProtocolContractError> {
+        let secret = secret.into();
+        if secret.is_empty()
+            || secret.len() > MAX_CONNECTOR_SECRET_BYTES
+            || secret.chars().any(char::is_control)
+        {
+            return Err(ProtocolContractError::InvalidConnectorSecret);
+        }
+        Ok(Self(secret))
+    }
+
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Optional immutable target classification bound by observer operations.
@@ -1023,6 +1223,50 @@ pub enum ResultPayload {
     ModelGeneration(ModelGenerationResult),
     ModelStatus(ModelStatusResult),
     FlowRun(pam_flow::FlowRunResult),
+    ConnectorList(ConnectorListResult),
+    ConnectorConfigure(ConnectorConfigureResult),
+    ConnectorTest(ConnectorTestResult),
+}
+
+/// The complete connector registry known to this daemon.
+///
+/// Credential values never cross this contract; only their presence does.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectorListResult {
+    pub connectors: Vec<ConnectorSummary>,
+}
+
+/// One connector's configuration state without any credential material.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectorSummary {
+    pub connector_id: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub credential_present: bool,
+    pub last_test_status: Option<String>,
+    pub last_test_at_ms: Option<u64>,
+}
+
+/// Acknowledgement of a connector configuration change.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectorConfigureResult {
+    pub connector: ConnectorSummary,
+}
+
+/// Terminal outcome of one connector self-test.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectorTestResult {
+    pub connector_id: String,
+    pub status: ConnectorTestDisposition,
+    /// Bounded, sanitized status text; never remote bodies or secrets.
+    pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorTestDisposition {
+    Passed,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1313,6 +1557,9 @@ pub enum ProtocolContractError {
     FlowRequestEncoding,
     InvalidProjectOperationKind,
     ProjectCurrentQueueTooLarge { actual: usize, maximum: usize },
+    InvalidConnectorIdentity,
+    InvalidConnectorBaseUrl,
+    InvalidConnectorSecret,
 }
 
 impl fmt::Display for ProtocolContractError {
@@ -1382,6 +1629,18 @@ impl fmt::Display for ProtocolContractError {
             Self::ProjectCurrentQueueTooLarge { actual, maximum } => write!(
                 formatter,
                 "project current queue contains {actual} summaries; maximum is {maximum}"
+            ),
+            Self::InvalidConnectorIdentity => write!(
+                formatter,
+                "connector identity must be bounded lowercase dotted segments of at most {MAX_CONNECTOR_ID_BYTES} bytes"
+            ),
+            Self::InvalidConnectorBaseUrl => write!(
+                formatter,
+                "connector base URL must be bounded credential-free HTTPS of at most {MAX_CONNECTOR_BASE_URL_BYTES} bytes"
+            ),
+            Self::InvalidConnectorSecret => write!(
+                formatter,
+                "connector secret must contain 1 to {MAX_CONNECTOR_SECRET_BYTES} control-free bytes"
             ),
         }
     }
@@ -1475,6 +1734,41 @@ fn valid_model_segment(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn validate_connector_id(connector: &str) -> Result<(), ProtocolContractError> {
+    let bounded = !connector.is_empty() && connector.len() <= MAX_CONNECTOR_ID_BYTES;
+    let well_formed = connector.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment.as_bytes()[0].is_ascii_lowercase()
+            && segment.as_bytes()[segment.len() - 1].is_ascii_alphanumeric()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    });
+    if bounded && well_formed {
+        Ok(())
+    } else {
+        Err(ProtocolContractError::InvalidConnectorIdentity)
+    }
+}
+
+fn validate_connector_base_url(base_url: &str) -> Result<(), ProtocolContractError> {
+    let Some(remainder) = base_url.strip_prefix("https://") else {
+        return Err(ProtocolContractError::InvalidConnectorBaseUrl);
+    };
+    let authority = remainder.split('/').next().unwrap_or_default();
+    if base_url.len() > MAX_CONNECTOR_BASE_URL_BYTES
+        || authority.is_empty()
+        || authority.contains('@')
+        || base_url.contains(['#', '?'])
+        || base_url
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(ProtocolContractError::InvalidConnectorBaseUrl);
+    }
+    Ok(())
 }
 
 fn validate_evidence_read_length(length: u64) -> Result<(), ProtocolContractError> {

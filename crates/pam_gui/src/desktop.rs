@@ -17,8 +17,10 @@ use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, St
 use pam_platform::{CallerKind, caller_id, discover_project};
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult, CallerSummary,
-    FailureCode, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason, ModelGenerationResult, ModelMessage,
-    ModelRole, ModelStatusResult, ModelSummary, ProjectRequestState, ProjectRequestSummary,
+    ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
+    ConnectorTestDisposition, ConnectorTestResult, FailureCode, MAX_MODEL_OUTPUT_TOKENS,
+    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
+    ModelSummary, ProjectRequestState, ProjectRequestSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -40,8 +42,8 @@ use crate::{
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
     observatory::{
-        ObservatoryState, load_caller_registry, load_daemon_activity, load_model_status,
-        run_model_infer,
+        ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
+        load_model_status, run_connector_configure, run_connector_test, run_model_infer,
     },
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
@@ -703,6 +705,79 @@ impl From<ModelRoleDto> for ModelRole {
 pub struct ModelMessageDto {
     pub role: ModelRoleDto,
     pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConnectorsDto {
+    Ok {
+        connectors: Vec<ConnectorSummaryDto>,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+/// One connector's configuration state; credential values never cross this
+/// contract, only their presence does.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectorSummaryDto {
+    pub connector_id: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub credential_present: bool,
+    pub last_test_status: Option<String>,
+    pub last_test_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConnectorConfigureDto {
+    Ok { connector: ConnectorSummaryDto },
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConnectorTestDto {
+    Ok {
+        connector_id: String,
+        result: String,
+        detail: String,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+/// One connector configuration change; the optional credential action passes
+/// through in memory only and its secret stays redacted in debug output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectorConfigureParams {
+    pub connector: String,
+    pub enabled: Option<bool>,
+    pub base_url: Option<String>,
+    pub credential: Option<ConnectorCredentialAction>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1395,6 +1470,99 @@ impl DesktopCore {
             Err(state) => state,
         };
         let data = model_infer_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Loads the complete connector registry without any credential material.
+    ///
+    /// `connector.list` is a baseline read: an explicit policy deny is
+    /// blocked in the returned DTO, everything else unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn connector_registry(&self, fence: CommandFence) -> DesktopResult<ConnectorsDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => {
+                load_connector_registry(caller, credential, active.project_id.clone()).await
+            }
+            Err(state) => state,
+        };
+        let data = connectors_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Applies one policy-gated connector configuration change.
+    ///
+    /// The optional credential secret passes through in memory only; it is
+    /// never logged, retained, or echoed by any result. Policy and approval
+    /// refusals are classified as blocked in the returned DTO with recovery
+    /// text; everything else is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused,
+    /// or when the connector identity or base URL violates the protocol
+    /// contract before any daemon exchange.
+    pub async fn connector_configure(
+        &self,
+        fence: CommandFence,
+        params: ConnectorConfigureParams,
+    ) -> DesktopResult<ConnectorConfigureDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_connector_configure(
+                caller,
+                credential,
+                active.project_id.clone(),
+                params.connector,
+                params.enabled,
+                params.base_url,
+                params.credential,
+            )
+            .await
+            .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+            Err(state) => state,
+        };
+        let data = connector_configure_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_active_matches(&state, &active, &fence)?;
+        Ok(data)
+    }
+
+    /// Runs one policy-gated connector self-test on the daemon.
+    ///
+    /// Policy and approval refusals are classified as blocked in the returned
+    /// DTO with recovery text; everything else is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused,
+    /// or when the connector identity violates the protocol contract before
+    /// any daemon exchange.
+    pub async fn connector_test(
+        &self,
+        fence: CommandFence,
+        connector: String,
+    ) -> DesktopResult<ConnectorTestDto> {
+        let _command = self.command_gate.lock().await;
+        let active = self.begin(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => {
+                run_connector_test(caller, credential, active.project_id.clone(), connector)
+                    .await
+                    .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?
+            }
+            Err(state) => state,
+        };
+        let data = connector_test_dto(observed);
         let state = self.inner.lock().await;
         ensure_active_matches(&state, &active, &fence)?;
         Ok(data)
@@ -2280,6 +2448,98 @@ const fn finish_reason_label(reason: ModelFinishReason) -> &'static str {
     }
 }
 
+fn connectors_dto(state: ObservatoryState<ConnectorListResult>) -> ConnectorsDto {
+    match state {
+        ObservatoryState::Available(result) => ConnectorsDto::Ok {
+            connectors: result
+                .connectors
+                .into_iter()
+                .map(connector_summary_dto)
+                .collect(),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ConnectorsDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ConnectorsDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn connector_configure_dto(
+    state: ObservatoryState<ConnectorConfigureResult>,
+) -> ConnectorConfigureDto {
+    match state {
+        ObservatoryState::Available(result) => ConnectorConfigureDto::Ok {
+            connector: connector_summary_dto(result.connector),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ConnectorConfigureDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ConnectorConfigureDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn connector_test_dto(state: ObservatoryState<ConnectorTestResult>) -> ConnectorTestDto {
+    match state {
+        ObservatoryState::Available(result) => ConnectorTestDto::Ok {
+            connector_id: bounded_detail(result.connector_id),
+            result: connector_test_disposition_label(result.status).to_owned(),
+            detail: bounded_detail(result.detail),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ConnectorTestDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ConnectorTestDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn connector_summary_dto(summary: ConnectorSummary) -> ConnectorSummaryDto {
+    ConnectorSummaryDto {
+        connector_id: bounded_detail(summary.connector_id),
+        enabled: summary.enabled,
+        base_url: summary.base_url.map(bounded_detail),
+        credential_present: summary.credential_present,
+        last_test_status: summary.last_test_status.map(bounded_detail),
+        last_test_at_ms: summary.last_test_at_ms,
+    }
+}
+
+const fn connector_test_disposition_label(status: ConnectorTestDisposition) -> &'static str {
+    match status {
+        ConnectorTestDisposition::Passed => "passed",
+        ConnectorTestDisposition::Failed => "failed",
+    }
+}
+
 const fn clamp_model_output_tokens(requested: Option<u32>) -> u32 {
     match requested {
         None | Some(0) => MODEL_INFER_DEFAULT_OUTPUT_TOKENS,
@@ -2751,6 +3011,27 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn connectors_dto_for_test(
+    state: ObservatoryState<ConnectorListResult>,
+) -> ConnectorsDto {
+    connectors_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn connector_configure_dto_for_test(
+    state: ObservatoryState<ConnectorConfigureResult>,
+) -> ConnectorConfigureDto {
+    connector_configure_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn connector_test_dto_for_test(
+    state: ObservatoryState<ConnectorTestResult>,
+) -> ConnectorTestDto {
+    connector_test_dto(state)
 }
 
 #[cfg(test)]

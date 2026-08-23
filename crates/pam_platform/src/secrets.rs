@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 
 const LOCATOR_DOMAIN: &[u8] = b"pam-secret-locator-v1";
 const LOCATOR_PREFIX: &str = "pam.caller.v1.";
+const CONNECTOR_LOCATOR_DOMAIN: &[u8] = b"pam-connector-secret-locator-v1";
+const CONNECTOR_LOCATOR_PREFIX: &str = "pam.connector.v1.";
 const HEX: &[u8; 16] = b"0123456789abcdef";
 const NATIVE_SECRET_SERVICE: &str = "dev.pam.caller-credential";
 pub const MAX_SECRET_CONTEXT_BYTES: usize = 512;
@@ -26,14 +28,36 @@ impl SecretLocator {
     /// Returns [`SecretStoreErrorKind::InvalidLocator`] when the caller ID is
     /// empty or exceeds [`MAX_SECRET_CONTEXT_BYTES`].
     pub fn for_caller(caller_id: &CallerId) -> Result<Self, SecretStoreError> {
-        let caller = validate_context(caller_id.as_str())?;
+        Self::derive(LOCATOR_DOMAIN, LOCATOR_PREFIX, caller_id.as_str())
+    }
+
+    /// Derives a bounded native-secret account key for one daemon-owned connector.
+    ///
+    /// The connector domain is separated from the caller domain by both a distinct
+    /// hash prefix and a distinct account-key namespace, so a connector secret can
+    /// never collide with a caller credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretStoreErrorKind::InvalidLocator`] when the connector ID is
+    /// empty or exceeds [`MAX_SECRET_CONTEXT_BYTES`].
+    pub fn for_connector(connector_id: &str) -> Result<Self, SecretStoreError> {
+        Self::derive(
+            CONNECTOR_LOCATOR_DOMAIN,
+            CONNECTOR_LOCATOR_PREFIX,
+            connector_id,
+        )
+    }
+
+    fn derive(domain: &[u8], prefix: &str, context: &str) -> Result<Self, SecretStoreError> {
+        let context = validate_context(context)?;
         let mut hasher = Sha256::new();
-        hasher.update(LOCATOR_DOMAIN);
-        hash_context(&mut hasher, caller);
+        hasher.update(domain);
+        hash_context(&mut hasher, context);
 
         let digest = hasher.finalize();
-        let mut key = String::with_capacity(LOCATOR_PREFIX.len() + digest.len() * 2);
-        key.push_str(LOCATOR_PREFIX);
+        let mut key = String::with_capacity(prefix.len() + digest.len() * 2);
+        key.push_str(prefix);
         for byte in digest {
             key.push(HEX[usize::from(byte >> 4)] as char);
             key.push(HEX[usize::from(byte & 0x0f)] as char);

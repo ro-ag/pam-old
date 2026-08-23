@@ -517,12 +517,47 @@ export type CallersDto =
   | { status: "ok"; callers: CallerDto[] }
   | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
 
+export interface ConnectorSummaryDto {
+  connectorId: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  credentialPresent: boolean;
+  lastTestStatus: "passed" | "failed" | null;
+  lastTestAtMs: number | null;
+}
+
+export type ConnectorsDto =
+  | { status: "ok"; connectors: ConnectorSummaryDto[] }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export type ConnectorCredentialAction =
+  | { action: "set"; secret: string }
+  | { action: "clear" };
+
+export interface ConnectorConfigureParams {
+  connector: string;
+  enabled?: boolean;
+  baseUrl?: string;
+  credential?: ConnectorCredentialAction;
+}
+
+export type ConnectorConfigureDto =
+  | { status: "ok"; connector: ConnectorSummaryDto }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export type ConnectorTestDto =
+  | { status: "ok"; connectorId: string; result: "passed" | "failed"; detail: string }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface PamBridge {
   readonly mode: BridgeMode;
   bootstrap(): Promise<SnapshotDto>;
   catalog(): Promise<CatalogDto>;
   daemonActivity(fence: CommandFence, limit?: number): Promise<ActivityDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
+  connectorRegistry(fence: CommandFence): Promise<ConnectorsDto>;
+  connectorConfigure(fence: CommandFence, params: ConnectorConfigureParams): Promise<ConnectorConfigureDto>;
+  connectorTest(fence: CommandFence, connector: string): Promise<ConnectorTestDto>;
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;

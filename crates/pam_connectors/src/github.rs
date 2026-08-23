@@ -5,6 +5,7 @@ use std::{
     error::Error,
     fmt,
     num::NonZeroU64,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -571,6 +572,62 @@ impl Operation for CollectRunLogs {
     }
 }
 
+/// Minimal authenticated read-only probe used by connector self-tests.
+///
+/// It verifies base-URL reachability, TLS, and the stored credential by
+/// requesting the token's own identity; no repository data is read and no
+/// remote identity details are returned.
+pub struct VerifyCredentials;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VerifyCredentialsRequest {}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VerifyCredentialsResponse {}
+
+impl Operation for VerifyCredentials {
+    type Request = VerifyCredentialsRequest;
+    type Response = VerifyCredentialsResponse;
+
+    const EFFECT: OperationEffect = OperationEffect::ReadOnly;
+
+    fn coordinates(_request: &Self::Request) -> OperationCoordinates {
+        OperationCoordinates::new(
+            CapabilityName::parse("connection.verify").expect("static GitHub capability is valid"),
+            ResourceName::parse("github:api").expect("static GitHub resource is valid"),
+        )
+    }
+}
+
+impl<T: GitHubTransport> Connector<VerifyCredentials> for GitHubActions<T> {
+    fn descriptor(&self) -> ConnectorDescriptor {
+        descriptor()
+    }
+
+    fn execute(
+        &self,
+        _request: VerifyCredentialsRequest,
+        context: InvocationContext,
+    ) -> ConnectorFuture<'_, crate::ConnectorResult<VerifyCredentialsResponse>> {
+        Box::pin(async move {
+            context.preflight(OperationEffect::ReadOnly)?;
+            let response = self
+                .transport
+                .get(self.api_request("user", MAX_JSON_BYTES)?, &context)
+                .await?;
+            require_status(&response, StatusCode::OK)?;
+            ConnectorOutput::new(
+                VerifyCredentialsResponse {},
+                summary("GitHub credential and API base verified".to_owned())?,
+                Truth::Complete,
+                Vec::new(),
+                Vec::new(),
+            )
+            .map_err(|_| remote_failure("GitHub verification output exceeded SDK bounds"))
+        })
+    }
+}
+
 pub struct RerunFailedJobs;
 
 impl Operation for RerunFailedJobs {
@@ -608,6 +665,17 @@ impl<T> GitHubActions<T> {
             api_base: normalized_base(api_base),
             transport,
         })
+    }
+
+    /// Parses and validates a textual API base for callers without a URL type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the API base parses as a credential-free HTTPS
+    /// hierarchy.
+    pub fn with_base_str(api_base: &str, transport: T) -> Result<Self, InvalidGitHubConfiguration> {
+        let api_base = Url::parse(api_base).map_err(|_| InvalidGitHubConfiguration)?;
+        Self::new(api_base, transport)
     }
 
     #[must_use]
@@ -1017,6 +1085,24 @@ pub trait GitHubTransport: Send + Sync {
         request: TransportRequest,
         context: &'a InvocationContext,
     ) -> ConnectorFuture<'a, Result<TransportResponse, ConnectorFailure>>;
+}
+
+impl<T: GitHubTransport + ?Sized> GitHubTransport for Arc<T> {
+    fn get<'a>(
+        &'a self,
+        request: TransportRequest,
+        context: &'a InvocationContext,
+    ) -> ConnectorFuture<'a, Result<TransportResponse, ConnectorFailure>> {
+        (**self).get(request, context)
+    }
+
+    fn post<'a>(
+        &'a self,
+        request: TransportRequest,
+        context: &'a InvocationContext,
+    ) -> ConnectorFuture<'a, Result<TransportResponse, ConnectorFailure>> {
+        (**self).post(request, context)
+    }
 }
 
 /// Production transport with native rustls verification, system proxy support, and no redirects.

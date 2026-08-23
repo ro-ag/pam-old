@@ -28,6 +28,9 @@
     "allow-open-flow",
     "allow-validate-flow",
     "allow-save-flow",
+    "allow-connector-registry",
+    "allow-connector-configure",
+    "allow-connector-test",
     "core:app:allow-set-app-theme"
   ]
 }

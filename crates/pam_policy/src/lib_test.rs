@@ -361,11 +361,28 @@ fn baseline_capabilities_allow_without_grants() {
     assert_eq!(baseline_decision(&[], "daemon.activity"), Decision::Allowed);
     assert_eq!(baseline_decision(&[], "caller.list"), Decision::Allowed);
     assert_eq!(baseline_decision(&[], "model.status"), Decision::Allowed);
+    assert_eq!(baseline_decision(&[], "connector.list"), Decision::Allowed);
+}
+
+#[test]
+fn connector_writes_are_denied_without_grants() {
+    // Baseline configure or test would let any local caller redirect a
+    // connector's base URL and exfiltrate its credential via a self-test.
+    assert_eq!(
+        baseline_decision(&[], "connector.configure"),
+        Decision::Denied
+    );
+    assert_eq!(baseline_decision(&[], "connector.test"), Decision::Denied);
 }
 
 #[test]
 fn baseline_observatory_reads_respect_explicit_deny() {
-    for name in ["daemon.activity", "caller.list", "model.status"] {
+    for name in [
+        "daemon.activity",
+        "caller.list",
+        "model.status",
+        "connector.list",
+    ] {
         let deny = Grant {
             capability: capability(name),
             ..grant(Effect::Deny, ResourceScope::Any, ApprovalRequirement::None)
