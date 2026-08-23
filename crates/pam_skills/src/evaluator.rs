@@ -153,6 +153,7 @@ pub fn detect_evaluator(
     #[cfg(not(unix))]
     {
         let _ = injected_path;
+        let _ = canonical_project;
         return Ok(None);
     }
 
