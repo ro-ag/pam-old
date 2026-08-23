@@ -2419,23 +2419,13 @@ async fn handle_connector_list(
         let record = records
             .iter()
             .find(|record| record.connector_id == connector_id);
-        let credential_present = match connectors.credential_present(connector_id).await {
-            Ok(present) => present,
-            Err(error) => {
-                send_routed(
-                    outbound,
-                    incoming,
-                    vec![ServerMessage::Result(failure_result(
-                        request,
-                        FailureCode::Internal,
-                        error.message(),
-                    ))],
-                    None,
-                )
-                .await;
-                return Ok(());
-            }
-        };
+        // Presence is display-only: an unavailable secret backend (headless
+        // Linux without Secret Service) must not fail the whole listing.
+        // Configure and test still surface backend errors loudly.
+        let credential_present = connectors
+            .credential_present(connector_id)
+            .await
+            .unwrap_or(false);
         summaries.push(connector_summary(connector_id, record, credential_present));
     }
     send_routed(
