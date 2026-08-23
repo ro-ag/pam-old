@@ -17,6 +17,10 @@ use cap_std::fs::{Dir, OpenOptions};
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, ConnectorOutput, InvocationContext,
     RetryGuidance, Truth,
+    aws::{
+        Aws, AwsCliRunner, CliCommand, CollectCommand, CollectCommandRequest, DiscoverCommands,
+        DiscoverCommandsRequest,
+    },
     confluence::{
         CollectPage, CollectPageRequest, Confluence, ConfluenceTransport, Cql, DiscoverPages,
         DiscoverPagesRequest, PageId, SpaceKey,
@@ -56,8 +60,9 @@ use pam_protocol::{
     ResultEnvelope, ResultPayload, ServerMessage, decode_server_message_envelope, encode,
 };
 use pam_store::{
-    EvidenceRedaction, EvidenceRetention, FlowEffectAuthorization, FlowTerminalResult,
-    LeasedRequest, PutEvidence, RequestState, SaveFlowCheckpoint, Store, StoreError, TerminalState,
+    ConnectorRecord, EvidenceRedaction, EvidenceRetention, FlowEffectAuthorization,
+    FlowTerminalResult, LeasedRequest, PutEvidence, RequestState, SaveFlowCheckpoint, Store,
+    StoreError, TerminalState,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::{
@@ -68,9 +73,10 @@ use tokio::{
 };
 
 use crate::connectors::{
-    CONFLUENCE, CONFLUENCE_COLLECT_PAGE_CAPABILITY, CONFLUENCE_DISCOVER_PAGES_CAPABILITY,
-    ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
-    JENKINS, JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
+    AWS, AWS_COLLECT_COMMAND_CAPABILITY, AWS_DISCOVER_COMMANDS_CAPABILITY, CONFLUENCE,
+    CONFLUENCE_COLLECT_PAGE_CAPABILITY, CONFLUENCE_DISCOVER_PAGES_CAPABILITY, ConnectorRuntime,
+    GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY, JENKINS,
+    JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
     JENKINS_DISCOVER_JOBS_CAPABILITY, JIRA, JIRA_COLLECT_ISSUE_CAPABILITY,
     JIRA_DISCOVER_ISSUES_CAPABILITY, SHAREPOINT, SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY,
     SHAREPOINT_DISCOVER_LISTS_CAPABILITY, SONARQUBE, SONARQUBE_GATE_CAPABILITY,
@@ -2455,6 +2461,11 @@ enum SharePointCall {
     DiscoverLists(DiscoverListsRequest),
 }
 
+enum AwsCall {
+    DiscoverCommands(DiscoverCommandsRequest),
+    CollectCommand(CollectCommandRequest),
+}
+
 enum PreparedCall {
     GitHub(GitHubCall),
     Jenkins(JenkinsCall),
@@ -2462,6 +2473,7 @@ enum PreparedCall {
     Jira(JiraCall),
     Confluence(ConfluenceCall),
     SharePoint(SharePointCall),
+    Aws(AwsCall),
 }
 
 enum BuiltCall {
@@ -2471,6 +2483,7 @@ enum BuiltCall {
     Jira(Jira<Arc<dyn JiraTransport>>, JiraCall),
     Confluence(Confluence<Arc<dyn ConfluenceTransport>>, ConfluenceCall),
     SharePoint(SharePoint<Arc<dyn SharePointTransport>>, SharePointCall),
+    Aws(Aws<Arc<dyn AwsCliRunner>>, AwsCall),
 }
 
 struct ConnectorCallSuccess {
@@ -2522,6 +2535,10 @@ async fn execute_connector_step(
             Ok(call) => PreparedCall::SharePoint(call),
             Err(message) => return failed_connector_outcome(message, false),
         },
+        AWS => match parse_aws_call(step) {
+            Ok(call) => PreparedCall::Aws(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
         _ => {
             return failed_connector_outcome(
                 format!(
@@ -2548,104 +2565,30 @@ async fn execute_connector_step(
         );
     };
     let credential = match connectors.load_credential(&step.connector).await {
-        Ok(Some(credential)) => credential,
-        Ok(None) => {
-            return failed_connector_outcome(
-                format!(
-                    "connector {} has no stored credential; store one — \
-                     {CONNECTOR_RECOVERY_SURFACES}",
-                    step.connector
-                ),
-                false,
-            );
-        }
+        Ok(credential) => credential,
         Err(error) => return failed_connector_outcome(error.message().to_owned(), true),
     };
     let call = match call {
-        PreparedCall::GitHub(call) => {
-            match connectors.github(record.base_url.as_deref(), credential) {
-                Ok(github) => BuiltCall::GitHub(github, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
-            }
-        }
-        PreparedCall::Jenkins(call) => {
-            let Some(base_url) = record.base_url.as_deref() else {
+        // The AWS connector's stored value is only an optional profile name;
+        // absent, the CLI resolves the operator's default credential chain.
+        PreparedCall::Aws(call) => match connectors.aws(credential.as_deref()) {
+            Ok(aws) => BuiltCall::Aws(aws, call),
+            Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+        },
+        call => {
+            let Some(credential) = credential else {
                 return failed_connector_outcome(
                     format!(
-                        "connector {} requires a configured base URL; \
+                        "connector {} has no stored credential; store one — \
                          {CONNECTOR_RECOVERY_SURFACES}",
                         step.connector
                     ),
                     false,
                 );
             };
-            match connectors.jenkins(base_url, credential) {
-                Ok(jenkins) => BuiltCall::Jenkins(jenkins, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
-            }
-        }
-        PreparedCall::Sonar(call) => {
-            let Some(base_url) = record.base_url.as_deref() else {
-                return failed_connector_outcome(
-                    format!(
-                        "connector {} requires a configured base URL; \
-                         {CONNECTOR_RECOVERY_SURFACES}",
-                        step.connector
-                    ),
-                    false,
-                );
-            };
-            match connectors.sonarqube(base_url, credential) {
-                Ok(sonarqube) => BuiltCall::Sonar(sonarqube, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
-            }
-        }
-        PreparedCall::Jira(call) => {
-            let Some(base_url) = record.base_url.as_deref() else {
-                return failed_connector_outcome(
-                    format!(
-                        "connector {} requires a configured base URL; \
-                         {CONNECTOR_RECOVERY_SURFACES}",
-                        step.connector
-                    ),
-                    false,
-                );
-            };
-            match connectors.jira(base_url, credential) {
-                Ok(jira) => BuiltCall::Jira(jira, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
-            }
-        }
-        PreparedCall::Confluence(call) => {
-            let Some(base_url) = record.base_url.as_deref() else {
-                return failed_connector_outcome(
-                    format!(
-                        "connector {} requires a configured base URL; \
-                         {CONNECTOR_RECOVERY_SURFACES}",
-                        step.connector
-                    ),
-                    false,
-                );
-            };
-            match connectors.confluence(base_url, credential) {
-                Ok(confluence) => BuiltCall::Confluence(confluence, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
-            }
-        }
-        PreparedCall::SharePoint(call) => {
-            let Some(base_url) = record.base_url.as_deref() else {
-                return failed_connector_outcome(
-                    format!(
-                        "connector {} requires a configured base URL; \
-                         {CONNECTOR_RECOVERY_SURFACES}",
-                        step.connector
-                    ),
-                    false,
-                );
-            };
-            match connectors.sharepoint(base_url, credential) {
-                Ok(sharepoint) => BuiltCall::SharePoint(sharepoint, call),
-                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            match build_credentialed_call(step, connectors, &record, credential, call) {
+                Ok(call) => call,
+                Err(message) => return failed_connector_outcome(message, false),
             }
         }
     };
@@ -2702,6 +2645,54 @@ async fn execute_connector_step(
         ),
         WorkspaceFingerprintLease::Cancelled => Ok(ConnectorStepOutcome::Cancelled),
         WorkspaceFingerprintLease::StaleLease => Ok(ConnectorStepOutcome::StaleLease),
+    }
+}
+
+/// Builds one credential-requiring connector call; the AWS connector builds
+/// separately because its stored credential is optional.
+fn build_credentialed_call(
+    step: &PreparedConnectorStep,
+    connectors: &ConnectorRuntime,
+    record: &ConnectorRecord,
+    credential: String,
+    call: PreparedCall,
+) -> Result<BuiltCall, String> {
+    let require_base_url = || {
+        record.base_url.as_deref().ok_or_else(|| {
+            format!(
+                "connector {} requires a configured base URL; {CONNECTOR_RECOVERY_SURFACES}",
+                step.connector
+            )
+        })
+    };
+    match call {
+        PreparedCall::GitHub(call) => connectors
+            .github(record.base_url.as_deref(), credential)
+            .map(|github| BuiltCall::GitHub(github, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::Jenkins(call) => connectors
+            .jenkins(require_base_url()?, credential)
+            .map(|jenkins| BuiltCall::Jenkins(jenkins, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::Sonar(call) => connectors
+            .sonarqube(require_base_url()?, credential)
+            .map(|sonarqube| BuiltCall::Sonar(sonarqube, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::Jira(call) => connectors
+            .jira(require_base_url()?, credential)
+            .map(|jira| BuiltCall::Jira(jira, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::Confluence(call) => connectors
+            .confluence(require_base_url()?, credential)
+            .map(|confluence| BuiltCall::Confluence(confluence, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::SharePoint(call) => connectors
+            .sharepoint(require_base_url()?, credential)
+            .map(|sharepoint| BuiltCall::SharePoint(sharepoint, call))
+            .map_err(|error| error.message().to_owned()),
+        PreparedCall::Aws(_) => {
+            Err("the AWS connector call is built without a stored credential".to_owned())
+        }
     }
 }
 
@@ -2974,6 +2965,39 @@ fn parse_sharepoint_call(step: &PreparedConnectorStep) -> Result<SharePointCall,
     }
 }
 
+fn parse_aws_call(step: &PreparedConnectorStep) -> Result<AwsCall, String> {
+    match step.capability.as_str() {
+        AWS_DISCOVER_COMMANDS_CAPABILITY => {
+            if step.resource_kind != "command" {
+                return Err(format!(
+                    "connector capability {AWS_DISCOVER_COMMANDS_CAPABILITY} requires a resource \
+                     of kind command"
+                ));
+            }
+            Ok(AwsCall::DiscoverCommands(DiscoverCommandsRequest::default()))
+        }
+        AWS_COLLECT_COMMAND_CAPABILITY => {
+            let parsed = (step.resource_kind == "command")
+                .then(|| step.resource_id.split_once('.'))
+                .flatten()
+                .and_then(|(service, command)| CliCommand::parse(service, command).ok());
+            let Some(command) = parsed else {
+                return Err(format!(
+                    "connector capability {AWS_COLLECT_COMMAND_CAPABILITY} requires a resource of \
+                     kind command holding an allowlisted SERVICE.COMMAND pair"
+                ));
+            };
+            CollectCommandRequest::new(command, Vec::new())
+                .map(AwsCall::CollectCommand)
+                .map_err(|_| "connector command arguments are invalid".to_owned())
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {AWS_DISCOVER_COMMANDS_CAPABILITY} and {AWS_COLLECT_COMMAND_CAPABILITY}"
+        )),
+    }
+}
+
 async fn run_connector_call(
     call: BuiltCall,
     context: InvocationContext,
@@ -2989,6 +3013,7 @@ async fn run_connector_call(
         BuiltCall::SharePoint(sharepoint, call) => {
             run_sharepoint_call(&sharepoint, call, context).await
         }
+        BuiltCall::Aws(aws, call) => run_aws_call(&aws, call, context).await,
     }
 }
 
@@ -3095,6 +3120,23 @@ async fn run_sharepoint_call(
         }
         SharePointCall::DiscoverLists(request) => {
             let output = Connector::<DiscoverLists>::execute(sharepoint, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+async fn run_aws_call(
+    aws: &Aws<Arc<dyn AwsCliRunner>>,
+    call: AwsCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        AwsCall::DiscoverCommands(request) => {
+            let output = Connector::<DiscoverCommands>::execute(aws, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        AwsCall::CollectCommand(request) => {
+            let output = Connector::<CollectCommand>::execute(aws, request, context).await?;
             Ok(connector_call_success(&output))
         }
     }
