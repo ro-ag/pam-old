@@ -8,6 +8,7 @@ use std::{fmt, sync::Arc};
 
 use pam_connectors::github::{GitHubActions, GitHubTransport, ReqwestGitHubTransport};
 use pam_connectors::jenkins::{Jenkins, JenkinsTransport, ReqwestJenkinsTransport};
+use pam_connectors::jira::{Jira, JiraTransport, ReqwestJiraTransport};
 use pam_connectors::sonarqube::{ReqwestSonarTransport, SonarQube, SonarTransport};
 use pam_core::CallerCredential;
 use pam_platform::{NativeSecretBackend, SecretBackend, SecretBackendError, SecretLocator};
@@ -15,6 +16,7 @@ use pam_platform::{NativeSecretBackend, SecretBackend, SecretBackendError, Secre
 pub(crate) const GITHUB_ACTIONS: &str = "github-actions";
 pub(crate) const JENKINS: &str = "jenkins";
 pub(crate) const SONARQUBE: &str = "sonarqube";
+pub(crate) const JIRA: &str = "jira";
 pub(crate) const GITHUB_DEFAULT_API_BASE: &str = "https://api.github.com/";
 pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
@@ -31,9 +33,13 @@ pub(crate) const JENKINS_COLLECT_LOG_CAPABILITY: &str = "builds.collect-log";
 pub(crate) const SONARQUBE_GATE_CAPABILITY: &str = "gate.inspect";
 pub(crate) const SONARQUBE_ISSUES_CAPABILITY: &str = "issues.discover";
 
+/// The flow-step capability names executable through the Jira connector.
+pub(crate) const JIRA_DISCOVER_ISSUES_CAPABILITY: &str = "issues.discover";
+pub(crate) const JIRA_COLLECT_ISSUE_CAPABILITY: &str = "issues.collect";
+
 #[must_use]
-pub(crate) fn built_in_connector_ids() -> [&'static str; 3] {
-    [GITHUB_ACTIONS, JENKINS, SONARQUBE]
+pub(crate) fn built_in_connector_ids() -> [&'static str; 4] {
+    [GITHUB_ACTIONS, JENKINS, SONARQUBE, JIRA]
 }
 
 #[must_use]
@@ -78,6 +84,8 @@ pub(crate) struct ConnectorRuntime {
     pub(crate) jenkins_transport: Option<Arc<dyn JenkinsTransport>>,
     #[cfg(test)]
     pub(crate) sonarqube_transport: Option<Arc<dyn SonarTransport>>,
+    #[cfg(test)]
+    pub(crate) jira_transport: Option<Arc<dyn JiraTransport>>,
 }
 
 impl fmt::Debug for ConnectorRuntime {
@@ -100,6 +108,8 @@ impl ConnectorRuntime {
             jenkins_transport: None,
             #[cfg(test)]
             sonarqube_transport: None,
+            #[cfg(test)]
+            jira_transport: None,
         }
     }
 
@@ -263,6 +273,34 @@ impl ConnectorRuntime {
         }
         production_sonarqube_transport(token)
     }
+
+    /// Builds the Jira connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or token is invalid, or the
+    /// hardened HTTPS client cannot be initialized.
+    pub(crate) fn jira(
+        &self,
+        base_url: &str,
+        token: String,
+    ) -> Result<Jira<Arc<dyn JiraTransport>>, ConnectorSecretError> {
+        let transport = self.jira_transport_for(token)?;
+        Jira::with_base_str(base_url, transport).map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn jira_transport_for(
+        &self,
+        token: String,
+    ) -> Result<Arc<dyn JiraTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.jira_transport {
+            drop(token);
+            return Ok(Arc::clone(transport));
+        }
+        production_jira_transport(token)
+    }
 }
 
 fn production_github_transport(
@@ -293,6 +331,16 @@ fn production_sonarqube_transport(
     // sends it as the HTTP Basic username with an empty password over rustls.
     let transport =
         ReqwestSonarTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_jira_transport(
+    token: String,
+) -> Result<Arc<dyn JiraTransport>, ConnectorSecretError> {
+    // The stored connector secret is one Jira Data Center personal access
+    // token; the transport sends it as an HTTP Bearer credential over rustls.
+    let transport =
+        ReqwestJiraTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
     Ok(Arc::new(transport))
 }
 

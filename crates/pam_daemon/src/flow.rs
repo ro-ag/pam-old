@@ -26,6 +26,11 @@ use pam_connectors::{
         DiscoverBuildsRequest, DiscoverJobs, DiscoverJobsRequest, Jenkins, JenkinsTransport,
         JobPath,
     },
+    jira::{
+        CollectIssue, CollectIssueRequest, DiscoverIssues as JiraDiscoverIssues,
+        DiscoverIssuesRequest as JiraDiscoverIssuesRequest, IssueKey, Jira, JiraTransport, Jql,
+        ProjectKey as JiraProjectKey,
+    },
     sonarqube::{
         DiscoverIssues, DiscoverIssuesRequest, FetchQualityGate, FetchQualityGateRequest,
         ProjectKey, SonarQube, SonarTransport,
@@ -57,7 +62,8 @@ use tokio::{
 use crate::connectors::{
     ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
     JENKINS, JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
-    JENKINS_DISCOVER_JOBS_CAPABILITY, SONARQUBE, SONARQUBE_GATE_CAPABILITY,
+    JENKINS_DISCOVER_JOBS_CAPABILITY, JIRA, JIRA_COLLECT_ISSUE_CAPABILITY,
+    JIRA_DISCOVER_ISSUES_CAPABILITY, SONARQUBE, SONARQUBE_GATE_CAPABILITY,
     SONARQUBE_ISSUES_CAPABILITY,
 };
 
@@ -2424,16 +2430,23 @@ enum SonarCall {
     DiscoverIssues(DiscoverIssuesRequest),
 }
 
+enum JiraCall {
+    DiscoverIssues(JiraDiscoverIssuesRequest),
+    CollectIssue(CollectIssueRequest),
+}
+
 enum PreparedCall {
     GitHub(GitHubCall),
     Jenkins(JenkinsCall),
     Sonar(SonarCall),
+    Jira(JiraCall),
 }
 
 enum BuiltCall {
     GitHub(GitHubActions<Arc<dyn GitHubTransport>>, GitHubCall),
     Jenkins(Jenkins<Arc<dyn JenkinsTransport>>, JenkinsCall),
     Sonar(SonarQube<Arc<dyn SonarTransport>>, SonarCall),
+    Jira(Jira<Arc<dyn JiraTransport>>, JiraCall),
 }
 
 struct ConnectorCallSuccess {
@@ -2471,6 +2484,10 @@ async fn execute_connector_step(
         },
         SONARQUBE => match parse_sonar_call(step) {
             Ok(call) => PreparedCall::Sonar(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
+        JIRA => match parse_jira_call(step) {
+            Ok(call) => PreparedCall::Jira(call),
             Err(message) => return failed_connector_outcome(message, false),
         },
         _ => {
@@ -2548,6 +2565,22 @@ async fn execute_connector_step(
             };
             match connectors.sonarqube(base_url, credential) {
                 Ok(sonarqube) => BuiltCall::Sonar(sonarqube, call),
+                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            }
+        }
+        PreparedCall::Jira(call) => {
+            let Some(base_url) = record.base_url.as_deref() else {
+                return failed_connector_outcome(
+                    format!(
+                        "connector {} requires a configured base URL; \
+                         {CONNECTOR_RECOVERY_SURFACES}",
+                        step.connector
+                    ),
+                    false,
+                );
+            };
+            match connectors.jira(base_url, credential) {
+                Ok(jira) => BuiltCall::Jira(jira, call),
                 Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
             }
         }
@@ -2747,6 +2780,52 @@ fn parse_sonar_call(step: &PreparedConnectorStep) -> Result<SonarCall, String> {
     }
 }
 
+fn parse_jira_call(step: &PreparedConnectorStep) -> Result<JiraCall, String> {
+    match step.capability.as_str() {
+        JIRA_DISCOVER_ISSUES_CAPABILITY => {
+            if step.resource_kind != "project" {
+                return Err(format!(
+                    "connector capability {JIRA_DISCOVER_ISSUES_CAPABILITY} requires a resource \
+                     of kind project holding a Jira project key"
+                ));
+            }
+            let project = JiraProjectKey::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid Jira project key",
+                    step.resource_id
+                )
+            })?;
+            let jql = Jql::parse(format!(
+                "project = {} ORDER BY updated DESC",
+                project.as_str()
+            ))
+            .map_err(|_| "connector issue discovery query is invalid".to_owned())?;
+            JiraDiscoverIssuesRequest::new(project, jql, CONNECTOR_DISCOVER_LIMIT)
+                .map(JiraCall::DiscoverIssues)
+                .map_err(|_| "connector issue discovery bounds are invalid".to_owned())
+        }
+        JIRA_COLLECT_ISSUE_CAPABILITY => {
+            if step.resource_kind != "issue" {
+                return Err(format!(
+                    "connector capability {JIRA_COLLECT_ISSUE_CAPABILITY} requires a resource of \
+                     kind issue holding a Jira issue key"
+                ));
+            }
+            let issue = IssueKey::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid Jira issue key",
+                    step.resource_id
+                )
+            })?;
+            Ok(JiraCall::CollectIssue(CollectIssueRequest::new(issue)))
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {JIRA_DISCOVER_ISSUES_CAPABILITY} and {JIRA_COLLECT_ISSUE_CAPABILITY}"
+        )),
+    }
+}
+
 async fn run_connector_call(
     call: BuiltCall,
     context: InvocationContext,
@@ -2755,6 +2834,7 @@ async fn run_connector_call(
         BuiltCall::GitHub(github, call) => run_github_call(&github, call, context).await,
         BuiltCall::Jenkins(jenkins, call) => run_jenkins_call(&jenkins, call, context).await,
         BuiltCall::Sonar(sonarqube, call) => run_sonar_call(&sonarqube, call, context).await,
+        BuiltCall::Jira(jira, call) => run_jira_call(&jira, call, context).await,
     }
 }
 
@@ -2809,6 +2889,23 @@ async fn run_sonar_call(
         }
         SonarCall::DiscoverIssues(request) => {
             let output = Connector::<DiscoverIssues>::execute(sonarqube, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+async fn run_jira_call(
+    jira: &Jira<Arc<dyn JiraTransport>>,
+    call: JiraCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        JiraCall::DiscoverIssues(request) => {
+            let output = Connector::<JiraDiscoverIssues>::execute(jira, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        JiraCall::CollectIssue(request) => {
+            let output = Connector::<CollectIssue>::execute(jira, request, context).await?;
             Ok(connector_call_success(&output))
         }
     }

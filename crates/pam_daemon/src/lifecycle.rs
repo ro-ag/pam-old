@@ -29,6 +29,10 @@ use pam_connectors::{
         VerifyCredentials as JenkinsVerifyCredentials,
         VerifyCredentialsRequest as JenkinsVerifyCredentialsRequest,
     },
+    jira::{
+        VerifyCredentials as JiraVerifyCredentials,
+        VerifyCredentialsRequest as JiraVerifyCredentialsRequest,
+    },
     sonarqube::{
         VerifyCredentials as SonarVerifyCredentials,
         VerifyCredentialsRequest as SonarVerifyCredentialsRequest,
@@ -84,7 +88,7 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, SONARQUBE, built_in_connector_ids,
+    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SONARQUBE, built_in_connector_ids,
     is_built_in,
 };
 use crate::flow::{
@@ -2710,6 +2714,24 @@ async fn run_connector_probe(
         let probe = Connector::<SonarVerifyCredentials>::execute(
             &sonarqube,
             SonarVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == JIRA {
+        let Some(base_url) = base_url else {
+            return Err(
+                "connector jira requires a configured base URL; set one with connector.configure"
+                    .to_owned(),
+            );
+        };
+        let jira = connectors
+            .jira(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<JiraVerifyCredentials>::execute(
+            &jira,
+            JiraVerifyCredentialsRequest::default(),
             context,
         );
         await_connector_probe(probe).await?;

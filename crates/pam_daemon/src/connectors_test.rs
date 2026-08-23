@@ -7,7 +7,7 @@ use pam_core::CallerCredential;
 use pam_platform::{SecretBackend, SecretBackendError, SecretLocator};
 
 use super::connectors::{
-    ConnectorRuntime, ConnectorSecretError, GITHUB_ACTIONS, JENKINS, SONARQUBE,
+    ConnectorRuntime, ConnectorSecretError, GITHUB_ACTIONS, JENKINS, JIRA, SONARQUBE,
     built_in_connector_ids, is_built_in,
 };
 
@@ -60,14 +60,15 @@ fn runtime_with_memory_backend() -> (ConnectorRuntime, Arc<MemorySecretBackend>)
 }
 
 #[test]
-fn the_built_in_registry_contains_exactly_github_actions_jenkins_and_sonarqube() {
+fn the_built_in_registry_contains_exactly_github_actions_jenkins_sonarqube_and_jira() {
     assert_eq!(
         built_in_connector_ids(),
-        [GITHUB_ACTIONS, JENKINS, SONARQUBE]
+        [GITHUB_ACTIONS, JENKINS, SONARQUBE, JIRA]
     );
     assert!(is_built_in("github-actions"));
     assert!(is_built_in("jenkins"));
     assert!(is_built_in("sonarqube"));
+    assert!(is_built_in("jira"));
     assert!(!is_built_in("gitlab-ci"));
 }
 
