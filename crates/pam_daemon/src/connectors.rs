@@ -6,8 +6,11 @@
 
 use std::{fmt, sync::Arc};
 
+use pam_connectors::confluence::{Confluence, ConfluenceTransport, ReqwestConfluenceTransport};
 use pam_connectors::github::{GitHubActions, GitHubTransport, ReqwestGitHubTransport};
 use pam_connectors::jenkins::{Jenkins, JenkinsTransport, ReqwestJenkinsTransport};
+use pam_connectors::jira::{Jira, JiraTransport, ReqwestJiraTransport};
+use pam_connectors::sharepoint::{ReqwestSharePointTransport, SharePoint, SharePointTransport};
 use pam_connectors::sonarqube::{ReqwestSonarTransport, SonarQube, SonarTransport};
 use pam_core::CallerCredential;
 use pam_platform::{NativeSecretBackend, SecretBackend, SecretBackendError, SecretLocator};
@@ -15,6 +18,9 @@ use pam_platform::{NativeSecretBackend, SecretBackend, SecretBackendError, Secre
 pub(crate) const GITHUB_ACTIONS: &str = "github-actions";
 pub(crate) const JENKINS: &str = "jenkins";
 pub(crate) const SONARQUBE: &str = "sonarqube";
+pub(crate) const JIRA: &str = "jira";
+pub(crate) const CONFLUENCE: &str = "confluence";
+pub(crate) const SHAREPOINT: &str = "sharepoint";
 pub(crate) const GITHUB_DEFAULT_API_BASE: &str = "https://api.github.com/";
 pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
@@ -31,9 +37,28 @@ pub(crate) const JENKINS_COLLECT_LOG_CAPABILITY: &str = "builds.collect-log";
 pub(crate) const SONARQUBE_GATE_CAPABILITY: &str = "gate.inspect";
 pub(crate) const SONARQUBE_ISSUES_CAPABILITY: &str = "issues.discover";
 
+/// The flow-step capability names executable through the Jira connector.
+pub(crate) const JIRA_DISCOVER_ISSUES_CAPABILITY: &str = "issues.discover";
+pub(crate) const JIRA_COLLECT_ISSUE_CAPABILITY: &str = "issues.collect";
+
+/// The flow-step capability names executable through the Confluence connector.
+pub(crate) const CONFLUENCE_DISCOVER_PAGES_CAPABILITY: &str = "pages.discover";
+pub(crate) const CONFLUENCE_COLLECT_PAGE_CAPABILITY: &str = "pages.collect";
+
+/// The flow-step capability names executable through the `SharePoint` connector.
+pub(crate) const SHAREPOINT_DISCOVER_DOCUMENTS_CAPABILITY: &str = "documents.discover";
+pub(crate) const SHAREPOINT_DISCOVER_LISTS_CAPABILITY: &str = "lists.discover";
+
 #[must_use]
-pub(crate) fn built_in_connector_ids() -> [&'static str; 3] {
-    [GITHUB_ACTIONS, JENKINS, SONARQUBE]
+pub(crate) fn built_in_connector_ids() -> [&'static str; 6] {
+    [
+        GITHUB_ACTIONS,
+        JENKINS,
+        SONARQUBE,
+        JIRA,
+        CONFLUENCE,
+        SHAREPOINT,
+    ]
 }
 
 #[must_use]
@@ -78,6 +103,12 @@ pub(crate) struct ConnectorRuntime {
     pub(crate) jenkins_transport: Option<Arc<dyn JenkinsTransport>>,
     #[cfg(test)]
     pub(crate) sonarqube_transport: Option<Arc<dyn SonarTransport>>,
+    #[cfg(test)]
+    pub(crate) jira_transport: Option<Arc<dyn JiraTransport>>,
+    #[cfg(test)]
+    pub(crate) confluence_transport: Option<Arc<dyn ConfluenceTransport>>,
+    #[cfg(test)]
+    pub(crate) sharepoint_transport: Option<Arc<dyn SharePointTransport>>,
 }
 
 impl fmt::Debug for ConnectorRuntime {
@@ -100,6 +131,12 @@ impl ConnectorRuntime {
             jenkins_transport: None,
             #[cfg(test)]
             sonarqube_transport: None,
+            #[cfg(test)]
+            jira_transport: None,
+            #[cfg(test)]
+            confluence_transport: None,
+            #[cfg(test)]
+            sharepoint_transport: None,
         }
     }
 
@@ -263,6 +300,92 @@ impl ConnectorRuntime {
         }
         production_sonarqube_transport(token)
     }
+
+    /// Builds the Jira connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or token is invalid, or the
+    /// hardened HTTPS client cannot be initialized.
+    pub(crate) fn jira(
+        &self,
+        base_url: &str,
+        token: String,
+    ) -> Result<Jira<Arc<dyn JiraTransport>>, ConnectorSecretError> {
+        let transport = self.jira_transport_for(token)?;
+        Jira::with_base_str(base_url, transport).map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn jira_transport_for(
+        &self,
+        token: String,
+    ) -> Result<Arc<dyn JiraTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.jira_transport {
+            drop(token);
+            return Ok(Arc::clone(transport));
+        }
+        production_jira_transport(token)
+    }
+
+    /// Builds the Confluence connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or `email:api-token` secret
+    /// is invalid, or the hardened HTTPS client cannot be initialized.
+    pub(crate) fn confluence(
+        &self,
+        base_url: &str,
+        secret: String,
+    ) -> Result<Confluence<Arc<dyn ConfluenceTransport>>, ConnectorSecretError> {
+        let transport = self.confluence_transport_for(secret)?;
+        Confluence::with_base_str(base_url, transport)
+            .map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn confluence_transport_for(
+        &self,
+        secret: String,
+    ) -> Result<Arc<dyn ConfluenceTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.confluence_transport {
+            drop(secret);
+            return Ok(Arc::clone(transport));
+        }
+        production_confluence_transport(secret)
+    }
+
+    /// Builds the `SharePoint` connector against a validated HTTPS Graph base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or access token is invalid,
+    /// or the hardened HTTPS client cannot be initialized.
+    pub(crate) fn sharepoint(
+        &self,
+        base_url: &str,
+        token: String,
+    ) -> Result<SharePoint<Arc<dyn SharePointTransport>>, ConnectorSecretError> {
+        let transport = self.sharepoint_transport_for(token)?;
+        SharePoint::with_base_str(base_url, transport)
+            .map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn sharepoint_transport_for(
+        &self,
+        token: String,
+    ) -> Result<Arc<dyn SharePointTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.sharepoint_transport {
+            drop(token);
+            return Ok(Arc::clone(transport));
+        }
+        production_sharepoint_transport(token)
+    }
 }
 
 fn production_github_transport(
@@ -293,6 +416,36 @@ fn production_sonarqube_transport(
     // sends it as the HTTP Basic username with an empty password over rustls.
     let transport =
         ReqwestSonarTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_jira_transport(
+    token: String,
+) -> Result<Arc<dyn JiraTransport>, ConnectorSecretError> {
+    // The stored connector secret is one Jira Data Center personal access
+    // token; the transport sends it as an HTTP Bearer credential over rustls.
+    let transport =
+        ReqwestJiraTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_confluence_transport(
+    secret: String,
+) -> Result<Arc<dyn ConfluenceTransport>, ConnectorSecretError> {
+    // The stored connector secret is one combined `email:api-token` value; the
+    // transport splits it and authenticates with HTTP Basic over rustls.
+    let transport = ReqwestConfluenceTransport::new(Some(secret))
+        .map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_sharepoint_transport(
+    token: String,
+) -> Result<Arc<dyn SharePointTransport>, ConnectorSecretError> {
+    // The stored connector secret is one Microsoft Graph access token; the
+    // transport sends it as an HTTP Bearer credential over rustls.
+    let transport = ReqwestSharePointTransport::new(Some(token))
+        .map_err(|_| ConnectorSecretError::InvalidSecret)?;
     Ok(Arc::new(transport))
 }
 

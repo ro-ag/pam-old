@@ -24,10 +24,22 @@ use cap_std::fs::{Dir, OpenOptions};
 use nix::unistd::Uid;
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, InvocationContext,
+    confluence::{
+        VerifyCredentials as ConfluenceVerifyCredentials,
+        VerifyCredentialsRequest as ConfluenceVerifyCredentialsRequest,
+    },
     github::{VerifyCredentials, VerifyCredentialsRequest},
     jenkins::{
         VerifyCredentials as JenkinsVerifyCredentials,
         VerifyCredentialsRequest as JenkinsVerifyCredentialsRequest,
+    },
+    jira::{
+        VerifyCredentials as JiraVerifyCredentials,
+        VerifyCredentialsRequest as JiraVerifyCredentialsRequest,
+    },
+    sharepoint::{
+        VerifyCredentials as SharePointVerifyCredentials,
+        VerifyCredentialsRequest as SharePointVerifyCredentialsRequest,
     },
     sonarqube::{
         VerifyCredentials as SonarVerifyCredentials,
@@ -84,8 +96,8 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, SONARQUBE, built_in_connector_ids,
-    is_built_in,
+    CONFLUENCE, ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SHAREPOINT, SONARQUBE,
+    built_in_connector_ids, is_built_in,
 };
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
@@ -2664,6 +2676,18 @@ async fn handle_connector_test(
 
 /// Runs the bounded read-only probe. Returns sanitized detail text either way;
 /// credential values and remote bodies never appear in it.
+fn require_probe_base_url<'a>(
+    connector_id: &str,
+    base_url: Option<&'a str>,
+) -> Result<&'a str, String> {
+    base_url.ok_or_else(|| {
+        format!(
+            "connector {connector_id} requires a configured base URL; set one with \
+             connector.configure"
+        )
+    })
+}
+
 async fn run_connector_probe(
     connectors: &ConnectorRuntime,
     connector_id: &str,
@@ -2678,13 +2702,7 @@ async fn run_connector_probe(
     )
     .map_err(|_| "connector probe context could not be constructed".to_owned())?;
     if connector_id == JENKINS {
-        let Some(base_url) = base_url else {
-            return Err(
-                "connector jenkins requires a configured base URL; set one with \
-                 connector.configure"
-                    .to_owned(),
-            );
-        };
+        let base_url = require_probe_base_url(connector_id, base_url)?;
         let jenkins = connectors
             .jenkins(base_url, token)
             .map_err(|error| error.message().to_owned())?;
@@ -2697,19 +2715,52 @@ async fn run_connector_probe(
         return Ok(format!("credential verified against {base_url}"));
     }
     if connector_id == SONARQUBE {
-        let Some(base_url) = base_url else {
-            return Err(
-                "connector sonarqube requires a configured base URL; set one with \
-                 connector.configure"
-                    .to_owned(),
-            );
-        };
+        let base_url = require_probe_base_url(connector_id, base_url)?;
         let sonarqube = connectors
             .sonarqube(base_url, token)
             .map_err(|error| error.message().to_owned())?;
         let probe = Connector::<SonarVerifyCredentials>::execute(
             &sonarqube,
             SonarVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == JIRA {
+        let base_url = require_probe_base_url(connector_id, base_url)?;
+        let jira = connectors
+            .jira(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<JiraVerifyCredentials>::execute(
+            &jira,
+            JiraVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == CONFLUENCE {
+        let base_url = require_probe_base_url(connector_id, base_url)?;
+        let confluence = connectors
+            .confluence(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<ConfluenceVerifyCredentials>::execute(
+            &confluence,
+            ConfluenceVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == SHAREPOINT {
+        let base_url = require_probe_base_url(connector_id, base_url)?;
+        let sharepoint = connectors
+            .sharepoint(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<SharePointVerifyCredentials>::execute(
+            &sharepoint,
+            SharePointVerifyCredentialsRequest::default(),
             context,
         );
         await_connector_probe(probe).await?;

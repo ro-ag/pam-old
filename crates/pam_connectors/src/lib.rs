@@ -19,6 +19,8 @@ use pam_store::{AuthorizationOutcome, EffectApprovalCapability};
 use serde::{Serialize, de::DeserializeOwned};
 
 #[cfg(test)]
+mod confluence_test;
+#[cfg(test)]
 mod github_diagnosis_test;
 #[cfg(test)]
 mod github_test;
@@ -27,16 +29,23 @@ mod jenkins_diagnosis_test;
 #[cfg(test)]
 mod jenkins_test;
 #[cfg(test)]
+mod jira_test;
+#[cfg(test)]
 mod lib_test;
+#[cfg(test)]
+mod sharepoint_test;
 #[cfg(test)]
 mod sonarqube_research_test;
 #[cfg(test)]
 mod sonarqube_test;
 
+pub mod confluence;
 pub mod github;
 pub mod github_diagnosis;
 pub mod jenkins;
 pub mod jenkins_diagnosis;
+pub mod jira;
+pub mod sharepoint;
 pub mod sonarqube;
 pub mod sonarqube_research;
 
