@@ -33,21 +33,30 @@ The desktop root fills the native viewport and uses three columns:
 248px and clamps to `180px..min(420px, 45vw)`. Hiding it collapses both the
 sidebar and separator columns to zero; the toolbar toggle remains available.
 
-The workspace contains one inset canvas. At default desktop density it has a
-10px inset on the top, right, and bottom, with its left edge beginning
-immediately after the separator. The canvas has a 1px theme boundary, an 18px
+The workspace contains one inset canvas. At comfortable desktop density it has
+a 10px inset on the top, right, and bottom, with its left edge beginning
+immediately after the separator; compact density — the default — substitutes a
+6px inset without changing the shell structure. The canvas has a 1px theme boundary, an 18px
 radius, clipped outer overflow, a soft elevated shadow, and a fixed first row
 for the toolbar; only the canvas body scrolls. The root and sidebar share the
 theme chrome; the workspace is the only large floating surface.
 Desktop body scrolling and horizontal shell scrolling are failures. Recovery
 and empty-state content is bounded to 660px.
 
-Default (comfortable) spacing tokens are `4 / 8 / 12 / 16 / 20 / 24 / 32px`.
-Compact density is a real alternate scale, not another name for default:
+Comfortable spacing tokens are `4 / 8 / 12 / 16 / 20 / 24 / 32px`.
+Compact density is a real alternate scale, not another name for comfortable:
 `3 / 6 / 9 / 12 / 14 / 17 / 22px`. Components must consume tokens so the
-whole surface tightens together. The measured 10px desktop and 4px mobile
-canvas insets are default-density values; explicit compact density substitutes
-6px and 3px without changing the shell structure.
+whole surface tightens together. The measured 10px desktop canvas inset is a
+comfortable-density value; compact density substitutes 6px without changing
+the shell structure. The 4px mobile inset is fixed across densities.
+
+Density is a single `--density` factor: 1 at comfortable, 0.8 at compact.
+Compact is the default; the toggle lives in the toolbar theme menu and
+persists like theme and variant. Component vertical metrics — row min-heights,
+paddings, gaps, and dense-row leading — consume the tokens or the factor per
+the requirement above; font sizes, borders, radii, breakpoints, column widths,
+and the fixed shell geometry (248/5/52/34/68) never scale, and interactive
+targets clamp at a 28px floor.
 
 ## Sidebar, toolbar, and canvas anatomy
 
@@ -110,6 +119,12 @@ or failure.
 
 ## Responsive and accessibility rules
 
+At 1360px and above, wide viewports use a list+detail grammar instead of
+stacking: Skills and Connections place their paired panels in a two-column
+`wide-split` grid, and the Access and Activity lists flow their rows two-up.
+This widens content only; the shell geometry and all narrower breakpoints are
+unchanged.
+
 p-track has exactly three shell breakpoints; PAM inherits their intent:
 
 - At 1180px and below, compact broad content and low-value toolbar/status
@@ -118,7 +133,7 @@ p-track has exactly three shell breakpoints; PAM inherits their intent:
   and controls use `min-width: 0`; no card may force horizontal overflow.
 - At 600px and below, reflow the shell to one column, remove the separator,
   place the compact navigation row above the workspace, allow document-height
-  scrolling, use a default 4px canvas inset, and top-align dialogs and recovery
+  scrolling, use a fixed 4px canvas inset, and top-align dialogs and recovery
   cards. At 420px and below, the toolbar stays on one 52px row and hides its
   redundant breadcrumb so all icon controls remain reachable.
 
