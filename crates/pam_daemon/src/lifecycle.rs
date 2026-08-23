@@ -25,6 +25,10 @@ use nix::unistd::Uid;
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, InvocationContext,
     github::{VerifyCredentials, VerifyCredentialsRequest},
+    jenkins::{
+        VerifyCredentials as JenkinsVerifyCredentials,
+        VerifyCredentialsRequest as JenkinsVerifyCredentialsRequest,
+    },
 };
 use pam_core::{
     APPLICATION_VERSION, ApprovalId, ContentDigest, EvidenceHandle, ProjectId, RequestId,
@@ -76,7 +80,7 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, built_in_connector_ids, is_built_in,
+    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, built_in_connector_ids, is_built_in,
 };
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
@@ -2594,7 +2598,9 @@ async fn handle_connector_test(
     };
     let base_url = record.and_then(|record| record.base_url);
     let detail = match connectors.load_credential(&connector).await {
-        Ok(Some(token)) => run_connector_probe(connectors, base_url.as_deref(), token).await,
+        Ok(Some(token)) => {
+            run_connector_probe(connectors, &connector, base_url.as_deref(), token).await
+        }
         Ok(None) => Err(
             "no credential is stored for this connector; store one with connector.configure"
                 .to_owned(),
@@ -2655,12 +2661,10 @@ async fn handle_connector_test(
 /// credential values and remote bodies never appear in it.
 async fn run_connector_probe(
     connectors: &ConnectorRuntime,
+    connector_id: &str,
     base_url: Option<&str>,
     token: String,
 ) -> Result<String, String> {
-    let github = connectors
-        .github(base_url, token)
-        .map_err(|error| error.message().to_owned())?;
     let context = InvocationContext::new(
         Instant::now() + CONNECTOR_TEST_DEADLINE,
         CancellationToken::new(),
@@ -2668,21 +2672,49 @@ async fn run_connector_probe(
         None,
     )
     .map_err(|_| "connector probe context could not be constructed".to_owned())?;
+    if connector_id == JENKINS {
+        let Some(base_url) = base_url else {
+            return Err(
+                "connector jenkins requires a configured base URL; set one with \
+                 connector.configure"
+                    .to_owned(),
+            );
+        };
+        let jenkins = connectors
+            .jenkins(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<JenkinsVerifyCredentials>::execute(
+            &jenkins,
+            JenkinsVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    let github = connectors
+        .github(base_url, token)
+        .map_err(|error| error.message().to_owned())?;
     let probe = Connector::<VerifyCredentials>::execute(
         &github,
         VerifyCredentialsRequest::default(),
         context,
     );
+    await_connector_probe(probe).await?;
+    Ok(format!(
+        "credential verified against {}",
+        base_url.unwrap_or(GITHUB_DEFAULT_API_BASE)
+    ))
+}
+
+async fn await_connector_probe<T>(
+    probe: impl Future<Output = Result<T, ConnectorFailure>>,
+) -> Result<(), String> {
     let outcome = tokio::time::timeout(CONNECTOR_TEST_DEADLINE + Duration::from_secs(2), probe)
         .await
         .map_err(|_| "connector probe deadline elapsed".to_owned())?;
-    match outcome {
-        Ok(_) => Ok(format!(
-            "credential verified against {}",
-            base_url.unwrap_or(GITHUB_DEFAULT_API_BASE)
-        )),
-        Err(failure) => Err(connector_probe_failure(&failure)),
-    }
+    outcome
+        .map(drop)
+        .map_err(|failure| connector_probe_failure(&failure))
 }
 
 fn connector_probe_failure(failure: &ConnectorFailure) -> String {

@@ -21,6 +21,11 @@ use pam_connectors::{
         CollectRunLogs, CollectRunLogsRequest, DiscoverFailedRuns, DiscoverRunsRequest,
         GitHubActions, GitHubTransport, Repository, RunId as GitHubRunId,
     },
+    jenkins::{
+        BuildNumber, CollectConsoleLog, CollectConsoleLogRequest, DiscoverBuilds,
+        DiscoverBuildsRequest, DiscoverJobs, DiscoverJobsRequest, Jenkins, JenkinsTransport,
+        JobPath,
+    },
 };
 use pam_core::{ContentDigest, EvidenceHandle as StoreEvidenceHandle, ProjectId};
 use pam_flow::{
@@ -47,6 +52,8 @@ use tokio::{
 
 use crate::connectors::{
     ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
+    JENKINS, JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
+    JENKINS_DISCOVER_JOBS_CAPABILITY,
 };
 
 pub(super) const FLOW_OPERATION_KIND: &str = "flow_run";
@@ -2401,6 +2408,22 @@ enum GitHubCall {
     CollectLogs(CollectRunLogsRequest),
 }
 
+enum JenkinsCall {
+    DiscoverJobs(DiscoverJobsRequest),
+    DiscoverBuilds(DiscoverBuildsRequest),
+    CollectLog(CollectConsoleLogRequest),
+}
+
+enum PreparedCall {
+    GitHub(GitHubCall),
+    Jenkins(JenkinsCall),
+}
+
+enum BuiltCall {
+    GitHub(GitHubActions<Arc<dyn GitHubTransport>>, GitHubCall),
+    Jenkins(Jenkins<Arc<dyn JenkinsTransport>>, JenkinsCall),
+}
+
 struct ConnectorCallSuccess {
     summary: String,
     partial_reason: Option<String>,
@@ -2425,18 +2448,24 @@ async fn execute_connector_step(
     timeout_seconds: u32,
     attempt: u32,
 ) -> Result<ConnectorStepOutcome, StoreError> {
-    if step.connector != GITHUB_ACTIONS {
-        return failed_connector_outcome(
-            format!(
-                "connector {} is not built into this daemon; {CONNECTOR_RECOVERY_SURFACES}",
-                step.connector
-            ),
-            false,
-        );
-    }
-    let call = match parse_github_call(step) {
-        Ok(call) => call,
-        Err(message) => return failed_connector_outcome(message, false),
+    let call = match step.connector.as_str() {
+        GITHUB_ACTIONS => match parse_github_call(step) {
+            Ok(call) => PreparedCall::GitHub(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
+        JENKINS => match parse_jenkins_call(step) {
+            Ok(call) => PreparedCall::Jenkins(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
+        _ => {
+            return failed_connector_outcome(
+                format!(
+                    "connector {} is not built into this daemon; {CONNECTOR_RECOVERY_SURFACES}",
+                    step.connector
+                ),
+                false,
+            );
+        }
     };
     let record = store
         .list_connectors()
@@ -2467,9 +2496,29 @@ async fn execute_connector_step(
         }
         Err(error) => return failed_connector_outcome(error.message().to_owned(), true),
     };
-    let github = match connectors.github(record.base_url.as_deref(), credential) {
-        Ok(github) => github,
-        Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+    let call = match call {
+        PreparedCall::GitHub(call) => {
+            match connectors.github(record.base_url.as_deref(), credential) {
+                Ok(github) => BuiltCall::GitHub(github, call),
+                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            }
+        }
+        PreparedCall::Jenkins(call) => {
+            let Some(base_url) = record.base_url.as_deref() else {
+                return failed_connector_outcome(
+                    format!(
+                        "connector {} requires a configured base URL; \
+                         {CONNECTOR_RECOVERY_SURFACES}",
+                        step.connector
+                    ),
+                    false,
+                );
+            };
+            match connectors.jenkins(base_url, credential) {
+                Ok(jenkins) => BuiltCall::Jenkins(jenkins, call),
+                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            }
+        }
     };
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_seconds.max(1)));
     let Ok(context) =
@@ -2480,8 +2529,7 @@ async fn execute_connector_step(
             false,
         );
     };
-    let call =
-        async { Ok::<_, FlowSubmissionError>(run_github_call(&github, call, context).await) };
+    let call = async { Ok::<_, FlowSubmissionError>(run_connector_call(call, context).await) };
     match await_workspace_fingerprint_with_lease(
         call,
         leased,
@@ -2579,6 +2627,73 @@ fn parse_github_call(step: &PreparedConnectorStep) -> Result<GitHubCall, String>
     }
 }
 
+fn parse_jenkins_call(step: &PreparedConnectorStep) -> Result<JenkinsCall, String> {
+    match step.capability.as_str() {
+        JENKINS_DISCOVER_JOBS_CAPABILITY => {
+            if step.resource_kind != "server" {
+                return Err(format!(
+                    "connector capability {JENKINS_DISCOVER_JOBS_CAPABILITY} requires a resource \
+                     of kind server"
+                ));
+            }
+            DiscoverJobsRequest::new(CONNECTOR_DISCOVER_LIMIT)
+                .map(JenkinsCall::DiscoverJobs)
+                .map_err(|_| "connector job discovery bounds are invalid".to_owned())
+        }
+        JENKINS_DISCOVER_BUILDS_CAPABILITY => {
+            if step.resource_kind != "job" {
+                return Err(format!(
+                    "connector capability {JENKINS_DISCOVER_BUILDS_CAPABILITY} requires a \
+                     resource of kind job holding a Jenkins job path"
+                ));
+            }
+            let job = JobPath::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid Jenkins job path",
+                    step.resource_id
+                )
+            })?;
+            DiscoverBuildsRequest::new(job, CONNECTOR_DISCOVER_LIMIT)
+                .map(JenkinsCall::DiscoverBuilds)
+                .map_err(|_| "connector build discovery bounds are invalid".to_owned())
+        }
+        JENKINS_COLLECT_LOG_CAPABILITY => {
+            let parsed = (step.resource_kind == "build")
+                .then(|| step.resource_id.rsplit_once('/'))
+                .flatten()
+                .and_then(|(job, build)| {
+                    let job = JobPath::parse(job).ok()?;
+                    let build = BuildNumber::new(build.parse().ok()?).ok()?;
+                    Some((job, build))
+                });
+            let Some((job, build)) = parsed else {
+                return Err(format!(
+                    "connector capability {JENKINS_COLLECT_LOG_CAPABILITY} requires a resource \
+                     of kind build holding JOB_PATH/BUILD_NUMBER"
+                ));
+            };
+            CollectConsoleLogRequest::new(job, build, CONNECTOR_COLLECT_MAX_LOG_BYTES)
+                .map(JenkinsCall::CollectLog)
+                .map_err(|_| "connector console-log bounds are invalid".to_owned())
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {JENKINS_DISCOVER_JOBS_CAPABILITY}, {JENKINS_DISCOVER_BUILDS_CAPABILITY}, and \
+             {JENKINS_COLLECT_LOG_CAPABILITY}"
+        )),
+    }
+}
+
+async fn run_connector_call(
+    call: BuiltCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        BuiltCall::GitHub(github, call) => run_github_call(&github, call, context).await,
+        BuiltCall::Jenkins(jenkins, call) => run_jenkins_call(&jenkins, call, context).await,
+    }
+}
+
 async fn run_github_call(
     github: &GitHubActions<Arc<dyn GitHubTransport>>,
     call: GitHubCall,
@@ -2591,6 +2706,27 @@ async fn run_github_call(
         }
         GitHubCall::CollectLogs(request) => {
             let output = Connector::<CollectRunLogs>::execute(github, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+async fn run_jenkins_call(
+    jenkins: &Jenkins<Arc<dyn JenkinsTransport>>,
+    call: JenkinsCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        JenkinsCall::DiscoverJobs(request) => {
+            let output = Connector::<DiscoverJobs>::execute(jenkins, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        JenkinsCall::DiscoverBuilds(request) => {
+            let output = Connector::<DiscoverBuilds>::execute(jenkins, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        JenkinsCall::CollectLog(request) => {
+            let output = Connector::<CollectConsoleLog>::execute(jenkins, request, context).await?;
             Ok(connector_call_success(&output))
         }
     }
