@@ -217,11 +217,12 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
         panic!("a baseline connector list read should return a typed result")
     };
     assert_eq!(truth, OperationTruth::Observed);
-    assert_eq!(initial.connectors.len(), 4);
+    assert_eq!(initial.connectors.len(), 5);
     assert_eq!(initial.connectors[0].connector_id, "github-actions");
     assert_eq!(initial.connectors[1].connector_id, "jenkins");
     assert_eq!(initial.connectors[2].connector_id, "sonarqube");
     assert_eq!(initial.connectors[3].connector_id, "jira");
+    assert_eq!(initial.connectors[4].connector_id, "confluence");
     assert!(!initial.connectors[0].enabled);
     assert!(!initial.connectors[0].credential_present);
     assert!(initial.connectors[0].last_test_status.is_none());

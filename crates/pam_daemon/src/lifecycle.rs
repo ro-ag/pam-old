@@ -24,6 +24,10 @@ use cap_std::fs::{Dir, OpenOptions};
 use nix::unistd::Uid;
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, InvocationContext,
+    confluence::{
+        VerifyCredentials as ConfluenceVerifyCredentials,
+        VerifyCredentialsRequest as ConfluenceVerifyCredentialsRequest,
+    },
     github::{VerifyCredentials, VerifyCredentialsRequest},
     jenkins::{
         VerifyCredentials as JenkinsVerifyCredentials,
@@ -88,8 +92,8 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SONARQUBE, built_in_connector_ids,
-    is_built_in,
+    CONFLUENCE, ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SONARQUBE,
+    built_in_connector_ids, is_built_in,
 };
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
@@ -2732,6 +2736,25 @@ async fn run_connector_probe(
         let probe = Connector::<JiraVerifyCredentials>::execute(
             &jira,
             JiraVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == CONFLUENCE {
+        let Some(base_url) = base_url else {
+            return Err(
+                "connector confluence requires a configured base URL; set one with \
+                 connector.configure"
+                    .to_owned(),
+            );
+        };
+        let confluence = connectors
+            .confluence(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<ConfluenceVerifyCredentials>::execute(
+            &confluence,
+            ConfluenceVerifyCredentialsRequest::default(),
             context,
         );
         await_connector_probe(probe).await?;

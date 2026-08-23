@@ -6,6 +6,7 @@
 
 use std::{fmt, sync::Arc};
 
+use pam_connectors::confluence::{Confluence, ConfluenceTransport, ReqwestConfluenceTransport};
 use pam_connectors::github::{GitHubActions, GitHubTransport, ReqwestGitHubTransport};
 use pam_connectors::jenkins::{Jenkins, JenkinsTransport, ReqwestJenkinsTransport};
 use pam_connectors::jira::{Jira, JiraTransport, ReqwestJiraTransport};
@@ -17,6 +18,7 @@ pub(crate) const GITHUB_ACTIONS: &str = "github-actions";
 pub(crate) const JENKINS: &str = "jenkins";
 pub(crate) const SONARQUBE: &str = "sonarqube";
 pub(crate) const JIRA: &str = "jira";
+pub(crate) const CONFLUENCE: &str = "confluence";
 pub(crate) const GITHUB_DEFAULT_API_BASE: &str = "https://api.github.com/";
 pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
@@ -37,9 +39,13 @@ pub(crate) const SONARQUBE_ISSUES_CAPABILITY: &str = "issues.discover";
 pub(crate) const JIRA_DISCOVER_ISSUES_CAPABILITY: &str = "issues.discover";
 pub(crate) const JIRA_COLLECT_ISSUE_CAPABILITY: &str = "issues.collect";
 
+/// The flow-step capability names executable through the Confluence connector.
+pub(crate) const CONFLUENCE_DISCOVER_PAGES_CAPABILITY: &str = "pages.discover";
+pub(crate) const CONFLUENCE_COLLECT_PAGE_CAPABILITY: &str = "pages.collect";
+
 #[must_use]
-pub(crate) fn built_in_connector_ids() -> [&'static str; 4] {
-    [GITHUB_ACTIONS, JENKINS, SONARQUBE, JIRA]
+pub(crate) fn built_in_connector_ids() -> [&'static str; 5] {
+    [GITHUB_ACTIONS, JENKINS, SONARQUBE, JIRA, CONFLUENCE]
 }
 
 #[must_use]
@@ -86,6 +92,8 @@ pub(crate) struct ConnectorRuntime {
     pub(crate) sonarqube_transport: Option<Arc<dyn SonarTransport>>,
     #[cfg(test)]
     pub(crate) jira_transport: Option<Arc<dyn JiraTransport>>,
+    #[cfg(test)]
+    pub(crate) confluence_transport: Option<Arc<dyn ConfluenceTransport>>,
 }
 
 impl fmt::Debug for ConnectorRuntime {
@@ -110,6 +118,8 @@ impl ConnectorRuntime {
             sonarqube_transport: None,
             #[cfg(test)]
             jira_transport: None,
+            #[cfg(test)]
+            confluence_transport: None,
         }
     }
 
@@ -301,6 +311,35 @@ impl ConnectorRuntime {
         }
         production_jira_transport(token)
     }
+
+    /// Builds the Confluence connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or `email:api-token` secret
+    /// is invalid, or the hardened HTTPS client cannot be initialized.
+    pub(crate) fn confluence(
+        &self,
+        base_url: &str,
+        secret: String,
+    ) -> Result<Confluence<Arc<dyn ConfluenceTransport>>, ConnectorSecretError> {
+        let transport = self.confluence_transport_for(secret)?;
+        Confluence::with_base_str(base_url, transport)
+            .map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn confluence_transport_for(
+        &self,
+        secret: String,
+    ) -> Result<Arc<dyn ConfluenceTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.confluence_transport {
+            drop(secret);
+            return Ok(Arc::clone(transport));
+        }
+        production_confluence_transport(secret)
+    }
 }
 
 fn production_github_transport(
@@ -341,6 +380,16 @@ fn production_jira_transport(
     // token; the transport sends it as an HTTP Bearer credential over rustls.
     let transport =
         ReqwestJiraTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_confluence_transport(
+    secret: String,
+) -> Result<Arc<dyn ConfluenceTransport>, ConnectorSecretError> {
+    // The stored connector secret is one combined `email:api-token` value; the
+    // transport splits it and authenticates with HTTP Basic over rustls.
+    let transport = ReqwestConfluenceTransport::new(Some(secret))
+        .map_err(|_| ConnectorSecretError::InvalidSecret)?;
     Ok(Arc::new(transport))
 }
 

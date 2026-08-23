@@ -17,6 +17,10 @@ use cap_std::fs::{Dir, OpenOptions};
 use pam_connectors::{
     CancellationToken, Connector, ConnectorFailure, ConnectorOutput, InvocationContext,
     RetryGuidance, Truth,
+    confluence::{
+        CollectPage, CollectPageRequest, Confluence, ConfluenceTransport, Cql, DiscoverPages,
+        DiscoverPagesRequest, PageId, SpaceKey,
+    },
     github::{
         CollectRunLogs, CollectRunLogsRequest, DiscoverFailedRuns, DiscoverRunsRequest,
         GitHubActions, GitHubTransport, Repository, RunId as GitHubRunId,
@@ -60,6 +64,7 @@ use tokio::{
 };
 
 use crate::connectors::{
+    CONFLUENCE, CONFLUENCE_COLLECT_PAGE_CAPABILITY, CONFLUENCE_DISCOVER_PAGES_CAPABILITY,
     ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
     JENKINS, JENKINS_COLLECT_LOG_CAPABILITY, JENKINS_DISCOVER_BUILDS_CAPABILITY,
     JENKINS_DISCOVER_JOBS_CAPABILITY, JIRA, JIRA_COLLECT_ISSUE_CAPABILITY,
@@ -2435,11 +2440,17 @@ enum JiraCall {
     CollectIssue(CollectIssueRequest),
 }
 
+enum ConfluenceCall {
+    DiscoverPages(DiscoverPagesRequest),
+    CollectPage(CollectPageRequest),
+}
+
 enum PreparedCall {
     GitHub(GitHubCall),
     Jenkins(JenkinsCall),
     Sonar(SonarCall),
     Jira(JiraCall),
+    Confluence(ConfluenceCall),
 }
 
 enum BuiltCall {
@@ -2447,6 +2458,7 @@ enum BuiltCall {
     Jenkins(Jenkins<Arc<dyn JenkinsTransport>>, JenkinsCall),
     Sonar(SonarQube<Arc<dyn SonarTransport>>, SonarCall),
     Jira(Jira<Arc<dyn JiraTransport>>, JiraCall),
+    Confluence(Confluence<Arc<dyn ConfluenceTransport>>, ConfluenceCall),
 }
 
 struct ConnectorCallSuccess {
@@ -2488,6 +2500,10 @@ async fn execute_connector_step(
         },
         JIRA => match parse_jira_call(step) {
             Ok(call) => PreparedCall::Jira(call),
+            Err(message) => return failed_connector_outcome(message, false),
+        },
+        CONFLUENCE => match parse_confluence_call(step) {
+            Ok(call) => PreparedCall::Confluence(call),
             Err(message) => return failed_connector_outcome(message, false),
         },
         _ => {
@@ -2581,6 +2597,22 @@ async fn execute_connector_step(
             };
             match connectors.jira(base_url, credential) {
                 Ok(jira) => BuiltCall::Jira(jira, call),
+                Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+            }
+        }
+        PreparedCall::Confluence(call) => {
+            let Some(base_url) = record.base_url.as_deref() else {
+                return failed_connector_outcome(
+                    format!(
+                        "connector {} requires a configured base URL; \
+                         {CONNECTOR_RECOVERY_SURFACES}",
+                        step.connector
+                    ),
+                    false,
+                );
+            };
+            match connectors.confluence(base_url, credential) {
+                Ok(confluence) => BuiltCall::Confluence(confluence, call),
                 Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
             }
         }
@@ -2826,6 +2858,52 @@ fn parse_jira_call(step: &PreparedConnectorStep) -> Result<JiraCall, String> {
     }
 }
 
+fn parse_confluence_call(step: &PreparedConnectorStep) -> Result<ConfluenceCall, String> {
+    match step.capability.as_str() {
+        CONFLUENCE_DISCOVER_PAGES_CAPABILITY => {
+            if step.resource_kind != "project" {
+                return Err(format!(
+                    "connector capability {CONFLUENCE_DISCOVER_PAGES_CAPABILITY} requires a \
+                     resource of kind project holding a Confluence space key"
+                ));
+            }
+            let space = SpaceKey::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid Confluence space key",
+                    step.resource_id
+                )
+            })?;
+            let cql = Cql::parse(format!(
+                "space = {} and type = page order by lastmodified desc",
+                space.as_str()
+            ))
+            .map_err(|_| "connector page discovery query is invalid".to_owned())?;
+            DiscoverPagesRequest::new(space, cql, CONNECTOR_DISCOVER_LIMIT)
+                .map(ConfluenceCall::DiscoverPages)
+                .map_err(|_| "connector page discovery bounds are invalid".to_owned())
+        }
+        CONFLUENCE_COLLECT_PAGE_CAPABILITY => {
+            if step.resource_kind != "page" {
+                return Err(format!(
+                    "connector capability {CONFLUENCE_COLLECT_PAGE_CAPABILITY} requires a \
+                     resource of kind page holding a Confluence page id"
+                ));
+            }
+            let page = PageId::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid Confluence page id",
+                    step.resource_id
+                )
+            })?;
+            Ok(ConfluenceCall::CollectPage(CollectPageRequest::new(page)))
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {CONFLUENCE_DISCOVER_PAGES_CAPABILITY} and {CONFLUENCE_COLLECT_PAGE_CAPABILITY}"
+        )),
+    }
+}
+
 async fn run_connector_call(
     call: BuiltCall,
     context: InvocationContext,
@@ -2835,6 +2913,9 @@ async fn run_connector_call(
         BuiltCall::Jenkins(jenkins, call) => run_jenkins_call(&jenkins, call, context).await,
         BuiltCall::Sonar(sonarqube, call) => run_sonar_call(&sonarqube, call, context).await,
         BuiltCall::Jira(jira, call) => run_jira_call(&jira, call, context).await,
+        BuiltCall::Confluence(confluence, call) => {
+            run_confluence_call(&confluence, call, context).await
+        }
     }
 }
 
@@ -2906,6 +2987,23 @@ async fn run_jira_call(
         }
         JiraCall::CollectIssue(request) => {
             let output = Connector::<CollectIssue>::execute(jira, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+async fn run_confluence_call(
+    confluence: &Confluence<Arc<dyn ConfluenceTransport>>,
+    call: ConfluenceCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        ConfluenceCall::DiscoverPages(request) => {
+            let output = Connector::<DiscoverPages>::execute(confluence, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        ConfluenceCall::CollectPage(request) => {
+            let output = Connector::<CollectPage>::execute(confluence, request, context).await?;
             Ok(connector_call_success(&output))
         }
     }
