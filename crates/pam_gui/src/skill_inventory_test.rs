@@ -105,13 +105,13 @@ async fn local_scan_persists_inventory_and_reports_drift_once() {
 
     let first = load_skill_inventory(
         project_id.clone(),
-        SkillInventoryEnvironment::for_test(home.clone(), project.clone(), state.clone(), 10),
+        SkillInventoryEnvironment::for_test(home.clone(), Some(project.clone()), state.clone(), 10),
     )
     .await
     .unwrap();
     let second = load_skill_inventory(
         project_id,
-        SkillInventoryEnvironment::for_test(home, project, state, 20),
+        SkillInventoryEnvironment::for_test(home, Some(project), state, 20),
     )
     .await
     .unwrap();
@@ -126,6 +126,45 @@ async fn local_scan_persists_inventory_and_reports_drift_once() {
             .iter()
             .all(|artifact| !artifact.id.is_empty())
     );
+}
+
+#[tokio::test]
+async fn daemon_scope_scan_persists_only_global_artifacts_in_its_own_partition() {
+    let directory = TestDirectory::new("daemon-skill-inventory");
+    let home = directory.path().join("home");
+    let project = directory.path().join("project");
+    let skill = home.join(".claude/skills/review/SKILL.md");
+    let rule = project.join(".cursor/rules/project.mdc");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(&skill, "---\nname: review\n---\nReview changes.\n").unwrap();
+    fs::write(&rule, "---\nalwaysApply: true\n---\nUse project rules.\n").unwrap();
+    let state = directory.path().join("state.sqlite3");
+
+    let scoped = load_skill_inventory(
+        ProjectId::new("inventory-project"),
+        SkillInventoryEnvironment::for_test(home.clone(), Some(project), state.clone(), 10),
+    )
+    .await
+    .unwrap();
+    let daemon = load_skill_inventory(
+        ProjectId::daemon_scope(),
+        SkillInventoryEnvironment::for_test(home, None, state, 20),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(scoped.total, 2);
+    assert_eq!(daemon.total, 1);
+    assert!(
+        daemon
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.scope == "user")
+    );
+    // The daemon partition is independent: its first scan is all new.
+    assert_eq!(daemon.drift.added, 1);
+    assert_eq!(daemon.drift.removed, 0);
 }
 
 #[tokio::test]
@@ -148,7 +187,7 @@ async fn desktop_environment_uses_exact_user_codex_trust() {
 
     let inventory = load_skill_inventory(
         ProjectId::new("trusted-inventory-project"),
-        SkillInventoryEnvironment::for_test(home, project, state, 10),
+        SkillInventoryEnvironment::for_test(home, Some(project), state, 10),
     )
     .await
     .unwrap();

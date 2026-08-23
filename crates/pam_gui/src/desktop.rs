@@ -50,7 +50,7 @@ use crate::{
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
     skill_library::{
         SkillLibraryAction, SkillLibraryDataDto, SkillLibraryDto, SkillLibraryEnvironment,
-        SkillLibraryRequest, execute_skill_library, project_key,
+        SkillLibraryRequest, execute_skill_library, project_key, project_scope_required,
     },
 };
 
@@ -1677,7 +1677,8 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Scans and persists the active project's bounded local agent artifact inventory.
+    /// Scans and persists one scope's bounded local agent artifact inventory:
+    /// the active project, or global roots only under the daemon authority.
     ///
     /// # Errors
     ///
@@ -1685,29 +1686,33 @@ impl DesktopCore {
     /// malformed plugin registries, or unavailable durable state.
     pub async fn skill_inventory(&self, fence: CommandFence) -> DesktopResult<SkillInventoryDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
-        let environment = SkillInventoryEnvironment::discover(active.catalog.root.clone())?;
-        let data = load_skill_inventory(active.project_id.clone(), environment).await?;
+        let scope = self.begin_scoped(&fence).await?;
+        let environment = SkillInventoryEnvironment::discover(scope.project_root())?;
+        let data = load_skill_inventory(scope.project_id(), environment).await?;
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(SkillInventoryDto { fence, data })
     }
 
     /// Executes one exact metadata-only canonical skill-library action.
     ///
+    /// Actions that touch only the global manifest also run under the daemon
+    /// authority; per-project actions require an active project.
+    ///
     /// # Errors
     ///
-    /// Returns a bounded error when the fence is stale or reused, the global p-track home or
-    /// derived agent root is unsafe, or the exact library action cannot be completed.
+    /// Returns a bounded error when the fence is stale or reused, the action needs a project the
+    /// daemon scope does not have, the global p-track home or derived agent root is unsafe, or the
+    /// exact library action cannot be completed.
     pub async fn manage_skill_library(
         &self,
         request: SkillLibraryRequest,
     ) -> DesktopResult<SkillLibraryDto> {
-        self.manage_skill_library_with(request, |active, action| async move {
-            let root = active.catalog.root.clone();
-            let project = project_key(&active.project_id)?;
+        self.manage_skill_library_with(request, |scope, action| async move {
+            let root = scope.project_root();
+            let project = project_key(&scope.project_id())?;
             tokio::task::spawn_blocking(move || {
-                let environment = SkillLibraryEnvironment::discover(&root)?;
+                let environment = SkillLibraryEnvironment::discover(root.as_deref())?;
                 execute_skill_library(&environment, project, action)
             })
             .await
@@ -1727,37 +1732,39 @@ impl DesktopCore {
         work: F,
     ) -> DesktopResult<SkillLibraryDto>
     where
-        F: FnOnce(ActiveProject, SkillLibraryAction) -> Fut,
+        F: FnOnce(CommandScope, SkillLibraryAction) -> Fut,
         Fut: Future<Output = DesktopResult<SkillLibraryDataDto>>,
     {
         let _command = self.command_gate.lock().await;
         let fence = request.fence();
         let action = request.into_action();
-        let active = self.begin(&fence).await?;
-        let result = work(active.clone(), action).await;
+        let scope = self.begin_scoped(&fence).await?;
+        if matches!(scope, CommandScope::Daemon) && action.requires_project() {
+            return Err(project_scope_required());
+        }
+        let result = work(scope.clone(), action).await;
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         let data = result?;
         Ok(SkillLibraryDto { fence, data })
     }
 
-    /// Loads the latest durable audit for the active project without running an evaluator.
+    /// Loads the latest durable audit for one scope without running an evaluator.
     ///
     /// # Errors
     ///
     /// Returns a bounded error for stale authority or invalid/unavailable durable state.
     pub async fn load_skill_audit(&self, fence: CommandFence) -> DesktopResult<SkillAuditDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
-        let environment = SkillInventoryEnvironment::discover(active.catalog.root.clone())?;
-        let data =
-            load_persisted_skill_audit(active.project_id.clone(), environment.state_path()).await?;
+        let scope = self.begin_scoped(&fence).await?;
+        let environment = SkillInventoryEnvironment::discover(scope.project_root())?;
+        let data = load_persisted_skill_audit(scope.project_id(), environment.state_path()).await?;
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(SkillAuditDto { fence, data })
     }
 
-    /// Runs and persists one fresh bounded audit for the active project.
+    /// Runs and persists one fresh bounded audit for the fenced scope.
     ///
     /// # Errors
     ///
@@ -1765,11 +1772,11 @@ impl DesktopCore {
     /// or invalid/unavailable durable state.
     pub async fn run_skill_audit(&self, fence: CommandFence) -> DesktopResult<SkillAuditDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
-        let environment = SkillInventoryEnvironment::discover(active.catalog.root.clone())?;
-        let data = run_skill_audit_report(active.project_id.clone(), environment).await?;
+        let scope = self.begin_scoped(&fence).await?;
+        let environment = SkillInventoryEnvironment::discover(scope.project_root())?;
+        let data = run_skill_audit_report(scope.project_id(), environment).await?;
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(SkillAuditDto {
             fence,
             data: Some(data),
@@ -2167,6 +2174,7 @@ fn unavailable_bundle(
 
 /// The authorized scope of one fenced command: the constant daemon authority
 /// or the active project generation.
+#[derive(Clone)]
 enum CommandScope {
     Daemon,
     Project(ActiveProject),
@@ -2177,6 +2185,14 @@ impl CommandScope {
         match self {
             Self::Daemon => ProjectId::daemon_scope(),
             Self::Project(active) => active.project_id.clone(),
+        }
+    }
+
+    /// The project root this scope reads: the daemon scope has none.
+    fn project_root(&self) -> Option<PathBuf> {
+        match self {
+            Self::Daemon => None,
+            Self::Project(active) => Some(active.catalog.root.clone()),
         }
     }
 }

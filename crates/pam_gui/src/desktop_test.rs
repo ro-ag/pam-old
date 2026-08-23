@@ -1,5 +1,6 @@
 use pam_core::{
-    ApprovalId, CallerCredential, CallerId, EvidenceHandle, IdempotencyKey, ProjectId, RequestId,
+    ApprovalId, CallerCredential, CallerId, ContentDigest, EvidenceHandle, IdempotencyKey,
+    ProjectId, RequestId,
 };
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalChallenge, CallerListResult, CallerSummary,
@@ -8,6 +9,7 @@ use pam_protocol::{
     ModelFinishReason, ModelGenerationResult, ModelStatusResult, ModelSummary, ModelUsage,
     NetworkDiagnosticsResult, OperationTruth, PacState, RequestEnvelope,
 };
+use pam_skills::CanonicalEntryId;
 use std::sync::atomic::AtomicUsize;
 
 use super::{
@@ -24,12 +26,14 @@ use super::{
         connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
         current_dto_for_test, daemon_start_cwd_for_test, evidence_dto_for_test,
         failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
-        gui_registration_current_for_test, model_infer_dto_for_test, model_status_dto_for_test,
-        post_save_reload_error_for_test, registration_contract_for_test, reserve_daemon_for_test,
-        reserve_for_test, switch_authority_for_test,
+        gui_registration_current_for_test, manage_skill_library_without_io_for_test,
+        model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
+        registration_contract_for_test, reserve_daemon_for_test, reserve_for_test,
+        switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
+    skill_library::{SkillLibraryAgentDto, SkillLibraryRequest},
 };
 
 #[test]
@@ -915,13 +919,66 @@ async fn project_scoped_commands_reject_the_daemon_authority() {
     let reserve = reserve_for_test(&core, &daemon_fence(OperationId::new()))
         .await
         .unwrap_err();
-    let inventory = core
-        .skill_inventory(daemon_fence(OperationId::new()))
+    let compose = core
+        .flow_compose(daemon_fence(OperationId::new()), String::new())
         .await
         .unwrap_err();
 
     assert_eq!(reserve.kind, DesktopErrorKind::Stale);
-    assert_eq!(inventory.kind, DesktopErrorKind::Stale);
+    assert_eq!(compose.kind, DesktopErrorKind::Stale);
+}
+
+#[tokio::test]
+async fn skill_commands_accept_the_daemon_authority_without_a_project() {
+    // A replayed daemon operation conflicts before any filesystem or store
+    // work, which proves each skill command routes through the daemon
+    // authority instead of the active-project fence.
+    let core = DesktopCore::new("/bounded/test");
+    let operation = OperationId::new();
+    reserve_daemon_for_test(&core, &daemon_fence(operation.clone()))
+        .await
+        .unwrap();
+    let fence = || daemon_fence(operation.clone());
+
+    assert_daemon_replay_conflict(core.skill_inventory(fence()).await);
+    assert_daemon_replay_conflict(core.load_skill_audit(fence()).await);
+    assert_daemon_replay_conflict(core.run_skill_audit(fence()).await);
+    assert_daemon_replay_conflict(
+        core.manage_skill_library(SkillLibraryRequest::Load {
+            project_handle: ProjectHandle::parse("daemon").unwrap(),
+            generation: GenerationId::parse("daemon").unwrap(),
+            operation_id: operation.clone(),
+        })
+        .await,
+    );
+}
+
+#[tokio::test]
+async fn daemon_scoped_library_actions_are_limited_to_the_global_manifest() {
+    let core = DesktopCore::new("/bounded/test");
+    let global = SkillLibraryRequest::Load {
+        project_handle: ProjectHandle::parse("daemon").unwrap(),
+        generation: GenerationId::parse("daemon").unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let per_project = SkillLibraryRequest::Enable {
+        project_handle: ProjectHandle::parse("daemon").unwrap(),
+        generation: GenerationId::parse("daemon").unwrap(),
+        operation_id: OperationId::new(),
+        entry_id: CanonicalEntryId::parse("review").unwrap(),
+        version: ContentDigest::from_sha256([3; 32]),
+        agent: SkillLibraryAgentDto::Claude,
+    };
+
+    manage_skill_library_without_io_for_test(&core, global, None)
+        .await
+        .unwrap();
+    let rejected = manage_skill_library_without_io_for_test(&core, per_project, None)
+        .await
+        .unwrap_err();
+
+    assert_eq!(rejected.kind, DesktopErrorKind::InvalidInput);
+    assert!(rejected.message.contains("requires an active project"));
 }
 
 #[tokio::test]

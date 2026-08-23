@@ -79,14 +79,16 @@ pub(crate) struct SkillInventoryEnvironment {
     claude_plugin_registry_root: Option<PathBuf>,
     codex_system_config_root: Option<PathBuf>,
     codex_home: Option<PathBuf>,
-    project_root: PathBuf,
-    current_working_directory: PathBuf,
+    project_root: Option<PathBuf>,
+    working_root: PathBuf,
     state_path: PathBuf,
     observed_at_ms: u64,
 }
 
 impl SkillInventoryEnvironment {
-    pub(crate) fn discover(project_root: PathBuf) -> DesktopResult<Self> {
+    /// Discovers the scan environment for one scope: an active project root,
+    /// or `None` for the daemon scope, which reads global roots only.
+    pub(crate) fn discover(project_root: Option<PathBuf>) -> DesktopResult<Self> {
         let user_home = BaseDirs::new().map(|directories| directories.home_dir().to_path_buf());
         let claude_plugin_registry_root = user_home.as_ref().and_then(|home| {
             let root = home.join(".claude/plugins");
@@ -117,13 +119,14 @@ impl SkillInventoryEnvironment {
             })?
             .join("state.sqlite3");
         let observed_at_ms = now_ms()?;
+        let working_root = working_root(project_root.as_deref(), user_home.as_deref())?;
         Ok(Self {
             user_home,
             claude_plugin_registry_root,
             codex_system_config_root,
             codex_home,
-            current_working_directory: project_root.clone(),
             project_root,
+            working_root,
             state_path,
             observed_at_ms,
         })
@@ -135,14 +138,16 @@ impl SkillInventoryEnvironment {
             claude_plugin_registry_root: self.claude_plugin_registry_root.as_deref(),
             codex_system_config_root: self.codex_system_config_root.as_deref(),
             codex_home: self.codex_home.as_deref(),
-            project_root: Some(&self.project_root),
-            current_working_directory: &self.current_working_directory,
+            project_root: self.project_root.as_deref(),
+            current_working_directory: &self.working_root,
             cursor_global_rule: None,
         }
     }
 
-    pub(crate) fn project_root(&self) -> &Path {
-        &self.project_root
+    /// The directory this scope is anchored at: the active project root, or
+    /// the user home under the daemon scope.
+    pub(crate) fn working_root(&self) -> &Path {
+        &self.working_root
     }
 
     pub(crate) fn state_path(&self) -> &Path {
@@ -156,23 +161,44 @@ impl SkillInventoryEnvironment {
     #[cfg(test)]
     pub(crate) fn for_test(
         user_home: PathBuf,
-        project_root: PathBuf,
+        project_root: Option<PathBuf>,
         state_path: PathBuf,
         observed_at_ms: u64,
     ) -> Self {
         let default_codex_home = user_home.join(".codex");
         let codex_home = default_codex_home.is_dir().then_some(default_codex_home);
+        let working_root = project_root.clone().unwrap_or_else(|| user_home.clone());
         Self {
             user_home: Some(user_home),
             claude_plugin_registry_root: None,
             codex_system_config_root: None,
             codex_home,
-            current_working_directory: project_root.clone(),
             project_root,
+            working_root,
             state_path,
             observed_at_ms,
         }
     }
+}
+
+/// The daemon scope has no project root, so its scan is anchored at the user
+/// home: the bounded scan reads global roots only, and the audit evaluator
+/// runs there instead of inside a project.
+///
+// ponytail: a daemon audit therefore treats the whole home directory as the
+// audited tree, so evaluator executables installed under it are not trusted
+// for detection. Pass a real "no audited project" through `run_skills_audit`
+// if daemon audits need those evaluators.
+fn working_root(project_root: Option<&Path>, user_home: Option<&Path>) -> DesktopResult<PathBuf> {
+    project_root
+        .or(user_home)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            DesktopErrorDto::unavailable(
+                "PAM could not resolve a user home for the global skill inventory scan.",
+                Some("Activate a project, then retry the Skills view.".to_owned()),
+            )
+        })
 }
 
 pub(crate) async fn load_skill_inventory(
