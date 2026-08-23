@@ -582,7 +582,7 @@ impl<T: SharePointTransport> Connector<DiscoverLists> for SharePoint<T> {
             lists.sort_by(|left, right| left.id.cmp(&right.id));
             let count = lists.len();
             let site = request.site.as_str().to_owned();
-            let truth = if envelope.next_link.is_some() {
+            let truth = if envelope.next_link.is_some() || count == request.limit {
                 Truth::Partial {
                     reason: summary(format!("retained {count} site lists; more may exist"))?,
                 }
