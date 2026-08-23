@@ -644,7 +644,7 @@ fn adoption_copies_exact_bytes_without_changing_original_and_versions_changed_so
     let library = CanonicalLibrary::open(home.path()).unwrap();
     let entry_id = CanonicalEntryId::parse("review").unwrap();
     let first_scan = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits::default(),
     )
     .into_scan_report();
@@ -680,7 +680,7 @@ fn adoption_copies_exact_bytes_without_changing_original_and_versions_changed_so
     let second_bytes = b"---\ndescription: review changes\n---\nprivate second source\n";
     project.write(relative, second_bytes);
     let second_scan = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits::default(),
     )
     .into_scan_report();

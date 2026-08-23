@@ -29,7 +29,7 @@ pub struct LocalInventoryRoots<'a> {
     pub claude_plugin_registry_root: Option<&'a Path>,
     pub codex_system_config_root: Option<&'a Path>,
     pub codex_home: Option<&'a Path>,
-    pub project_root: &'a Path,
+    pub project_root: Option<&'a Path>,
     pub current_working_directory: &'a Path,
     pub cursor_global_rule: Option<CursorGlobalRuleSource<'a>>,
 }
@@ -83,21 +83,23 @@ pub fn scan_local_inventory(
     limits: ScanLimits,
 ) -> Result<LocalInventoryReport, LocalInventoryError> {
     let plugins = plugin_roots(roots, limits)?;
-    let codex_project_trust =
-        resolve_codex_project_trust(roots.codex_home, roots.project_root, limits)?;
+    let codex_project_trust = match roots.project_root {
+        Some(project_root) => resolve_codex_project_trust(roots.codex_home, project_root, limits)?,
+        None => CodexProjectTrust::Unspecified,
+    };
     let plugin_views = plugins
         .iter()
         .map(|plugin| ClaudePluginRoot::new(&plugin.id, &plugin.path))
         .collect::<Vec<_>>();
     let claude = scan_claude_code(
-        ClaudeScanRoots::new(roots.user_home, Some(roots.project_root), &plugin_views),
+        ClaudeScanRoots::new(roots.user_home, roots.project_root, &plugin_views),
         limits,
     );
     let codex = scan_codex(
         crate::CodexScanRoots::new(
             roots.codex_system_config_root,
             roots.codex_home,
-            Some(roots.project_root),
+            roots.project_root,
             Some(roots.current_working_directory),
             codex_project_trust == CodexProjectTrust::Trusted,
         ),
@@ -174,7 +176,9 @@ fn plugin_roots(
         .as_ref()
         .and_then(|root| session.read_optional_file(root, Path::new(USER_SETTINGS_FILE)));
 
-    let project_root = session.open_root(roots.project_root, "", "claude_project");
+    let project_root = roots
+        .project_root
+        .and_then(|root| session.open_root(root, "", "claude_project"));
     let project_settings = project_root
         .as_ref()
         .and_then(|root| session.read_optional_file(root, Path::new(PROJECT_SETTINGS_FILE)));
@@ -241,16 +245,22 @@ fn parse_settings(
 fn select_plugin_roots(
     registry: PluginRegistry,
     mut enabled_plugins: BTreeMap<String, bool>,
-    project_root: &Path,
+    project_root: Option<&Path>,
 ) -> Result<Vec<OwnedPluginRoot>, LocalInventoryError> {
-    let canonical_project_root = fs::canonicalize(project_root)
-        .map_err(|_| LocalInventoryError::UnsafePluginProjectPath("<project>".to_owned()))?;
+    let canonical_project_root = project_root
+        .map(|root| {
+            fs::canonicalize(root)
+                .map_err(|_| LocalInventoryError::UnsafePluginProjectPath("<project>".to_owned()))
+        })
+        .transpose()?;
     let mut selected = Vec::new();
 
     for (id, installations) in registry.plugins {
         let applicable = installations
             .into_iter()
-            .filter(|installation| installation_applies(installation, &canonical_project_root))
+            .filter(|installation| {
+                installation_applies(installation, canonical_project_root.as_deref())
+            })
             .collect::<Vec<_>>();
         let enabled = enabled_plugins.remove(&id);
         if applicable.is_empty() {
@@ -292,15 +302,17 @@ fn select_plugin_roots(
     Ok(selected)
 }
 
-fn installation_applies(installation: &PluginInstallation, project_root: &Path) -> bool {
+fn installation_applies(installation: &PluginInstallation, project_root: Option<&Path>) -> bool {
     match installation.scope {
         PluginScope::Managed => false,
         PluginScope::User => true,
-        PluginScope::Project | PluginScope::Local => installation
-            .project_path
-            .as_deref()
-            .and_then(|path| fs::canonicalize(path).ok())
-            .is_some_and(|path| path == project_root),
+        PluginScope::Project | PluginScope::Local => project_root.is_some_and(|project_root| {
+            installation
+                .project_path
+                .as_deref()
+                .and_then(|path| fs::canonicalize(path).ok())
+                .is_some_and(|path| path == project_root)
+        }),
     }
 }
 

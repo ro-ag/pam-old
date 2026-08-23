@@ -97,7 +97,7 @@ fn static_fixture_tree_scans_through_native_paths() {
     );
 
     let cursor = scan_cursor(
-        CursorScanRoots::new(&project, &cwd, None),
+        CursorScanRoots::new(Some(project.as_path()), &cwd, None),
         ScanLimits::default(),
     );
     assert!(cursor.complete(), "{:?}", cursor.diagnostics());

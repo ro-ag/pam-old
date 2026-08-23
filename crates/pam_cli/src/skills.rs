@@ -283,7 +283,7 @@ impl SkillsEnvironment {
             claude_plugin_registry_root: self.claude_plugin_registry_root.as_deref(),
             codex_system_config_root: self.codex_system_config_root.as_deref(),
             codex_home: self.codex_home.as_deref(),
-            project_root: self.project.root(),
+            project_root: Some(self.project.root()),
             current_working_directory: self.project.root(),
             cursor_global_rule: None,
         }
@@ -1035,9 +1035,13 @@ pub(crate) async fn run_audit(request: AuditRequest<'_>) -> Result<AuditOutput, 
             inventory.diagnostics().to_vec(),
         ));
     }
+    let audited_project = request
+        .roots
+        .project_root
+        .expect("CLI audits always scan a project root");
     let report = run_skills_audit(
         inventory.scan_report(),
-        request.roots.project_root,
+        audited_project,
         request.injected_path,
         request.evaluator_config,
     )
