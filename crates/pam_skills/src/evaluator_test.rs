@@ -68,7 +68,7 @@ fn joined_path(paths: &[&Path]) -> OsString {
 fn detect_single(bin: &Path, project: &Path) -> DetectedEvaluator {
     detect_evaluator(
         &joined_path(&[bin, Path::new("/bin"), Path::new("/usr/bin")]),
-        project,
+        Some(project),
     )
     .unwrap()
     .unwrap()
@@ -92,7 +92,7 @@ fn detection_ignores_unsupported_headless_clients_and_selects_claude() {
     write_stub(&first, "codex", "printf codex");
     let claude = write_stub(&second, "claude", "printf claude");
 
-    let detected = detect_evaluator(&joined_path(&[&first, &second]), &project)
+    let detected = detect_evaluator(&joined_path(&[&first, &second]), Some(&project))
         .unwrap()
         .unwrap();
 
@@ -110,7 +110,7 @@ fn codex_and_cursor_are_not_detected_without_verified_tool_free_modes() {
     write_stub(&bin, "cursor-agent", "printf should-not-run");
 
     assert!(
-        detect_evaluator(&joined_path(&[&bin]), &project)
+        detect_evaluator(&joined_path(&[&bin]), Some(&project))
             .unwrap()
             .is_none()
     );
@@ -129,9 +129,12 @@ fn relative_path_entries_and_non_executable_files_are_ignored() {
         .unwrap();
 
     assert!(
-        detect_evaluator(&joined_path(&[relative_bin, &non_executable_bin]), &project,)
-            .unwrap()
-            .is_none()
+        detect_evaluator(
+            &joined_path(&[relative_bin, &non_executable_bin]),
+            Some(&project)
+        )
+        .unwrap()
+        .is_none()
     );
 }
 
@@ -144,10 +147,48 @@ fn executables_inside_the_audited_project_are_rejected() {
     write_stub(&bin, "claude", "printf should-not-run");
 
     assert!(
-        detect_evaluator(&joined_path(&[&bin]), &project)
+        detect_evaluator(&joined_path(&[&bin]), Some(&project))
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn a_global_audit_without_an_audited_project_keeps_every_path_entry() {
+    let test = TestDirectory::new("no-audited-project");
+    let home = test.directory("home");
+    let claude_bin = home.join(".claude/local");
+    let shim_bin = home.join(".local/bin");
+    fs::create_dir_all(&claude_bin).unwrap();
+    fs::create_dir_all(&shim_bin).unwrap();
+    let shim_sentinel = test.file("shim-ran");
+    write_stub(
+        &shim_bin,
+        "pam-shim-helper",
+        &format!(": > {}", shell_path(&shim_sentinel)),
+    );
+    let claude = write_stub(
+        &claude_bin,
+        "claude",
+        "pam-shim-helper\nprintf 'stub response'",
+    );
+    let path = joined_path(&[&claude_bin, &shim_bin]);
+
+    // Audited as a project, this whole tree is distrusted and nothing is found.
+    assert!(detect_evaluator(&path, Some(&home)).unwrap().is_none());
+
+    let detected = detect_evaluator(&path, None).unwrap().unwrap();
+    let response = run_evaluator(
+        &detected,
+        "private prompt over stdin",
+        test_config(Duration::from_secs(2), 1024, 1024),
+    )
+    .unwrap();
+
+    assert_eq!(detected.executable(), fs::canonicalize(claude).unwrap());
+    assert_eq!(response, "stub response");
+    // The sanitized PATH handed to the evaluator still reaches every entry.
+    assert!(shim_sentinel.exists());
 }
 
 #[test]
@@ -204,7 +245,7 @@ fn claude_runs_once_with_no_tools_sanitized_path_stdin_and_an_empty_workspace() 
             Path::new("/bin"),
             Path::new("/usr/bin"),
         ]),
-        &project,
+        Some(&project),
     )
     .unwrap()
     .unwrap();

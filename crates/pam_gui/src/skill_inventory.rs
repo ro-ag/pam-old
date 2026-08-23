@@ -144,10 +144,10 @@ impl SkillInventoryEnvironment {
         }
     }
 
-    /// The directory this scope is anchored at: the active project root, or
-    /// the user home under the daemon scope.
-    pub(crate) fn working_root(&self) -> &Path {
-        &self.working_root
+    /// The project tree the audit distrusts: none under the daemon scope,
+    /// which audits global roots only.
+    pub(crate) fn audited_project(&self) -> Option<&Path> {
+        self.project_root.as_deref()
     }
 
     pub(crate) fn state_path(&self) -> &Path {
@@ -181,14 +181,8 @@ impl SkillInventoryEnvironment {
     }
 }
 
-/// The daemon scope has no project root, so its scan is anchored at the user
-/// home: the bounded scan reads global roots only, and the audit evaluator
-/// runs there instead of inside a project.
-///
-// ponytail: a daemon audit therefore treats the whole home directory as the
-// audited tree, so evaluator executables installed under it are not trusted
-// for detection. Pass a real "no audited project" through `run_skills_audit`
-// if daemon audits need those evaluators.
+/// The daemon scope has no project root, so its bounded scan is anchored at
+/// the user home and reads global roots only.
 fn working_root(project_root: Option<&Path>, user_home: Option<&Path>) -> DesktopResult<PathBuf> {
     project_root
         .or(user_home)
@@ -196,7 +190,10 @@ fn working_root(project_root: Option<&Path>, user_home: Option<&Path>) -> Deskto
         .ok_or_else(|| {
             DesktopErrorDto::unavailable(
                 "PAM could not resolve a user home for the global skill inventory scan.",
-                Some("Activate a project, then retry the Skills view.".to_owned()),
+                Some(
+                    "Verify the operating system user home directory, then retry the Skills view."
+                        .to_owned(),
+                ),
             )
         })
 }

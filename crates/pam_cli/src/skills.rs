@@ -1035,13 +1035,9 @@ pub(crate) async fn run_audit(request: AuditRequest<'_>) -> Result<AuditOutput, 
             inventory.diagnostics().to_vec(),
         ));
     }
-    let audited_project = request
-        .roots
-        .project_root
-        .expect("CLI audits always scan a project root");
     let report = run_skills_audit(
         inventory.scan_report(),
-        audited_project,
+        request.roots.project_root,
         request.injected_path,
         request.evaluator_config,
     )
