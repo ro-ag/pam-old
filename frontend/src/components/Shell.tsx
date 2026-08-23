@@ -35,7 +35,7 @@ import {
   sidebarWidthFromKey,
 } from "../layout";
 import type { DaemonView, ProjectView } from "../selectors";
-import type { PamTheme, PamThemeMode } from "../theme";
+import type { PamDensity, PamTheme, PamThemeMode } from "../theme";
 
 export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof Pulse }> = [
   { id: "control-center", label: "Control Center", icon: SquaresFour },
@@ -403,13 +403,17 @@ export function ResizeSeparator({
 export function ThemeMenu({
   theme,
   themeMode,
+  density,
   onThemeChange,
   onThemeModeChange,
+  onDensityChange,
 }: {
   theme: PamTheme;
   themeMode: PamThemeMode;
+  density: PamDensity;
   onThemeChange: (theme: PamTheme) => void;
   onThemeModeChange: (mode: PamThemeMode) => void;
+  onDensityChange: (density: PamDensity) => void;
 }) {
   return (
     <DropdownMenu.Root>
@@ -454,6 +458,20 @@ export function ThemeMenu({
               <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
             </DropdownMenu.RadioItem>
           </DropdownMenu.RadioGroup>
+          <DropdownMenu.Separator className="theme-menu-separator" />
+          <DropdownMenu.Label className="theme-menu-label">Density</DropdownMenu.Label>
+          <DropdownMenu.RadioGroup value={density} onValueChange={(value) => onDensityChange(value as PamDensity)}>
+            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="comfortable" textValue="Comfortable density">
+              <SquaresFour size={19} aria-hidden="true" />
+              <span><strong>Comfortable</strong><small>Roomier spacing</small></span>
+              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
+            </DropdownMenu.RadioItem>
+            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="compact" textValue="Compact density">
+              <Queue size={19} aria-hidden="true" />
+              <span><strong>Compact</strong><small>More rows on screen</small></span>
+              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
+            </DropdownMenu.RadioItem>
+          </DropdownMenu.RadioGroup>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -468,8 +486,10 @@ export function Toolbar({
   pending,
   theme,
   themeMode,
+  density,
   onThemeChange,
   onThemeModeChange,
+  onDensityChange,
   onToggleSidebar,
   onRefresh,
   onOpenCommand,
@@ -485,8 +505,10 @@ export function Toolbar({
   pending: boolean;
   theme: PamTheme;
   themeMode: PamThemeMode;
+  density: PamDensity;
   onThemeChange: (theme: PamTheme) => void;
   onThemeModeChange: (mode: PamThemeMode) => void;
+  onDensityChange: (density: PamDensity) => void;
   onToggleSidebar: () => void;
   onRefresh: () => void;
   onOpenCommand: (returnFocusTarget?: HTMLElement) => void;
@@ -532,8 +554,10 @@ export function Toolbar({
         <ThemeMenu
           theme={theme}
           themeMode={themeMode}
+          density={density}
           onThemeChange={onThemeChange}
           onThemeModeChange={onThemeModeChange}
+          onDensityChange={onDensityChange}
         />
       </div>
     </header>

@@ -4,7 +4,7 @@ import { App } from "./App";
 import { createFixtureBridge, createTauriBridge } from "./bridge";
 import type { ViewId } from "./domain";
 import { fixtureScenario } from "./fixtures";
-import { applyPamTheme, readPersistedPamTheme, readPersistedPamThemeMode } from "./theme";
+import { applyPamDensity, applyPamTheme, readPersistedPamDensity, readPersistedPamTheme, readPersistedPamThemeMode } from "./theme";
 import "./styles.css";
 
 const explicitFixtureMode = import.meta.env.DEV && import.meta.env.MODE === "fixture";
@@ -22,6 +22,7 @@ if ("__TAURI_INTERNALS__" in window && /Macintosh|Mac OS X/.test(window.navigato
   document.documentElement.dataset.nativeShell = "macos";
 }
 applyPamTheme(initialTheme, initialThemeMode);
+applyPamDensity(readPersistedPamDensity(themeStorage));
 
 const application = (
   <App bridge={bridge} initialView={initialView} initialTheme={initialTheme} initialThemeMode={initialThemeMode} />

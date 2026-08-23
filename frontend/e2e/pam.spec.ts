@@ -98,8 +98,8 @@ test.describe("responsive visual contract", () => {
         expect(geometry.sidebar?.width).toBe(248);
         expect(geometry.separator?.width).toBe(5);
         expect(geometry.workspace?.x).toBe(253);
-        expect(geometry.workspace?.y).toBe(10);
-        expect(geometry.workspace?.right).toBe(width - 10);
+        expect(geometry.workspace?.y).toBe(6);
+        expect(geometry.workspace?.right).toBe(width - 6);
         expect(geometry.toolbar?.height).toBe(52);
       } else if (width > 600) {
         expect(geometry.sidebar?.width).toBe(68);
@@ -442,7 +442,7 @@ test.describe("Skills audit tab", () => {
         workspaceRight: workspace?.right ?? -1,
       };
     });
-    expect(geometry).toEqual({ sidebar: 248, separator: 5, toolbar: 52, workspaceRight: 1_170 });
+    expect(geometry).toEqual({ sidebar: 248, separator: 5, toolbar: 52, workspaceRight: 1_174 });
 
     const ranked = page.getByRole("region", { name: "Ranked artifacts" });
     const verdict = page.getByRole("region", { name: "Evaluator verdict" });

@@ -2,14 +2,18 @@ import { setTheme as setNativeTheme } from "@tauri-apps/api/app";
 
 export const pamThemes = ["ventisquero", "vina"] as const;
 export const pamThemeModes = ["light", "dark"] as const;
+export const pamDensities = ["comfortable", "compact"] as const;
 
 export type PamTheme = typeof pamThemes[number];
 export type PamThemeMode = typeof pamThemeModes[number];
+export type PamDensity = typeof pamDensities[number];
 
 export const defaultPamTheme: PamTheme = "ventisquero";
 export const defaultPamThemeMode: PamThemeMode = "light";
+export const defaultPamDensity: PamDensity = "compact";
 export const pamThemeStorageKey = "pam-theme";
 export const pamThemeModeStorageKey = "pam-theme-mode";
+export const pamDensityStorageKey = "pam-density";
 
 let lastNativeThemeMode: PamThemeMode | null = null;
 
@@ -24,6 +28,37 @@ export function storedPamTheme(value: unknown): PamTheme {
 
 export function storedPamThemeMode(value: unknown): PamThemeMode {
   return pamThemeModes.includes(value as PamThemeMode) ? value as PamThemeMode : defaultPamThemeMode;
+}
+
+export function storedPamDensity(value: unknown): PamDensity {
+  return pamDensities.includes(value as PamDensity) ? value as PamDensity : defaultPamDensity;
+}
+
+export function readPersistedPamDensity(storage: ThemeStorage | null | undefined): PamDensity {
+  try {
+    return storedPamDensity(storage?.getItem(pamDensityStorageKey) ?? null);
+  } catch {
+    return defaultPamDensity;
+  }
+}
+
+export function writePersistedPamDensity(
+  storage: ThemeStorage | null | undefined,
+  density: PamDensity,
+): void {
+  try {
+    storage?.setItem(pamDensityStorageKey, density);
+  } catch {
+    // Density persistence is optional; switching the live UI must still work.
+  }
+}
+
+export function applyPamDensity(density: PamDensity): void {
+  if (density === "compact") {
+    document.documentElement.dataset.density = "compact";
+  } else {
+    delete document.documentElement.dataset.density;
+  }
 }
 
 export function readPersistedPamTheme(storage: ThemeStorage | null | undefined): PamTheme {
