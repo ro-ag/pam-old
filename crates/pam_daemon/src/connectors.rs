@@ -7,10 +7,14 @@
 use std::{fmt, sync::Arc};
 
 use pam_connectors::github::{GitHubActions, GitHubTransport, ReqwestGitHubTransport};
+use pam_connectors::jenkins::{Jenkins, JenkinsTransport, ReqwestJenkinsTransport};
+use pam_connectors::sonarqube::{ReqwestSonarTransport, SonarQube, SonarTransport};
 use pam_core::CallerCredential;
 use pam_platform::{NativeSecretBackend, SecretBackend, SecretBackendError, SecretLocator};
 
 pub(crate) const GITHUB_ACTIONS: &str = "github-actions";
+pub(crate) const JENKINS: &str = "jenkins";
+pub(crate) const SONARQUBE: &str = "sonarqube";
 pub(crate) const GITHUB_DEFAULT_API_BASE: &str = "https://api.github.com/";
 pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 
@@ -18,9 +22,18 @@ pub(crate) const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
 pub(crate) const GITHUB_DISCOVER_CAPABILITY: &str = "runs.discover-failed";
 pub(crate) const GITHUB_COLLECT_LOGS_CAPABILITY: &str = "runs.collect-logs";
 
+/// The flow-step capability names executable through the Jenkins connector.
+pub(crate) const JENKINS_DISCOVER_JOBS_CAPABILITY: &str = "jobs.discover";
+pub(crate) const JENKINS_DISCOVER_BUILDS_CAPABILITY: &str = "builds.discover";
+pub(crate) const JENKINS_COLLECT_LOG_CAPABILITY: &str = "builds.collect-log";
+
+/// The flow-step capability names executable through the `SonarQube` connector.
+pub(crate) const SONARQUBE_GATE_CAPABILITY: &str = "gate.inspect";
+pub(crate) const SONARQUBE_ISSUES_CAPABILITY: &str = "issues.discover";
+
 #[must_use]
-pub(crate) fn built_in_connector_ids() -> [&'static str; 1] {
-    [GITHUB_ACTIONS]
+pub(crate) fn built_in_connector_ids() -> [&'static str; 3] {
+    [GITHUB_ACTIONS, JENKINS, SONARQUBE]
 }
 
 #[must_use]
@@ -61,6 +74,10 @@ pub(crate) struct ConnectorRuntime {
     secret_backend: Option<Arc<dyn SecretBackend + Send + Sync>>,
     #[cfg(test)]
     pub(crate) github_transport: Option<Arc<dyn GitHubTransport>>,
+    #[cfg(test)]
+    pub(crate) jenkins_transport: Option<Arc<dyn JenkinsTransport>>,
+    #[cfg(test)]
+    pub(crate) sonarqube_transport: Option<Arc<dyn SonarTransport>>,
 }
 
 impl fmt::Debug for ConnectorRuntime {
@@ -79,6 +96,10 @@ impl ConnectorRuntime {
             secret_backend,
             #[cfg(test)]
             github_transport: None,
+            #[cfg(test)]
+            jenkins_transport: None,
+            #[cfg(test)]
+            sonarqube_transport: None,
         }
     }
 
@@ -185,6 +206,63 @@ impl ConnectorRuntime {
         }
         production_github_transport(token)
     }
+
+    /// Builds the Jenkins connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or `user:token` secret is
+    /// invalid, or the hardened HTTPS client cannot be initialized.
+    pub(crate) fn jenkins(
+        &self,
+        base_url: &str,
+        secret: String,
+    ) -> Result<Jenkins<Arc<dyn JenkinsTransport>>, ConnectorSecretError> {
+        let transport = self.jenkins_transport_for(secret)?;
+        Jenkins::with_base_str(base_url, transport).map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn jenkins_transport_for(
+        &self,
+        secret: String,
+    ) -> Result<Arc<dyn JenkinsTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.jenkins_transport {
+            drop(secret);
+            return Ok(Arc::clone(transport));
+        }
+        production_jenkins_transport(secret)
+    }
+
+    /// Builds the `SonarQube` connector against a validated HTTPS API base.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized error when the base URL or token is invalid, or the
+    /// hardened HTTPS client cannot be initialized.
+    pub(crate) fn sonarqube(
+        &self,
+        base_url: &str,
+        token: String,
+    ) -> Result<SonarQube<Arc<dyn SonarTransport>>, ConnectorSecretError> {
+        let transport = self.sonarqube_transport_for(token)?;
+        SonarQube::with_base_str(base_url, transport)
+            .map_err(|_| ConnectorSecretError::InvalidSecret)
+    }
+
+    #[cfg_attr(not(test), allow(clippy::unused_self))] // The test seam lives on `self`.
+    fn sonarqube_transport_for(
+        &self,
+        token: String,
+    ) -> Result<Arc<dyn SonarTransport>, ConnectorSecretError> {
+        #[cfg(test)]
+        if let Some(transport) = &self.sonarqube_transport {
+            drop(token);
+            return Ok(Arc::clone(transport));
+        }
+        production_sonarqube_transport(token)
+    }
 }
 
 fn production_github_transport(
@@ -195,6 +273,26 @@ fn production_github_transport(
     // (the connector validates redirect targets itself).
     let transport = ReqwestGitHubTransport::new(Some(token))
         .map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_jenkins_transport(
+    secret: String,
+) -> Result<Arc<dyn JenkinsTransport>, ConnectorSecretError> {
+    // The stored connector secret is one combined `user:api-token` value; the
+    // transport splits it and authenticates with HTTP Basic over rustls.
+    let transport = ReqwestJenkinsTransport::new(Some(secret))
+        .map_err(|_| ConnectorSecretError::InvalidSecret)?;
+    Ok(Arc::new(transport))
+}
+
+fn production_sonarqube_transport(
+    token: String,
+) -> Result<Arc<dyn SonarTransport>, ConnectorSecretError> {
+    // The stored connector secret is one SonarQube user token; the transport
+    // sends it as the HTTP Basic username with an empty password over rustls.
+    let transport =
+        ReqwestSonarTransport::new(Some(token)).map_err(|_| ConnectorSecretError::InvalidSecret)?;
     Ok(Arc::new(transport))
 }
 

@@ -23,10 +23,22 @@ mod github_diagnosis_test;
 #[cfg(test)]
 mod github_test;
 #[cfg(test)]
+mod jenkins_diagnosis_test;
+#[cfg(test)]
+mod jenkins_test;
+#[cfg(test)]
 mod lib_test;
+#[cfg(test)]
+mod sonarqube_research_test;
+#[cfg(test)]
+mod sonarqube_test;
 
 pub mod github;
 pub mod github_diagnosis;
+pub mod jenkins;
+pub mod jenkins_diagnosis;
+pub mod sonarqube;
+pub mod sonarqube_research;
 
 pub const MAX_CONNECTOR_NAME_BYTES: usize = 128;
 pub const MAX_CONNECTOR_VERSION_BYTES: usize = 64;
