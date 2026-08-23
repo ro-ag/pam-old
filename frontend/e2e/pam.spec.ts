@@ -581,4 +581,23 @@ test.describe("Skills library tab", () => {
     expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
     expect(horizontal.shellScroll).toBe(horizontal.shellClient);
   });
+
+  test("serves the daemon-scoped inventory and audit without an active project, gating assignment on a project pick", async ({ page }) => {
+    await page.setViewportSize({ width: 1_180, height: 1_000 });
+    await openSkills(page, "Inventory", "global-only");
+
+    await expect(page.getByRole("heading", { name: "Skill inventory" })).toBeVisible();
+    await expect(page.getByText("Global review checklist")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Library" }).click();
+    const panel = page.getByRole("region", { name: "Skill library" });
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText("Assignment needs a project; the library above stays global.")).toBeVisible();
+    await expect(panel.getByText(/Pick a project to manage targets/)).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Enable target" })).toHaveCount(0);
+    await expect(panel.getByLabel("Canonical library entries").getByText("review-changes")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Audit" }).click();
+    await expect(page.getByRole("heading", { name: "Evaluator verdict" })).toBeVisible();
+  });
 });

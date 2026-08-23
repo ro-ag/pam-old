@@ -81,7 +81,7 @@ fn scan(entries: Vec<(AgentArtifact, Vec<u8>)>) -> super::ScanReport {
 fn empty_path_report(scan: &super::ScanReport, project: &TestProject) -> SkillsAuditReport {
     run_skills_audit(
         scan,
-        project.path(),
+        Some(project.path()),
         OsStr::new(""),
         EvaluatorRunConfig::default(),
     )
@@ -277,7 +277,7 @@ fn invalid_project_is_a_typed_fatal_error_after_footprint_build() {
 
     let error = run_skills_audit(
         &scan,
-        &missing_project,
+        Some(&missing_project),
         OsStr::new(""),
         EvaluatorRunConfig::default(),
     )
@@ -407,7 +407,7 @@ fn unix_stub_evaluator_runs_one_complete_private_audit_through_stdin() {
 
     let report = run_skills_audit(
         &audit_scan,
-        project.path(),
+        Some(project.path()),
         &injected_path(evaluator.path()),
         EvaluatorRunConfig::new(Duration::from_secs(2), 256 * 1024, 256 * 1024, 1024).unwrap(),
     )
@@ -548,7 +548,7 @@ fn escape_heavy_prompt_is_rejected_at_the_serialized_byte_cap_before_invocation(
 
     let report = run_skills_audit(
         &audit_scan,
-        project.path(),
+        Some(project.path()),
         &injected_path(evaluator.path()),
         EvaluatorRunConfig::new(Duration::from_secs(2), maximum_prompt_bytes, 1024, 1024).unwrap(),
     )
@@ -658,7 +658,7 @@ fn rejected_and_nonzero_stubs_retain_the_same_private_footprint_with_failed_stat
 
         let report = run_skills_audit(
             &audit_scan,
-            project.path(),
+            Some(project.path()),
             &injected_path(evaluator.path()),
             EvaluatorRunConfig::new(Duration::from_secs(2), 256 * 1024, 256 * 1024, 1024).unwrap(),
         )

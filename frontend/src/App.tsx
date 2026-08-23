@@ -705,14 +705,16 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               {state.activeView === "access" && (projectData
                 ? <AccessView contextBar={projectContextBar} data={projectData} />
                 : projectPlaceholder("Access", "Narrow capabilities, visible to the developer."))}
-              {state.activeView === "skills" && (projectData && state.activeFence ? (
+              {state.activeView === "skills" && (
                 <SkillsView
-                  key={`${state.activeFence.projectHandle}:${state.activeFence.generation}`}
+                  key={state.activeFence ? `${state.activeFence.projectHandle}:${state.activeFence.generation}` : `skills:daemon:${refreshTick}`}
                   bridge={bridge}
                   fence={state.activeFence}
+                  projects={state.catalog.projects}
+                  onSelectProject={selectProject}
                   contextBar={projectContextBar}
                 />
-              ) : projectPlaceholder("Skills", "What the agents carry with them, kept in view."))}
+              )}
               {state.activeView === "flows" && (projectData && state.activeFence
                 ? <FlowsView bridge={bridge} fence={state.activeFence} contextBar={projectContextBar} onError={showToast} onToast={showToast} />
                 : projectPlaceholder("Flows", "Repeatable work, with meaningful feedback."))}

@@ -301,9 +301,25 @@ function solvedSnapshot(project: ProjectSummaryDto, daemonRunning: boolean): Sna
   return data;
 }
 
-function skillInventory(empty: boolean): SkillInventoryDataDto {
+// The daemon authority sees only what lives outside any project root.
+function skillInventory(empty: boolean, global: boolean): SkillInventoryDataDto {
   const artifacts = empty
     ? []
+    : global
+    ? [
+        {
+          id: "artifact:sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          name: "Global review checklist",
+          logicalPath: "~/.claude/skills/global-review/SKILL.md",
+          kind: "skill",
+          scope: "user",
+          origin: "claude_code",
+          loadSemantics: "model_selected",
+          contentHash: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          firstSeenAtMs: 1_777_000_000_000,
+          lastChangedAtMs: 1_777_000_000_000,
+        },
+      ]
     : [
         {
           id: "artifact:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -845,7 +861,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       return fenceResponse(fence, data);
     },
     async loadFlowWorkspace(fence) { return fenceResponse(fence, workspace()); },
-    async loadSkillInventory(fence) { return fenceResponse(fence, skillInventory(scenario === "empty")); },
+    async loadSkillInventory(fence) {
+      return fenceResponse(fence, skillInventory(scenario === "empty", fence.projectHandle === "daemon"));
+    },
     async manageSkillLibrary(fence, action) {
       let data: SkillLibraryActionResultDto;
       if (action.action === "load") {

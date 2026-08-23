@@ -58,7 +58,7 @@ fn classifies_all_mdc_semantics_and_nested_project_sources() {
     project.write("crates/app/deeper/AGENTS.md", b"below cwd\n");
     let cwd = project.path().join("crates/app");
 
-    let roots = CursorScanRoots::new(project.path(), &cwd, None);
+    let roots = CursorScanRoots::new(Some(project.path()), &cwd, None);
     let report = scan_cursor(roots, ScanLimits::default());
     assert!(report.complete(), "{:?}", report.diagnostics());
     assert_eq!(
@@ -156,7 +156,7 @@ fn global_rule_is_only_read_from_an_explicit_source_and_legacy_is_root_only() {
     let source = CursorGlobalRuleSource::new(global.path(), "rules/global.md".as_ref());
 
     let report = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), Some(source)),
+        CursorScanRoots::new(Some(project.path()), project.path(), Some(source)),
         ScanLimits::default(),
     );
     assert!(report.complete(), "{:?}", report.diagnostics());
@@ -197,13 +197,54 @@ fn global_rule_is_only_read_from_an_explicit_source_and_legacy_is_root_only() {
     );
 
     let absent = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits::default(),
     );
     assert!(absent.complete(), "{:?}", absent.diagnostics());
     assert_eq!(
         serde_json::to_value(absent.global_rules_status()).unwrap(),
         "not_locally_discoverable"
+    );
+}
+
+#[test]
+fn absent_project_root_skips_project_scan_but_keeps_global_rules() {
+    let project = TestDirectory::new("cursor-no-project-root");
+    project.write(".cursorrules", b"legacy root\n");
+    project.write(
+        ".cursor/rules/manual.mdc",
+        b"---\nalwaysApply: true\n---\nmanual\n",
+    );
+    project.write("AGENTS.md", b"project agents\n");
+    let global = TestDirectory::new("cursor-no-project-root-global");
+    global.write("rules/global.md", b"global body\n");
+    let source = CursorGlobalRuleSource::new(global.path(), "rules/global.md".as_ref());
+    let cwd = project.path().to_path_buf();
+
+    let report = scan_cursor(
+        CursorScanRoots::new(None, &cwd, Some(source)),
+        ScanLimits::default(),
+    );
+    assert!(report.complete(), "{:?}", report.diagnostics());
+    assert_eq!(
+        report.global_rules_status(),
+        CursorGlobalRulesStatus::ExplicitlyConfigured
+    );
+    assert_eq!(
+        artifact(
+            report.artifacts(),
+            "rules/global.md",
+            ArtifactKind::Rule,
+            ArtifactScope::User,
+        )
+        .load_semantics(),
+        LoadSemantics::Always
+    );
+    assert!(
+        report
+            .artifacts()
+            .iter()
+            .all(|artifact| artifact.scope() != ArtifactScope::Project)
     );
 }
 
@@ -216,7 +257,7 @@ fn invalid_and_non_utf8_frontmatter_are_typed_without_losing_hashes() {
     project.write(".cursor/rules/binary.mdc", binary);
 
     let report = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits::default(),
     );
     assert!(!report.complete());
@@ -265,7 +306,7 @@ fn invalid_project_root_to_cwd_relation_is_typed() {
     let outside = TestDirectory::new("cursor-outside-cwd");
 
     let report = scan_cursor(
-        CursorScanRoots::new(project.path(), outside.path(), None),
+        CursorScanRoots::new(Some(project.path()), outside.path(), None),
         ScanLimits::default(),
     );
     assert!(
@@ -283,7 +324,7 @@ fn inherited_file_bounds_produce_partial_output() {
     project.write("AGENTS.md", b"1234");
 
     let report = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits {
             max_file_bytes: 4,
             ..ScanLimits::default()
@@ -318,7 +359,7 @@ fn inherited_symlink_policy_rejects_rule_escape() {
     .unwrap();
 
     let report = scan_cursor(
-        CursorScanRoots::new(project.path(), project.path(), None),
+        CursorScanRoots::new(Some(project.path()), project.path(), None),
         ScanLimits::default(),
     );
     assert!(report.diagnostics().iter().any(|diagnostic| {

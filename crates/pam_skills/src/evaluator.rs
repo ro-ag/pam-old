@@ -124,36 +124,50 @@ impl Error for EvaluatorDetectionError {}
 /// Detects a supported evaluator using an injected `PATH` value.
 ///
 /// Only absolute, canonical directories and canonical regular executable files are considered.
-/// Entries and executable targets inside the audited project are ignored. On Unix, Claude is the
-/// only evaluator whose current headless interface provides PAM's required tool-free mode. Other
-/// platforms return no evaluator because `std` alone cannot contain the complete descendant tree.
+/// Entries and executable targets inside the audited project are ignored; a `None` audited project
+/// is a global audit with no untrusted project tree, so nothing is filtered out. On Unix, Claude is
+/// the only evaluator whose current headless interface provides PAM's required tool-free mode.
+/// Other platforms return no evaluator because `std` alone cannot contain the complete descendant
+/// tree.
 ///
 /// # Errors
 ///
-/// Returns [`EvaluatorDetectionError::InvalidAuditedProject`] when the audited project cannot be
-/// resolved to a canonical directory.
+/// Returns [`EvaluatorDetectionError::InvalidAuditedProject`] when a given audited project cannot
+/// be resolved to a canonical directory.
 pub fn detect_evaluator(
     injected_path: &OsStr,
-    audited_project: &Path,
+    audited_project: Option<&Path>,
 ) -> Result<Option<DetectedEvaluator>, EvaluatorDetectionError> {
-    let canonical_project = fs::canonicalize(audited_project)
-        .map_err(|_| EvaluatorDetectionError::InvalidAuditedProject)?;
-    if !canonical_project.is_dir() {
-        return Err(EvaluatorDetectionError::InvalidAuditedProject);
-    }
+    let canonical_project = match audited_project {
+        None => None,
+        Some(project) => {
+            let canonical = fs::canonicalize(project)
+                .map_err(|_| EvaluatorDetectionError::InvalidAuditedProject)?;
+            if !canonical.is_dir() {
+                return Err(EvaluatorDetectionError::InvalidAuditedProject);
+            }
+            Some(canonical)
+        }
+    };
 
     #[cfg(not(unix))]
     {
         let _ = injected_path;
+        let _ = canonical_project;
         return Ok(None);
     }
 
     #[cfg(unix)]
     {
+        let inside_project = |path: &Path| {
+            canonical_project
+                .as_ref()
+                .is_some_and(|project| path.starts_with(project))
+        };
         let directories = env::split_paths(injected_path)
             .filter(|directory| directory.is_absolute())
             .filter_map(|directory| fs::canonicalize(directory).ok())
-            .filter(|directory| directory.is_dir() && !directory.starts_with(&canonical_project))
+            .filter(|directory| directory.is_dir() && !inside_project(directory))
             // A single entry that cannot be represented in PATH would make join_paths fail for the
             // entire accepted set. Discard it before both detection and execution.
             .filter(|directory| env::join_paths([directory]).is_ok())
@@ -166,8 +180,7 @@ pub fn detect_evaluator(
                 let Ok(executable) = fs::canonicalize(candidate) else {
                     continue;
                 };
-                if executable.starts_with(&canonical_project) || !is_regular_executable(&executable)
-                {
+                if inside_project(&executable) || !is_regular_executable(&executable) {
                     continue;
                 }
                 return Ok(Some(DetectedEvaluator {

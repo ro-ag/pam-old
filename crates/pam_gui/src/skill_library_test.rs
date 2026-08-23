@@ -73,11 +73,91 @@ fn environment(
     }
     let project = LibraryProjectKey::parse("project-test").unwrap();
     (
-        SkillLibraryEnvironment::for_test(ptrack_home.clone(), &project_root, &user_home),
+        SkillLibraryEnvironment::for_test(ptrack_home.clone(), Some(&project_root), &user_home),
         project,
         ptrack_home,
         project_root,
     )
+}
+
+/// The daemon scope shares the global p-track home with the project scope and
+/// has no project root at all.
+fn daemon_environment(directory: &TestDirectory) -> (SkillLibraryEnvironment, LibraryProjectKey) {
+    (
+        SkillLibraryEnvironment::for_test(
+            directory.path().join("ptrack-home"),
+            None,
+            &directory.path().join("home"),
+        ),
+        LibraryProjectKey::parse("daemon").unwrap(),
+    )
+}
+
+#[test]
+fn daemon_scope_reaches_the_global_manifest_without_per_project_state() {
+    let directory = TestDirectory::new("daemon-scope");
+    let (project_environment, project, ptrack_home, _) = environment(&directory);
+    let (daemon_environment, daemon) = daemon_environment(&directory);
+    let library = CanonicalLibrary::open(&ptrack_home).unwrap();
+    let entry = CanonicalEntryId::parse("review").unwrap();
+    let version = library
+        .insert(entry.clone(), b"review GUI bytes\n")
+        .unwrap()
+        .version()
+        .clone();
+    library
+        .enable(LibraryEnablementKey::new(
+            entry.clone(),
+            version.clone(),
+            OriginAgent::ClaudeCode,
+            project.clone(),
+        ))
+        .unwrap();
+    drop(library);
+
+    let scoped =
+        execute_skill_library(&project_environment, project, SkillLibraryAction::Load).unwrap();
+    let global = execute_skill_library(
+        &daemon_environment,
+        daemon.clone(),
+        SkillLibraryAction::Load,
+    )
+    .unwrap();
+    let rejected = execute_skill_library(
+        &daemon_environment,
+        daemon,
+        SkillLibraryAction::InspectDrift {
+            entry_id: entry,
+            version,
+            agent: SkillLibraryAgentDto::Claude,
+        },
+    )
+    .unwrap_err();
+
+    let (
+        SkillLibraryDataDto::Load {
+            entries: scoped, ..
+        },
+        SkillLibraryDataDto::Load {
+            entries: global, ..
+        },
+    ) = (&scoped, &global)
+    else {
+        panic!("expected load DTOs");
+    };
+    // One global manifest, read under both scopes.
+    assert_eq!(scoped[0].entry_id, "review");
+    assert_eq!(global[0].entry_id, "review");
+    assert_eq!(scoped[0].versions[0].version, global[0].versions[0].version);
+    // The project enablement belongs to the project, not to the daemon scope.
+    assert_eq!(
+        scoped[0].versions[0].enabled_agents,
+        vec![SkillLibraryAgentDto::Claude]
+    );
+    assert!(global[0].versions[0].enabled_agents.is_empty());
+    assert!(global[0].versions[0].managed_agents.is_empty());
+    assert_eq!(rejected.kind, DesktopErrorKind::InvalidInput);
+    assert!(rejected.message.contains("requires an active project"));
 }
 
 #[test]

@@ -235,7 +235,7 @@ async fn run_skill_audit_with_path(
         }
         let report = run_skills_audit(
             inventory.scan_report(),
-            scan_environment.project_root(),
+            scan_environment.audited_project(),
             &injected_path,
             EvaluatorRunConfig::default(),
         )

@@ -70,7 +70,7 @@ function SkillInventoryContent({ bridge, fence }: SkillInventoryPanelProps) {
             <span>Cursor global rules: {label(inventory.cursorGlobalRulesStatus)}.</span>
           </div>
           {inventory.artifacts.length === 0 ? (
-            <p className="panel-empty">No supported agent artifacts were found for this project.</p>
+            <p className="panel-empty">No supported agent artifacts were found in this scope.</p>
           ) : (
             <div className="skill-inventory-list">
               {inventory.artifacts.map((artifact) => (

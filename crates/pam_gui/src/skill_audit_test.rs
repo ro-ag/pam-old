@@ -118,8 +118,12 @@ fn environment(
     let state = directory.path().join("state.sqlite3");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&project).unwrap();
-    let environment =
-        SkillInventoryEnvironment::for_test(home, project.clone(), state.clone(), observed_at_ms);
+    let environment = SkillInventoryEnvironment::for_test(
+        home,
+        Some(project.clone()),
+        state.clone(),
+        observed_at_ms,
+    );
     (project, state, environment)
 }
 
@@ -200,6 +204,49 @@ async fn explicit_empty_path_run_persists_pretty_json_and_exposes_no_sources() {
     for forbidden in ["sourceBody", "reportJson", "executable", "stderr", "prompt"] {
         assert!(!response.contains(forbidden));
     }
+}
+
+#[tokio::test]
+async fn daemon_scope_audit_runs_and_reloads_from_its_own_partition() {
+    let directory = TestDirectory::new("daemon-scope");
+    let home = directory.path().join("home");
+    let project = directory.path().join("project");
+    let user_skill = home.join(".claude/CLAUDE.md");
+    let project_rule = project.join(".cursor/rules/project.mdc");
+    fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
+    fs::create_dir_all(project_rule.parent().unwrap()).unwrap();
+    fs::write(&user_skill, "Global instructions.\n").unwrap();
+    fs::write(
+        &project_rule,
+        "---\nalwaysApply: true\n---\nProject rules.\n",
+    )
+    .unwrap();
+    let state = directory.path().join("state.sqlite3");
+    let environment = SkillInventoryEnvironment::for_test(home, None, state.clone(), 77);
+
+    let ran =
+        run_skill_audit_with_path_for_test(ProjectId::daemon_scope(), environment, OsStr::new(""))
+            .await
+            .unwrap();
+    let loaded = load_persisted_skill_audit(ProjectId::daemon_scope(), &state)
+        .await
+        .unwrap();
+
+    assert_eq!(loaded.as_ref(), Some(&ran));
+    assert_eq!(ran.observed_at_ms, 77);
+    assert!(
+        ran.footprint
+            .scope_totals
+            .iter()
+            .all(|total| total.scope == "user")
+    );
+    // The audit is partitioned: no project shares the daemon report.
+    assert!(
+        load_persisted_skill_audit(ProjectId::new("audit-project"), &state)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

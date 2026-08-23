@@ -27,7 +27,7 @@ impl<'a> CursorGlobalRuleSource<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct CursorScanRoots<'a> {
-    pub project_root: &'a Path,
+    pub project_root: Option<&'a Path>,
     pub current_working_directory: &'a Path,
     pub global_rule: Option<CursorGlobalRuleSource<'a>>,
 }
@@ -35,7 +35,7 @@ pub struct CursorScanRoots<'a> {
 impl<'a> CursorScanRoots<'a> {
     #[must_use]
     pub const fn new(
-        project_root: &'a Path,
+        project_root: Option<&'a Path>,
         current_working_directory: &'a Path,
         global_rule: Option<CursorGlobalRuleSource<'a>>,
     ) -> Self {
@@ -104,7 +104,8 @@ pub fn scan_cursor(roots: CursorScanRoots<'_>, limits: ScanLimits) -> CursorScan
         None => CursorGlobalRulesStatus::NotLocallyDiscoverable,
     };
 
-    if let Some(root) = session.open_root(roots.project_root, "", "project")
+    if let Some(project_root) = roots.project_root
+        && let Some(root) = session.open_root(project_root, "", "project")
         && let Some(directories) =
             project_directories(&mut session, &root, roots.current_working_directory)
     {

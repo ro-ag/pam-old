@@ -15,7 +15,7 @@ fn roots<'a>(
         claude_plugin_registry_root: registry.map(TestDirectory::path),
         codex_system_config_root: None,
         codex_home: None,
-        project_root: project.path(),
+        project_root: Some(project.path()),
         current_working_directory: project.path(),
         cursor_global_rule: None,
     }
@@ -73,6 +73,36 @@ fn merges_all_adapters_into_one_deterministic_report() {
         report,
         scan_local_inventory(roots(&project, None, None), ScanLimits::default()).unwrap()
     );
+}
+
+#[test]
+fn project_root_none_scans_only_global_scope_artifacts() {
+    let project = TestDirectory::new("local-global-only-project");
+    project.write("CLAUDE.md", b"project claude\n");
+    project.write("AGENTS.md", b"project agents\n");
+    project.write(
+        ".cursor/rules/manual.mdc",
+        b"---\nalwaysApply: true\n---\nmanual\n",
+    );
+
+    let home = TestDirectory::new("local-global-only-home");
+    home.write(".claude/CLAUDE.md", b"user claude\n");
+
+    let mut global_roots = roots(&project, Some(&home), None);
+    global_roots.project_root = None;
+    global_roots.current_working_directory = home.path();
+
+    let report = scan_local_inventory(global_roots, ScanLimits::default()).unwrap();
+    assert!(report.complete(), "{:?}", report.diagnostics());
+    assert!(report.artifacts().iter().any(|artifact| {
+        artifact.origin() == OriginAgent::ClaudeCode && artifact.scope() == ArtifactScope::User
+    }));
+    assert!(report.artifacts().iter().all(|artifact| {
+        !matches!(
+            artifact.scope(),
+            ArtifactScope::Project | ArtifactScope::Local
+        )
+    }));
 }
 
 #[test]

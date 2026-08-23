@@ -142,9 +142,12 @@ impl Error for SkillsAuditError {}
 /// [`SkillsAuditError::InvalidProject`] when evaluator detection cannot validate the audited
 /// project, or [`SkillsAuditError::InternalEncoding`] when the bounded prompt cannot be encoded.
 /// Fatal errors never retain or display scan contents or paths.
+///
+/// A `None` audited project is a global audit: no project tree is distrusted, so evaluator
+/// detection filters no `PATH` entry.
 pub fn run_skills_audit(
     scan: &ScanReport,
-    audited_project: &Path,
+    audited_project: Option<&Path>,
     injected_path: &OsStr,
     evaluator_config: EvaluatorRunConfig,
 ) -> Result<SkillsAuditReport, SkillsAuditError> {

@@ -350,6 +350,28 @@ pub(crate) enum SkillLibraryAction {
     },
 }
 
+impl SkillLibraryAction {
+    /// Reports whether this action reads or writes per-project state:
+    /// enablements, managed copies, or a materialization root inside the
+    /// project. Actions that touch only the global manifest run under the
+    /// daemon scope as well.
+    pub(crate) const fn requires_project(&self) -> bool {
+        match self {
+            Self::Load
+            | Self::Adopt { .. }
+            | Self::InstallLocal { .. }
+            | Self::InstallGit { .. } => false,
+            Self::Enable { .. }
+            | Self::Disable { .. }
+            | Self::PreviewMaterialization { .. }
+            | Self::ApplyMaterialization { .. }
+            | Self::InspectDrift { .. }
+            | Self::PreviewResync { .. }
+            | Self::ApplyResync { .. } => true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillLibraryAgentDto {
@@ -574,13 +596,16 @@ pub enum SkillLibraryDriftConflictDto {
 pub(crate) struct SkillLibraryEnvironment {
     ptrack_home: PathBuf,
     inventory: SkillInventoryEnvironment,
-    claude_root: PathBuf,
+    claude_root: Option<PathBuf>,
     codex_root: PathBuf,
-    cursor_root: PathBuf,
+    cursor_root: Option<PathBuf>,
 }
 
 impl SkillLibraryEnvironment {
-    pub(crate) fn discover(project_root: &Path) -> DesktopResult<Self> {
+    /// Discovers the library environment for one scope: an active project
+    /// root, or `None` for the daemon scope, which has no per-project agent
+    /// roots and reaches only the global manifest.
+    pub(crate) fn discover(project_root: Option<&Path>) -> DesktopResult<Self> {
         let home = BaseDirs::new()
             .map(|directories| directories.home_dir().to_path_buf())
             .ok_or_else(|| {
@@ -594,40 +619,55 @@ impl SkillLibraryEnvironment {
             env::var_os("PTRACK_HOME").map(PathBuf::from),
             env::var_os("CODEX_HOME").map(PathBuf::from),
         )?;
-        let inventory = SkillInventoryEnvironment::discover(project_root.to_path_buf())?;
+        let inventory = SkillInventoryEnvironment::discover(project_root.map(Path::to_path_buf))?;
         Ok(Self {
             ptrack_home,
             inventory,
-            claude_root: project_root.join(".claude"),
+            claude_root: project_root.map(|root| root.join(".claude")),
             codex_root,
-            cursor_root: project_root.join(".cursor"),
+            cursor_root: project_root.map(|root| root.join(".cursor")),
         })
     }
 
-    fn root(&self, agent: SkillLibraryAgentDto) -> &Path {
+    fn root(&self, agent: SkillLibraryAgentDto) -> DesktopResult<&Path> {
         match agent {
-            SkillLibraryAgentDto::Claude => &self.claude_root,
-            SkillLibraryAgentDto::Codex => &self.codex_root,
-            SkillLibraryAgentDto::Cursor => &self.cursor_root,
+            SkillLibraryAgentDto::Claude => self.claude_root.as_deref(),
+            SkillLibraryAgentDto::Codex => Some(self.codex_root.as_path()),
+            SkillLibraryAgentDto::Cursor => self.cursor_root.as_deref(),
         }
+        .ok_or_else(project_scope_required)
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(ptrack_home: PathBuf, project_root: &Path, user_home: &Path) -> Self {
+    pub(crate) fn for_test(
+        ptrack_home: PathBuf,
+        project_root: Option<&Path>,
+        user_home: &Path,
+    ) -> Self {
         let state = ptrack_home.join("unused-state.sqlite3");
         Self {
             ptrack_home,
             inventory: SkillInventoryEnvironment::for_test(
                 user_home.to_path_buf(),
-                project_root.to_path_buf(),
+                project_root.map(Path::to_path_buf),
                 state,
                 1,
             ),
-            claude_root: project_root.join(".claude"),
+            claude_root: project_root.map(|root| root.join(".claude")),
             codex_root: user_home.join(".codex"),
-            cursor_root: project_root.join(".cursor"),
+            cursor_root: project_root.map(|root| root.join(".cursor")),
         }
     }
+}
+
+/// Per-project library state cannot exist under the daemon scope: the caller
+/// must activate a project first.
+pub(crate) fn project_scope_required() -> DesktopErrorDto {
+    DesktopErrorDto::new(
+        DesktopErrorKind::InvalidInput,
+        "This skill library action requires an active project.",
+        Some("Activate a project, then retry this library action.".to_owned()),
+    )
 }
 
 pub(crate) fn execute_skill_library(
@@ -777,7 +817,7 @@ fn disable_action(
     agent: SkillLibraryAgentDto,
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project, entry_id, version, agent);
-    let outcome = disable_materialization(library, &key, environment.root(agent))
+    let outcome = disable_materialization(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     Ok(SkillLibraryDataDto::Disable {
         schema_version: SKILL_LIBRARY_DTO_SCHEMA_VERSION,
@@ -797,7 +837,7 @@ fn preview_materialization_action(
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project, entry_id, version, agent);
     require_enabled(library, &key)?;
-    let plan = plan_managed_materialization(library, &key, environment.root(agent))
+    let plan = plan_managed_materialization(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     Ok(SkillLibraryDataDto::PreviewMaterialization {
         schema_version: SKILL_LIBRARY_DTO_SCHEMA_VERSION,
@@ -815,7 +855,7 @@ fn apply_materialization_action(
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project.clone(), entry_id, version, agent);
     require_enabled(library, &key)?;
-    let plan = plan_managed_materialization(library, &key, environment.root(agent))
+    let plan = plan_managed_materialization(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     let applied =
         apply_managed_materialization(library, &key, &plan).map_err(materialization_error)?;
@@ -839,7 +879,7 @@ fn inspect_drift_action(
     agent: SkillLibraryAgentDto,
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project, entry_id, version, agent);
-    let inspection = inspect_materialization_drift(library, &key, environment.root(agent))
+    let inspection = inspect_materialization_drift(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     Ok(SkillLibraryDataDto::InspectDrift {
         schema_version: SKILL_LIBRARY_DTO_SCHEMA_VERSION,
@@ -856,7 +896,7 @@ fn preview_resync_action(
     agent: SkillLibraryAgentDto,
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project, entry_id, version, agent);
-    let plan = plan_materialization_resync(library, &key, environment.root(agent))
+    let plan = plan_materialization_resync(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     Ok(SkillLibraryDataDto::PreviewResync {
         schema_version: SKILL_LIBRARY_DTO_SCHEMA_VERSION,
@@ -873,7 +913,7 @@ fn apply_resync_action(
     agent: SkillLibraryAgentDto,
 ) -> DesktopResult<SkillLibraryDataDto> {
     let key = enablement_key(project, entry_id, version, agent);
-    let plan = plan_materialization_resync(library, &key, environment.root(agent))
+    let plan = plan_materialization_resync(library, &key, environment.root(agent)?)
         .map_err(materialization_error)?;
     let applied =
         apply_materialization_resync(library, &key, &plan).map_err(materialization_error)?;
@@ -943,7 +983,10 @@ fn managed_agents_for(
     .into_iter()
     .filter(|agent| {
         let key = enablement_key(project.clone(), entry_id.clone(), version.clone(), *agent);
-        current_managed_root(environment.root(*agent))
+        environment
+            .root(*agent)
+            .ok()
+            .and_then(current_managed_root)
             .is_some_and(|root| snapshot.is_managed_at(&key, &root))
     })
     .collect()

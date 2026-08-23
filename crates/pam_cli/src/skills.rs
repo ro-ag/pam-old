@@ -283,7 +283,7 @@ impl SkillsEnvironment {
             claude_plugin_registry_root: self.claude_plugin_registry_root.as_deref(),
             codex_system_config_root: self.codex_system_config_root.as_deref(),
             codex_home: self.codex_home.as_deref(),
-            project_root: self.project.root(),
+            project_root: Some(self.project.root()),
             current_working_directory: self.project.root(),
             cursor_global_rule: None,
         }

@@ -1220,11 +1220,36 @@ describe("global-first workspace", () => {
     render(<App bridge={fixtureBridge("global-only")} />);
     await screen.findByRole("heading", { name: "No projects discovered yet" });
 
-    for (const [button, heading] of [["Access", "Access"], ["Skills", "Skills"], ["Flows", "Flows"]] as const) {
+    for (const [button, heading] of [["Access", "Access"], ["Flows", "Flows"]] as const) {
       await user.click(screen.getByRole("button", { name: button }));
       expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
     }
+
+    // Skills is global first: it serves the daemon scope instead of the hint.
+    await user.click(screen.getByRole("button", { name: "Skills" }));
+    expect(await screen.findByRole("heading", { name: "Skill inventory" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
+  });
+
+  it("serves Skills under the daemon authority and picks a project for assignment", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = vi.fn(async () => ({ ...(await originalBootstrap()), snapshot: null }));
+    const inventory = vi.spyOn(bridge, "loadSkillInventory");
+    render(<App bridge={bridge} initialView="skills" />);
+
+    expect(await screen.findByText("Global review checklist")).toBeInTheDocument();
+    expect(inventory.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+
+    await user.click(screen.getByRole("tab", { name: "Library" }));
+    expect(await screen.findByText(/Pick a project to manage targets/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /payments-api/ }));
+    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("Now watching payments-api");
   });
 
   it("offers an inline picker without an active project and activates the selection", async () => {
@@ -1232,7 +1257,7 @@ describe("global-first workspace", () => {
     const bridge = fixtureBridge();
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => ({ ...(await originalBootstrap()), snapshot: null }));
-    render(<App bridge={bridge} initialView="skills" />);
+    render(<App bridge={bridge} initialView="access" />);
 
     expect(await screen.findByRole("heading", { name: "Pick a project to bring its queue into view." })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /payments-api/ }));
