@@ -49,11 +49,15 @@ import { AccessView } from "./views/ProjectViews";
 import { SkillsView } from "./views/SkillsView";
 import { appReducer, initialState, presentError } from "./state";
 import {
+  applyPamDensity,
   applyPamTheme,
+  readPersistedPamDensity,
   readPersistedPamTheme,
   readPersistedPamThemeMode,
+  writePersistedPamDensity,
   writePersistedPamTheme,
   writePersistedPamThemeMode,
+  type PamDensity,
   type PamTheme,
   type PamThemeMode,
 } from "./theme";
@@ -124,6 +128,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const [initialLayout] = useState(readInitialLayout);
   const [theme, setTheme] = useState<PamTheme>(() => initialTheme ?? readPersistedPamTheme(initialLayout.storage));
   const [themeMode, setThemeMode] = useState<PamThemeMode>(() => initialThemeMode ?? readPersistedPamThemeMode(initialLayout.storage));
+  const [density, setDensity] = useState<PamDensity>(() => readPersistedPamDensity(initialLayout.storage));
   const [viewportWidth, setViewportWidth] = useState(initialLayout.viewportWidth);
   const [compactViewport, setCompactViewport] = useState(initialLayout.compactViewport);
   const [state, dispatch] = useReducer(appReducer, {
@@ -198,6 +203,8 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
 
   useEffect(() => applyPamTheme(theme, themeMode), [theme, themeMode]);
 
+  useEffect(() => applyPamDensity(density), [density]);
+
   useEffect(() => {
     const query = window.matchMedia("(max-width: 780px)");
     const update = () => {
@@ -239,6 +246,12 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     setTheme(nextTheme);
     writePersistedPamTheme(storageRef.current, nextTheme);
   }, [themeMode]);
+
+  const selectDensity = useCallback((nextDensity: PamDensity) => {
+    applyPamDensity(nextDensity);
+    setDensity(nextDensity);
+    writePersistedPamDensity(storageRef.current, nextDensity);
+  }, []);
 
   const selectThemeMode = useCallback((nextMode: PamThemeMode) => {
     applyPamTheme(theme, nextMode);
@@ -662,7 +675,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         {mobileSidebarOpen && <button type="button" className="sidebar-scrim" aria-label="Close project sidebar" tabIndex={-1} onClick={toggleSidebar} />}
         <ResizeSeparator collapsed={state.sidebarCollapsed || compactViewport} width={state.sidebarWidth} viewportWidth={viewportWidth} onResizePreview={previewSidebarWidth} onResizeCommit={commitSidebarWidth} onToggle={toggleSidebar} />
         <section className="workspace" inert={mobileSidebarOpen || undefined} aria-hidden={mobileSidebarOpen || undefined}>
-          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} projectName={projectData?.project.name ?? null} queueCount={projectData ? projectData.current.queue.length : null} fixture={projectData?.fixture ?? bridge.mode === "fixture"} collapsed={state.sidebarCollapsed} pending={busy} theme={theme} themeMode={themeMode} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
+          <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} projectName={projectData?.project.name ?? null} queueCount={projectData ? projectData.current.queue.length : null} fixture={projectData?.fixture ?? bridge.mode === "fixture"} collapsed={state.sidebarCollapsed} pending={busy} theme={theme} themeMode={themeMode} density={density} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onDensityChange={selectDensity} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
           <div className="workspace-body">
           {state.loadState === "recovering" && state.error && <div className="inline-recovery" role="alert"><WarningCircle size={18} /><span>{state.error}</span><button type="button" onClick={refresh}>Retry</button></div>}
           <AnimatePresence mode="wait" initial={false}>

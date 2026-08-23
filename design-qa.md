@@ -169,3 +169,24 @@ different. The theme board compares all four PAM appearances at the same
   and narrowly scoped app-theme permission.
 
 final result: passed
+
+## Addendum — 2026-08-22 density pass
+
+- PAM now ships a two-step density scale: comfortable (`--density: 1`) and
+  compact (`--density: 0.8`). Compact is the default; the toggle lives in the
+  toolbar theme menu next to family and variant and persists the same way.
+- Component vertical metrics — row min-heights, paddings, gaps, and dense-row
+  leading — scale with the factor or the spacing tokens. Font sizes, borders,
+  radii, breakpoints, column widths, and the fixed shell geometry do not;
+  interactive targets clamp at a 28px floor. The desktop canvas inset is 10px
+  comfortable / 6px compact.
+- Measured compact row heights shrink 15–20% against comfortable across the
+  access list, skill inventory, skill library entries, connectors, flow
+  catalog, queue drawer, command palette, and both shell menus.
+- At 1360px and above, Skills and Connections use a two-column list+detail
+  split and the Access and Activity lists flow two-up.
+- All 18 Playwright visual baselines were re-recorded under the compact
+  default and eyeballed; the four theme appearances differ only in palette.
+  Typecheck, Vitest, the Playwright suite, and the production build pass.
+
+final result: passed

@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { setTheme as setNativeTheme } from "@tauri-apps/api/app";
 import {
+  applyPamDensity,
   applyPamTheme,
+  defaultPamDensity,
+  pamDensityStorageKey,
+  readPersistedPamDensity,
+  storedPamDensity,
+  writePersistedPamDensity,
   defaultPamTheme,
   defaultPamThemeMode,
   pamThemeModeStorageKey,
@@ -49,6 +55,27 @@ describe("PAM themes", () => {
     expect(setItem).toHaveBeenCalledWith(pamThemeStorageKey, "vina");
     writePersistedPamThemeMode({ getItem: vi.fn(), setItem }, "dark");
     expect(setItem).toHaveBeenCalledWith(pamThemeModeStorageKey, "dark");
+  });
+
+  it("defaults density to compact and persists it under the PAM key", () => {
+    expect(storedPamDensity("comfortable")).toBe("comfortable");
+    expect(storedPamDensity("compact")).toBe("compact");
+    expect(storedPamDensity(null)).toBe(defaultPamDensity);
+    expect(defaultPamDensity).toBe("compact");
+    expect(readPersistedPamDensity({
+      getItem: () => { throw new Error("unavailable"); },
+      setItem: vi.fn(),
+    })).toBe(defaultPamDensity);
+    const setItem = vi.fn();
+    writePersistedPamDensity({ getItem: vi.fn(), setItem }, "comfortable");
+    expect(setItem).toHaveBeenCalledWith(pamDensityStorageKey, "comfortable");
+  });
+
+  it("applies density as a root data attribute keyed only on compact", () => {
+    applyPamDensity("compact");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    applyPamDensity("comfortable");
+    expect(document.documentElement.dataset.density).toBeUndefined();
   });
 
   it("synchronizes native chrome only when the Tauri runtime is present", async () => {

@@ -4,6 +4,7 @@ import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { withDaemonOperation } from "../bridge";
 import type { CallersDto, PamBridge } from "../domain";
 import { presentError } from "../state";
+import { useMediaQuery, WIDE_VIEWPORT_QUERY } from "../useMediaQuery";
 import { ConnectorsPanel } from "./ConnectorsPanel";
 
 function formatDate(registeredAtMs: number): string {
@@ -89,23 +90,31 @@ function CallersPanel({ bridge }: ConnectionsViewProps) {
 }
 
 export function ConnectionsView({ bridge }: ConnectionsViewProps) {
+  const wide = useMediaQuery(WIDE_VIEWPORT_QUERY);
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
         <div><h1>Connections</h1><p>Who PAM listens to, and where it reaches out.</p></div>
       </header>
-      <Tabs className="panel project-detail" defaultSelectedKey="callers">
-        <TabList className="flow-inspector-tabs" aria-label="Connection panels">
-          <Tab id="callers" className="flow-inspector-tab">Callers</Tab>
-          <Tab id="connectors" className="flow-inspector-tab">Connectors</Tab>
-        </TabList>
-        <TabPanel id="callers" className="project-detail-panel">
+      {wide ? (
+        <div className="project-detail wide-split">
           <CallersPanel bridge={bridge} />
-        </TabPanel>
-        <TabPanel id="connectors" className="project-detail-panel">
           <ConnectorsPanel bridge={bridge} />
-        </TabPanel>
-      </Tabs>
+        </div>
+      ) : (
+        <Tabs className="panel project-detail" defaultSelectedKey="callers">
+          <TabList className="flow-inspector-tabs" aria-label="Connection panels">
+            <Tab id="callers" className="flow-inspector-tab">Callers</Tab>
+            <Tab id="connectors" className="flow-inspector-tab">Connectors</Tab>
+          </TabList>
+          <TabPanel id="callers" className="project-detail-panel">
+            <CallersPanel bridge={bridge} />
+          </TabPanel>
+          <TabPanel id="connectors" className="project-detail-panel">
+            <ConnectorsPanel bridge={bridge} />
+          </TabPanel>
+        </Tabs>
+      )}
     </main>
   );
 }
