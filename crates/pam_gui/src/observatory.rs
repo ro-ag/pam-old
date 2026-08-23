@@ -4,8 +4,10 @@ use pam_core::{CallerCredential, CallerId, ProjectId};
 use pam_daemon::request_exchange;
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
-    ActivityResult, CallerListResult, Failure, FailureCode, ModelGenerationResult, ModelMessage,
-    ModelStatusResult, ProtocolContractError, RequestEnvelope, ResultBody, ResultPayload,
+    ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
+    ConnectorListResult, ConnectorTestResult, Failure, FailureCode, ModelGenerationResult,
+    ModelMessage, ModelStatusResult, ProtocolContractError, RequestEnvelope, ResultBody,
+    ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -14,6 +16,12 @@ const OBSERVATORY_TIMEOUT: Duration = Duration::from_secs(2);
 const MODEL_INFER_DEADLINE: Duration = Duration::from_mins(2);
 const MODEL_INFER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(125);
 const MODEL_INFER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.infer capability in PAM policy, or approve the pending model request.";
+// The configure exchange includes daemon keychain writes; the test exchange
+// wraps a daemon-side probe with its own ~10 second deadline.
+const CONNECTOR_CONFIGURE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECTOR_TEST_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in PAM policy, or approve the pending connector request.";
+const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in PAM policy, or approve the pending connector request.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ObservatoryState<T> {
@@ -147,6 +155,124 @@ pub(crate) async fn run_model_infer(
     .await)
 }
 
+pub(crate) async fn load_connector_registry(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    project_id: ProjectId,
+) -> ObservatoryState<ConnectorListResult> {
+    let request = RequestEnvelope::connector_list(
+        unique_request_id("gui-connector-registry"),
+        caller_id,
+        project_id,
+        unique_idempotency("gui-connector-registry"),
+    )
+    .authenticated(credential);
+    load(
+        request,
+        "connector-registry",
+        OBSERVATORY_TIMEOUT,
+        failure_state,
+        |payload| match payload {
+            ResultPayload::ConnectorList(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await
+}
+
+/// Runs one policy-gated connector configuration exchange.
+///
+/// The optional credential action passes through in memory only: it is never
+/// logged, retained, or echoed by any result.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for an invalid connector identity or
+/// base URL before any daemon exchange.
+pub(crate) async fn run_connector_configure(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    project_id: ProjectId,
+    connector: String,
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    credential_action: Option<ConnectorCredentialAction>,
+) -> Result<ObservatoryState<ConnectorConfigureResult>, ProtocolContractError> {
+    let request = connector_configure_request(
+        caller_id,
+        project_id,
+        connector,
+        enabled,
+        base_url,
+        credential_action,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "connector-configure",
+        CONNECTOR_CONFIGURE_EXCHANGE_TIMEOUT,
+        connector_configure_failure_state,
+        |payload| match payload {
+            ResultPayload::ConnectorConfigure(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+/// Runs one policy-gated connector self-test exchange.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for an invalid connector identity
+/// before any daemon exchange.
+pub(crate) async fn run_connector_test(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    project_id: ProjectId,
+    connector: String,
+) -> Result<ObservatoryState<ConnectorTestResult>, ProtocolContractError> {
+    let request = RequestEnvelope::connector_test(
+        unique_request_id("gui-connector-test"),
+        caller_id,
+        project_id,
+        unique_idempotency("gui-connector-test"),
+        connector,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "connector-test",
+        CONNECTOR_TEST_EXCHANGE_TIMEOUT,
+        connector_test_failure_state,
+        |payload| match payload {
+            ResultPayload::ConnectorTest(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+fn connector_configure_request(
+    caller_id: CallerId,
+    project_id: ProjectId,
+    connector: String,
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    credential_action: Option<ConnectorCredentialAction>,
+) -> Result<RequestEnvelope, ProtocolContractError> {
+    RequestEnvelope::connector_configure(
+        unique_request_id("gui-connector-configure"),
+        caller_id,
+        project_id,
+        unique_idempotency("gui-connector-configure"),
+        connector,
+        enabled,
+        base_url,
+        credential_action,
+    )
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -221,6 +347,22 @@ fn failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 /// refusal is blocked and always carries recovery text; everything else,
 /// including an offline daemon, is unavailable.
 fn infer_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_INFER_BLOCKED_RECOVERY)
+}
+
+/// `connector.configure` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with connector recovery text.
+fn connector_configure_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, CONNECTOR_CONFIGURE_BLOCKED_RECOVERY)
+}
+
+/// `connector.test` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with connector recovery text.
+fn connector_test_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, CONNECTOR_TEST_BLOCKED_RECOVERY)
+}
+
+fn grant_failure_state<T>(failure: Failure, default_recovery: &str) -> ObservatoryState<T> {
     if matches!(
         failure.code,
         FailureCode::Forbidden
@@ -233,7 +375,7 @@ fn infer_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
             detail: failure.message,
             recovery: failure
                 .recovery
-                .or_else(|| Some(MODEL_INFER_BLOCKED_RECOVERY.to_owned())),
+                .or_else(|| Some(default_recovery.to_owned())),
         }
     } else {
         ObservatoryState::Unavailable {
@@ -252,4 +394,35 @@ pub(crate) fn failure_state_for_test<T>(failure: Failure) -> ObservatoryState<T>
 #[cfg(test)]
 pub(crate) fn infer_failure_state_for_test<T>(failure: Failure) -> ObservatoryState<T> {
     infer_failure_state(failure)
+}
+
+#[cfg(test)]
+pub(crate) fn connector_configure_failure_state_for_test<T>(
+    failure: Failure,
+) -> ObservatoryState<T> {
+    connector_configure_failure_state(failure)
+}
+
+#[cfg(test)]
+pub(crate) fn connector_test_failure_state_for_test<T>(failure: Failure) -> ObservatoryState<T> {
+    connector_test_failure_state(failure)
+}
+
+#[cfg(test)]
+pub(crate) fn connector_configure_request_for_test(
+    caller_id: CallerId,
+    project_id: ProjectId,
+    connector: String,
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    credential_action: Option<ConnectorCredentialAction>,
+) -> Result<RequestEnvelope, ProtocolContractError> {
+    connector_configure_request(
+        caller_id,
+        project_id,
+        connector,
+        enabled,
+        base_url,
+        credential_action,
+    )
 }

@@ -131,6 +131,29 @@ describe("Tauri bridge ABI", () => {
     ]);
   });
 
+  it("keeps the connector commands on the fixed request ABI with credential passthrough", async () => {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    const invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
+      calls.push([command, args]);
+      return { status: "ok" } as T;
+    };
+    const bridge = createTauriBridge(invoke);
+
+    await bridge.connectorRegistry(fence);
+    await bridge.connectorConfigure(fence, { connector: "github-actions", enabled: true, baseUrl: "https://api.github.com" });
+    await bridge.connectorConfigure(fence, { connector: "github-actions", credential: { action: "set", secret: "exact-secret-bytes" } });
+    await bridge.connectorConfigure(fence, { connector: "github-actions", credential: { action: "clear" } });
+    await bridge.connectorTest(fence, "github-actions");
+
+    expect(calls).toEqual([
+      ["connector_registry", { request: fence }],
+      ["connector_configure", { request: { ...fence, connector: "github-actions", enabled: true, baseUrl: "https://api.github.com" } }],
+      ["connector_configure", { request: { ...fence, connector: "github-actions", credential: { action: "set", secret: "exact-secret-bytes" } } }],
+      ["connector_configure", { request: { ...fence, connector: "github-actions", credential: { action: "clear" } } }],
+      ["connector_test", { request: { ...fence, connector: "github-actions" } }],
+    ]);
+  });
+
   it("keeps the local-model commands on the fixed request ABI", async () => {
     const calls: Array<[string, Record<string, unknown> | undefined]> = [];
     const invoke = async <T,>(command: string, args?: Record<string, unknown>) => {

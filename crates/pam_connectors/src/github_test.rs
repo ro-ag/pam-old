@@ -28,7 +28,7 @@ use crate::github::{
     GitHubTransport, MAX_DISCOVERED_RUNS, MAX_JOB_STEPS, MAX_LOG_BYTES_PER_JOB,
     MAX_MUTATION_RESPONSE_BYTES, Repository, ReqwestGitHubTransport, RerunDisposition,
     RerunFailedJobs, RerunFailedJobsRequest, RunId, TransportRequest, TransportResponse,
-    classify_transport_failure, rate_limit_delay_at,
+    VerifyCredentials, VerifyCredentialsRequest, classify_transport_failure, rate_limit_delay_at,
 };
 
 #[derive(Debug)]
@@ -1075,4 +1075,68 @@ async fn live_failed_run_discovery_and_log_collection() {
         collection.value().logs().len(),
         collection.artifacts().len()
     );
+}
+
+#[tokio::test]
+async fn verify_credentials_probes_the_token_identity_and_reports_no_remote_details() {
+    let github = connector(FakeTransport::new([response(200, r#"{"login":"probe"}"#)]));
+
+    let output = Connector::<VerifyCredentials>::execute(
+        &github,
+        VerifyCredentialsRequest::default(),
+        context(),
+    )
+    .await
+    .unwrap();
+
+    let seen = github.transport().seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "GET");
+    assert_eq!(seen[0].url, "https://api.github.com/user");
+    assert!(seen[0].authenticated);
+    assert!(output.truth().is_complete());
+    let rendered = format!("{} {:?}", output.summary(), output.value());
+    assert!(!rendered.contains("probe"), "remote identity must not leak");
+}
+
+#[tokio::test]
+async fn verify_credentials_maps_unauthorized_to_an_authentication_failure() {
+    let github = connector(FakeTransport::new([response(401, "")]));
+
+    let Err(failure) = Connector::<VerifyCredentials>::execute(
+        &github,
+        VerifyCredentialsRequest::default(),
+        context(),
+    )
+    .await
+    else {
+        panic!("an unauthorized probe must fail");
+    };
+
+    assert_eq!(failure.kind(), FailureKind::Authentication);
+    assert_eq!(
+        failure.retry_guidance(),
+        RetryGuidance::AfterConfigurationChange
+    );
+}
+
+#[tokio::test]
+async fn arc_wrapped_transports_are_usable_as_connector_transports() {
+    let transport = std::sync::Arc::new(FakeTransport::new([response(200, "{}")]));
+    let github = GitHubActions::new(
+        Url::parse("https://api.github.com/").unwrap(),
+        std::sync::Arc::clone(&transport) as std::sync::Arc<dyn GitHubTransport>,
+    )
+    .unwrap();
+
+    assert!(
+        Connector::<VerifyCredentials>::execute(
+            &github,
+            VerifyCredentialsRequest::default(),
+            context(),
+        )
+        .await
+        .is_ok()
+    );
+    assert!(transport.is_empty());
 }

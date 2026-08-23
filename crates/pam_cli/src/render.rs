@@ -538,6 +538,58 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             truth_label(truth)
         ),
         ResultPayload::FlowRun(result) => render_flow_result(result, truth),
+        ResultPayload::ConnectorList(list) => {
+            let mut rendered = format!(
+                "connectors={} truth={}\n",
+                list.connectors.len(),
+                truth_label(truth)
+            );
+            for connector in &list.connectors {
+                writeln!(
+                    rendered,
+                    "{} enabled={} credential_present={} base_url={} last_test={}",
+                    escape_text(&connector.connector_id),
+                    connector.enabled,
+                    connector.credential_present,
+                    connector
+                        .base_url
+                        .as_ref()
+                        .map_or_else(|| "default".to_owned(), |url| escape_text(url)),
+                    connector
+                        .last_test_status
+                        .as_ref()
+                        .map_or_else(|| "never".to_owned(), |status| escape_text(status)),
+                )
+                .expect("writing to a String cannot fail");
+            }
+            rendered
+        }
+        ResultPayload::ConnectorConfigure(result) => format!(
+            "connector={} enabled={} credential_present={} base_url={} truth={}\n",
+            escape_text(&result.connector.connector_id),
+            result.connector.enabled,
+            result.connector.credential_present,
+            result
+                .connector
+                .base_url
+                .as_ref()
+                .map_or_else(|| "default".to_owned(), |url| escape_text(url)),
+            truth_label(truth)
+        ),
+        ResultPayload::ConnectorTest(result) => format!(
+            "connector={} status={} detail={} truth={}\n",
+            escape_text(&result.connector_id),
+            connector_test_label(result.status),
+            escape_text(&result.detail),
+            truth_label(truth)
+        ),
+    }
+}
+
+const fn connector_test_label(status: pam_protocol::ConnectorTestDisposition) -> &'static str {
+    match status {
+        pam_protocol::ConnectorTestDisposition::Passed => "passed",
+        pam_protocol::ConnectorTestDisposition::Failed => "failed",
     }
 }
 

@@ -32,7 +32,8 @@ mod skill_library_test;
 pub use desktop::{
     AccessConfigDto, ActivityDto, ActivityEventDto, ApprovalDecisionDispositionDto,
     ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallerDto, CallersDto,
-    CatalogDto, CommandFence, CurrentDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
+    CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams, ConnectorSummaryDto,
+    ConnectorTestDto, ConnectorsDto, CurrentDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
     DesktopResult, EvidenceDataDto, EvidenceDto, EvidenceHandleDto, FailureDto, FailureKindDto,
     FlowComposeDto, FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto,
     FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
@@ -43,6 +44,10 @@ pub use desktop::{
     RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
     TimelineKindDto,
 };
+
+// Re-exported so the desktop shell can accept the debug-redacted credential
+// action without depending on pam_protocol directly.
+pub use pam_protocol::{ConnectorCredentialAction, ConnectorSecret};
 
 pub use skill_inventory::{
     CursorGlobalRulesStatusDto, SkillArtifactDto, SkillInventoryDataDto, SkillInventoryDriftDto,

@@ -9,13 +9,13 @@ import {
   LockSimple,
   MagnifyingGlass,
   MoonStars,
+  PlugsConnected,
   Power,
   Pulse,
   Queue,
   SidebarSimple,
   SquaresFour,
   SunHorizon,
-  UserCircle,
 } from "@phosphor-icons/react";
 import { DropdownMenu, Tooltip, VisuallyHidden } from "radix-ui";
 import {
@@ -43,7 +43,7 @@ export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof P
   { id: "skills", label: "Skills", icon: BookOpen },
   { id: "flows", label: "Flows", icon: GitBranch },
   { id: "activity", label: "Activity", icon: Pulse },
-  { id: "callers", label: "Callers", icon: UserCircle },
+  { id: "callers", label: "Connections", icon: PlugsConnected },
 ];
 
 export function StatusDot({ state = "coral" }: { state?: "coral" | "aqua" | "muted" }) {

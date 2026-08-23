@@ -5,7 +5,8 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
     process::{ExitStatus, Stdio},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cap_fs_ext::{
@@ -13,6 +14,14 @@ use cap_fs_ext::{
     ambient_authority,
 };
 use cap_std::fs::{Dir, OpenOptions};
+use pam_connectors::{
+    CancellationToken, Connector, ConnectorFailure, ConnectorOutput, InvocationContext,
+    RetryGuidance, Truth,
+    github::{
+        CollectRunLogs, CollectRunLogsRequest, DiscoverFailedRuns, DiscoverRunsRequest,
+        GitHubActions, GitHubTransport, Repository, RunId as GitHubRunId,
+    },
+};
 use pam_core::{ContentDigest, EvidenceHandle as StoreEvidenceHandle, ProjectId};
 use pam_flow::{
     ApprovalMode, EffectAttempt, EffectKind, EffectReport, EffectResult, EngineUpdate,
@@ -36,6 +45,10 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::connectors::{
+    ConnectorRuntime, GITHUB_ACTIONS, GITHUB_COLLECT_LOGS_CAPABILITY, GITHUB_DISCOVER_CAPABILITY,
+};
+
 pub(super) const FLOW_OPERATION_KIND: &str = "flow_run";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 256 * 1024;
 const COMMAND_OUTPUT_MEDIA_TYPE: &str = "application/vnd.pam.flow-command-output";
@@ -49,6 +62,16 @@ const WORKSPACE_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKSPACE_FINGERPRINT_TIMEOUT: Duration = Duration::from_secs(30);
 const POST_KILL_WAIT: Duration = Duration::from_secs(2);
 const POST_KILL_DRAIN: Duration = Duration::from_millis(500);
+const CONNECTOR_OUTPUT_MEDIA_TYPE: &str = "application/vnd.pam.connector-output";
+const CONNECTOR_DISCOVER_LIMIT: usize = 20;
+// ponytail: three jobs keep the response JSON plus every collected log inside
+// the four-evidence-handle effect bound; add a log-selection strategy to raise it.
+const CONNECTOR_COLLECT_MAX_JOBS: usize = 3;
+const CONNECTOR_COLLECT_MAX_LOG_BYTES: usize = 1024 * 1024;
+const CONNECTOR_COLLECT_MAX_TOTAL_LOG_BYTES: usize =
+    CONNECTOR_COLLECT_MAX_JOBS * CONNECTOR_COLLECT_MAX_LOG_BYTES;
+const CONNECTOR_RECOVERY_SURFACES: &str =
+    "use the pam connector CLI or the GUI Connectors surface, then retry the flow";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct WorkspaceFingerprint(pub(super) [u8; 32]);
@@ -251,6 +274,7 @@ pub(super) async fn process_flow(
     store: &Store,
     lease_duration: Duration,
     heartbeat_interval: Duration,
+    connectors: &ConnectorRuntime,
 ) -> Result<FlowProcessing, StoreError> {
     let Some((definition, accepted_workspace, execution_root)) =
         decode_flow_operation(&leased.operation)
@@ -432,7 +456,7 @@ pub(super) async fn process_flow(
                 )
                 .is_ok()
                 {
-                    prepare_command(&execution_root, run.definition(), &effect)
+                    prepare_effect(&execution_root, run.definition(), &effect)
                 } else {
                     Err(CommandRejection::WorkspaceChanged)
                 };
@@ -468,34 +492,37 @@ pub(super) async fn process_flow(
                 // mutation fails closed without invoking the command. This is detection, not
                 // an immutable filesystem snapshot: a same-user writer can still mutate a
                 // file after this digest completes but before the child opens it.
+                // Connector steps read no workspace bytes, so they skip the pin.
                 let mut execution_authority = None;
-                match await_workspace_fingerprint_with_lease(
-                    fingerprint_workspace(&execution_root),
-                    leased,
-                    store,
-                    lease_duration,
-                    heartbeat_interval,
-                )
-                .await?
-                {
-                    WorkspaceFingerprintLease::Completed(Ok(workspace))
-                        if workspace.fingerprint == accepted_workspace =>
+                if matches!(prepared, Ok(PreparedEffect::Command(_))) {
+                    match await_workspace_fingerprint_with_lease(
+                        fingerprint_workspace(&execution_root),
+                        leased,
+                        store,
+                        lease_duration,
+                        heartbeat_interval,
+                    )
+                    .await?
                     {
-                        execution_authority = Some(workspace.authority);
-                    }
-                    WorkspaceFingerprintLease::Completed(_) => {
-                        prepared = Err(CommandRejection::WorkspaceChanged);
-                    }
-                    WorkspaceFingerprintLease::Cancelled => {
-                        let update = run.cancel().map_err(flow_engine_error)?;
-                        let (decision, next_revision, terminal_result) =
-                            persist_update(store, leased, revision, update).await?;
-                        revision = next_revision;
-                        pending_decision = Some((decision, terminal_result));
-                        continue;
-                    }
-                    WorkspaceFingerprintLease::StaleLease => {
-                        return Ok(FlowProcessing::StaleLease);
+                        WorkspaceFingerprintLease::Completed(Ok(workspace))
+                            if workspace.fingerprint == accepted_workspace =>
+                        {
+                            execution_authority = Some(workspace.authority);
+                        }
+                        WorkspaceFingerprintLease::Completed(_) => {
+                            prepared = Err(CommandRejection::WorkspaceChanged);
+                        }
+                        WorkspaceFingerprintLease::Cancelled => {
+                            let update = run.cancel().map_err(flow_engine_error)?;
+                            let (decision, next_revision, terminal_result) =
+                                persist_update(store, leased, revision, update).await?;
+                            revision = next_revision;
+                            pending_decision = Some((decision, terminal_result));
+                            continue;
+                        }
+                        WorkspaceFingerprintLease::StaleLease => {
+                            return Ok(FlowProcessing::StaleLease);
+                        }
                     }
                 }
 
@@ -535,7 +562,34 @@ pub(super) async fn process_flow(
                 }
 
                 let effect_result = match prepared {
-                    Ok(command) => match execute_command_in_workspace(
+                    Ok(PreparedEffect::Connector(step)) => {
+                        match execute_connector_step(
+                            &step,
+                            connectors,
+                            store,
+                            leased,
+                            lease_duration,
+                            heartbeat_interval,
+                            effect.timeout_seconds(),
+                            u32::from(effect.attempt()),
+                        )
+                        .await?
+                        {
+                            ConnectorStepOutcome::Result(result) => result,
+                            ConnectorStepOutcome::Cancelled => {
+                                let update = run.cancel().map_err(flow_engine_error)?;
+                                let (decision, next_revision, terminal_result) =
+                                    persist_update(store, leased, revision, update).await?;
+                                revision = next_revision;
+                                pending_decision = Some((decision, terminal_result));
+                                continue;
+                            }
+                            ConnectorStepOutcome::StaleLease => {
+                                return Ok(FlowProcessing::StaleLease);
+                            }
+                        }
+                    }
+                    Ok(PreparedEffect::Command(command)) => match execute_command_in_workspace(
                         command,
                         execution_authority.ok_or_else(|| {
                             StoreError::InvalidState(
@@ -650,6 +704,12 @@ pub(super) async fn process_flow(
                         )
                         .map_err(flow_engine_error)?,
                     },
+                    Err(CommandRejection::StatefulConnector) => EffectResult::failed(
+                        "stateful connector steps are not yet executable",
+                        false,
+                        Vec::new(),
+                    )
+                    .map_err(flow_engine_error)?,
                     Err(_) => EffectResult::failed(
                         "command action is unsupported by this daemon",
                         false,
@@ -1064,6 +1124,21 @@ pub(super) enum CommandRejection {
     Unsupported,
     UnsafeWorkingDirectory,
     WorkspaceChanged,
+    StatefulConnector,
+}
+
+/// One connector step accepted for execution outside the workspace authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PreparedConnectorStep {
+    pub(super) connector: String,
+    pub(super) capability: String,
+    pub(super) resource_kind: String,
+    pub(super) resource_id: String,
+}
+
+pub(super) enum PreparedEffect {
+    Command(PreparedCommand),
+    Connector(PreparedConnectorStep),
 }
 
 fn validate_supported_definition(
@@ -1071,10 +1146,14 @@ fn validate_supported_definition(
     definition: &FlowDefinition,
 ) -> Result<(), CommandRejection> {
     for step in definition.steps() {
-        let action = step
-            .action()
-            .as_command()
-            .ok_or(CommandRejection::Unsupported)?;
+        let Some(action) = step.action().as_command() else {
+            // Read-only connector steps execute through the daemon's connector
+            // registry; stateful connector execution is not yet wired.
+            if step.effect() == EffectKind::ReadOnly && step.action().as_connector().is_some() {
+                continue;
+            }
+            return Err(CommandRejection::StatefulConnector);
+        };
         canonical_working_directory(execution_root, action.working_directory)?;
         match action.program {
             "git" => {
@@ -1595,6 +1674,31 @@ fn add_workspace_bytes(total: &mut u64, count: usize) -> Result<(), FlowSubmissi
     } else {
         Ok(())
     }
+}
+
+/// Classifies one effect attempt as a supported command or connector step.
+pub(super) fn prepare_effect(
+    execution_root: &Path,
+    definition: &FlowDefinition,
+    effect: &EffectAttempt,
+) -> Result<PreparedEffect, CommandRejection> {
+    let step = definition
+        .steps()
+        .get(effect.step_index())
+        .filter(|step| step.id() == effect.step_id())
+        .ok_or(CommandRejection::Unsupported)?;
+    if let Some(action) = step.action().as_connector() {
+        if effect.effect() != EffectKind::ReadOnly || step.effect() != EffectKind::ReadOnly {
+            return Err(CommandRejection::StatefulConnector);
+        }
+        return Ok(PreparedEffect::Connector(PreparedConnectorStep {
+            connector: action.connector.to_owned(),
+            capability: action.capability.to_owned(),
+            resource_kind: action.resource.kind().to_owned(),
+            resource_id: action.resource.id().to_owned(),
+        }));
+    }
+    prepare_command(execution_root, definition, effect).map(PreparedEffect::Command)
 }
 
 pub(super) fn prepare_command(
@@ -2279,6 +2383,276 @@ async fn retain_output(
                 retention: EvidenceRetention::Project,
                 redaction: EvidenceRedaction::Unredacted,
                 bytes: output,
+            },
+            now_ms(),
+        )
+        .await?;
+    pam_flow::EvidenceHandle::parse(handle.as_str()).map_err(flow_engine_error)
+}
+
+enum ConnectorStepOutcome {
+    Result(EffectResult),
+    Cancelled,
+    StaleLease,
+}
+
+enum GitHubCall {
+    Discover(DiscoverRunsRequest),
+    CollectLogs(CollectRunLogsRequest),
+}
+
+struct ConnectorCallSuccess {
+    summary: String,
+    partial_reason: Option<String>,
+    response_json: Option<Vec<u8>>,
+    artifacts: Vec<Vec<u8>>,
+}
+
+/// Executes one read-only connector step through the built-in registry.
+///
+/// Missing, disabled, or credentialless connectors fail the step with calm
+/// recovery guidance instead of failing the whole run. Credential values are
+/// read from the native store and never appear in summaries or evidence.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // Registry, credential, and outcome handling stay in one auditable path.
+async fn execute_connector_step(
+    step: &PreparedConnectorStep,
+    connectors: &ConnectorRuntime,
+    store: &Store,
+    leased: &mut LeasedRequest,
+    lease_duration: Duration,
+    heartbeat_interval: Duration,
+    timeout_seconds: u32,
+    attempt: u32,
+) -> Result<ConnectorStepOutcome, StoreError> {
+    if step.connector != GITHUB_ACTIONS {
+        return failed_connector_outcome(
+            format!(
+                "connector {} is not built into this daemon; {CONNECTOR_RECOVERY_SURFACES}",
+                step.connector
+            ),
+            false,
+        );
+    }
+    let call = match parse_github_call(step) {
+        Ok(call) => call,
+        Err(message) => return failed_connector_outcome(message, false),
+    };
+    let record = store
+        .list_connectors()
+        .await?
+        .into_iter()
+        .find(|record| record.connector_id == step.connector);
+    let Some(record) = record.filter(|record| record.enabled) else {
+        return failed_connector_outcome(
+            format!(
+                "connector {} is not enabled; enable it and store its credential — \
+                 {CONNECTOR_RECOVERY_SURFACES}",
+                step.connector
+            ),
+            false,
+        );
+    };
+    let credential = match connectors.load_credential(&step.connector).await {
+        Ok(Some(credential)) => credential,
+        Ok(None) => {
+            return failed_connector_outcome(
+                format!(
+                    "connector {} has no stored credential; store one — \
+                     {CONNECTOR_RECOVERY_SURFACES}",
+                    step.connector
+                ),
+                false,
+            );
+        }
+        Err(error) => return failed_connector_outcome(error.message().to_owned(), true),
+    };
+    let github = match connectors.github(record.base_url.as_deref(), credential) {
+        Ok(github) => github,
+        Err(error) => return failed_connector_outcome(error.message().to_owned(), false),
+    };
+    let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_seconds.max(1)));
+    let Ok(context) =
+        InvocationContext::new(deadline, CancellationToken::new(), attempt.max(1), None)
+    else {
+        return failed_connector_outcome(
+            "connector invocation context could not be constructed".to_owned(),
+            false,
+        );
+    };
+    let call =
+        async { Ok::<_, FlowSubmissionError>(run_github_call(&github, call, context).await) };
+    match await_workspace_fingerprint_with_lease(
+        call,
+        leased,
+        store,
+        lease_duration,
+        heartbeat_interval,
+    )
+    .await?
+    {
+        WorkspaceFingerprintLease::Completed(Ok(Ok(success))) => {
+            let mut evidence: Vec<pam_flow::EvidenceHandle> = Vec::new();
+            let payloads = success.response_json.into_iter().chain(success.artifacts);
+            for payload in payloads {
+                let handle = retain_connector_evidence(store, leased, payload).await?;
+                if !evidence.contains(&handle) {
+                    evidence.push(handle);
+                }
+            }
+            evidence.truncate(pam_flow::MAX_EVIDENCE_HANDLES);
+            let summary = match success.partial_reason {
+                Some(reason) => format!("{}; partial: {reason}", success.summary),
+                None => success.summary,
+            };
+            Ok(ConnectorStepOutcome::Result(
+                EffectResult::succeeded(bounded_effect_summary(summary), evidence)
+                    .map_err(flow_engine_error)?,
+            ))
+        }
+        WorkspaceFingerprintLease::Completed(Ok(Err(failure))) => failed_connector_outcome(
+            format!(
+                "connector {} failed ({:?}): {}",
+                step.connector,
+                failure.kind(),
+                failure.message()
+            ),
+            matches!(failure.retry_guidance(), RetryGuidance::AfterBackoff { .. }),
+        ),
+        WorkspaceFingerprintLease::Completed(Err(_)) => failed_connector_outcome(
+            "connector invocation ended without a result".to_owned(),
+            false,
+        ),
+        WorkspaceFingerprintLease::Cancelled => Ok(ConnectorStepOutcome::Cancelled),
+        WorkspaceFingerprintLease::StaleLease => Ok(ConnectorStepOutcome::StaleLease),
+    }
+}
+
+fn parse_github_call(step: &PreparedConnectorStep) -> Result<GitHubCall, String> {
+    match step.capability.as_str() {
+        GITHUB_DISCOVER_CAPABILITY => {
+            if step.resource_kind != "repository" {
+                return Err(format!(
+                    "connector capability {GITHUB_DISCOVER_CAPABILITY} requires a resource of \
+                     kind repository holding OWNER/REPOSITORY"
+                ));
+            }
+            let repository = Repository::parse(&step.resource_id).map_err(|_| {
+                format!(
+                    "connector resource {} is not a valid OWNER/REPOSITORY coordinate",
+                    step.resource_id
+                )
+            })?;
+            DiscoverRunsRequest::new(repository, CONNECTOR_DISCOVER_LIMIT)
+                .map(GitHubCall::Discover)
+                .map_err(|_| "connector discovery bounds are invalid".to_owned())
+        }
+        GITHUB_COLLECT_LOGS_CAPABILITY => {
+            let parsed = (step.resource_kind == "run")
+                .then(|| step.resource_id.rsplit_once('/'))
+                .flatten()
+                .and_then(|(repository, run_id)| {
+                    let repository = Repository::parse(repository).ok()?;
+                    let run_id = GitHubRunId::new(run_id.parse().ok()?).ok()?;
+                    Some((repository, run_id))
+                });
+            let Some((repository, run_id)) = parsed else {
+                return Err(format!(
+                    "connector capability {GITHUB_COLLECT_LOGS_CAPABILITY} requires a resource \
+                     of kind run holding OWNER/REPOSITORY/RUN_ID"
+                ));
+            };
+            CollectRunLogsRequest::new(
+                repository,
+                run_id,
+                CONNECTOR_COLLECT_MAX_JOBS,
+                CONNECTOR_COLLECT_MAX_LOG_BYTES,
+                CONNECTOR_COLLECT_MAX_TOTAL_LOG_BYTES,
+            )
+            .map(GitHubCall::CollectLogs)
+            .map_err(|_| "connector log-collection bounds are invalid".to_owned())
+        }
+        other => Err(format!(
+            "connector capability {other} is not executable; supported read-only capabilities \
+             are {GITHUB_DISCOVER_CAPABILITY} and {GITHUB_COLLECT_LOGS_CAPABILITY}"
+        )),
+    }
+}
+
+async fn run_github_call(
+    github: &GitHubActions<Arc<dyn GitHubTransport>>,
+    call: GitHubCall,
+    context: InvocationContext,
+) -> Result<ConnectorCallSuccess, ConnectorFailure> {
+    match call {
+        GitHubCall::Discover(request) => {
+            let output = Connector::<DiscoverFailedRuns>::execute(github, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+        GitHubCall::CollectLogs(request) => {
+            let output = Connector::<CollectRunLogs>::execute(github, request, context).await?;
+            Ok(connector_call_success(&output))
+        }
+    }
+}
+
+fn connector_call_success<T: serde::Serialize>(
+    output: &ConnectorOutput<T>,
+) -> ConnectorCallSuccess {
+    ConnectorCallSuccess {
+        summary: output.summary().as_str().to_owned(),
+        partial_reason: match output.truth() {
+            Truth::Complete => None,
+            Truth::Partial { reason } => Some(reason.as_str().to_owned()),
+        },
+        response_json: serde_json::to_vec(output.value()).ok(),
+        artifacts: output
+            .artifacts()
+            .iter()
+            .map(|artifact| artifact.bytes().to_vec())
+            .collect(),
+    }
+}
+
+fn failed_connector_outcome(
+    summary: String,
+    retryable: bool,
+) -> Result<ConnectorStepOutcome, StoreError> {
+    Ok(ConnectorStepOutcome::Result(
+        EffectResult::failed(bounded_effect_summary(summary), retryable, Vec::new())
+            .map_err(flow_engine_error)?,
+    ))
+}
+
+fn bounded_effect_summary(mut summary: String) -> String {
+    let mut length = summary.len().min(pam_flow::MAX_EFFECT_SUMMARY_BYTES);
+    while !summary.is_char_boundary(length) {
+        length -= 1;
+    }
+    summary.truncate(length);
+    summary
+}
+
+async fn retain_connector_evidence(
+    store: &Store,
+    leased: &LeasedRequest,
+    bytes: Vec<u8>,
+) -> Result<pam_flow::EvidenceHandle, StoreError> {
+    let digest = ContentDigest::from_sha256(Sha256::digest(&bytes).into());
+    let handle = StoreEvidenceHandle::parse(format!(
+        "evidence://connector-output/{}",
+        digest.sha256_hex()
+    ))
+    .map_err(|_| StoreError::InvalidState("connector evidence handle is invalid".to_owned()))?;
+    store
+        .put_evidence(
+            PutEvidence {
+                handle: handle.clone(),
+                project_id: leased.lease.project_id.clone(),
+                media_type: CONNECTOR_OUTPUT_MEDIA_TYPE.to_owned(),
+                retention: EvidenceRetention::Project,
+                redaction: EvidenceRedaction::Unredacted,
+                bytes,
             },
             now_ms(),
         )

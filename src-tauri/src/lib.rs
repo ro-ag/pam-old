@@ -62,6 +62,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::open_flow,
             commands::validate_flow,
             commands::save_flow,
+            commands::connector_registry,
+            commands::connector_configure,
+            commands::connector_test,
         ])
         .run(tauri::generate_context!())?;
     Ok(())

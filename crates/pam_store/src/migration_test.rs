@@ -965,6 +965,83 @@ fn skills_audit_report_migration_upgrades_v11_and_preserves_inventory_state() {
 }
 
 #[test]
+fn connector_migration_upgrades_v12_without_replacing_existing_state() {
+    let (directory, path) = database_path("migration-v12-connectors");
+    fs::create_dir_all(&directory).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_evidence.sql"),
+        include_str!("../migrations/0003_callers.sql"),
+        include_str!("../migrations/0004_policy.sql"),
+        include_str!("../migrations/0005_audit.sql"),
+        include_str!("../migrations/0006_policy_resource_bound.sql"),
+        include_str!("../migrations/0007_models.sql"),
+        include_str!("../migrations/0008_flows.sql"),
+        include_str!("../migrations/0009_flow_authorizations.sql"),
+        include_str!("../migrations/0010_agent_artifacts.sql"),
+        include_str!("../migrations/0011_agent_artifact_inventory.sql"),
+        include_str!("../migrations/0012_skills_audit_reports.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 12).unwrap();
+    connection
+        .execute("INSERT INTO projects(project_id) VALUES ('preserved')", [])
+        .unwrap();
+    drop(connection);
+
+    let connection = open_connection(&path).unwrap();
+    let preserved_projects: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM projects WHERE project_id = 'preserved'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let connector_columns: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('connectors')
+             WHERE name IN (
+                 'connector_id', 'enabled', 'base_url', 'last_test_status',
+                 'last_test_at_ms', 'updated_at_ms'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let (without_rowid, strict): (u32, u32) = connection
+        .query_row(
+            "SELECT wr, strict FROM pragma_table_list WHERE name = 'connectors'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO connectors(
+                     connector_id, enabled, base_url, last_test_status,
+                     last_test_at_ms, updated_at_ms
+                 ) VALUES ('bad', 1, NULL, 'unknown', NULL, 1)",
+                [],
+            )
+            .is_err(),
+        "unknown test statuses must be rejected by the schema"
+    );
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(preserved_projects, 1);
+    assert_eq!(connector_columns, 6);
+    assert_eq!((without_rowid, strict), (1, 1));
+    assert_eq!(version, LATEST_SCHEMA_VERSION);
+
+    drop(connection);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn future_schema_is_refused_without_deleting_the_database() {
     let (directory, path) = database_path("future-schema");
     fs::create_dir_all(&directory).unwrap();

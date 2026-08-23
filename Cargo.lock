@@ -3074,6 +3074,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "nix",
+ "pam_connectors",
  "pam_core",
  "pam_flow",
  "pam_model",

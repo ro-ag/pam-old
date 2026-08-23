@@ -355,6 +355,18 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .state-pill--high, .state-pill--critical { border-color: rgba(255, 103, 79, 0.45); color: var(--coral-soft); }
 .state-pill--not-reported { border-color: rgba(184, 158, 137, 0.3); color: var(--sand-400); }
 .panel-empty { padding: 24px; color: var(--sand-400); text-align: center; }
+.connector-intro { margin: 0; padding: 12px 18px 0; color: var(--sand-400); font-size: 13px; }
+.connector-list { display: grid; }
+.connector-list article { display: grid; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.connector-list article:last-child { border-bottom: 0; }
+.connector-row-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.connector-row-head strong { margin-right: auto; }
+.connector-row-controls, .connector-credential-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0; }
+.connector-row-controls label, .connector-credential-form label { display: grid; gap: 4px; color: var(--sand-400); font-size: 11px; }
+.connector-row-controls input[type="url"], .connector-credential-form input { min-width: 220px; min-height: 32px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--sand-100); background: rgba(2, 13, 27, 0.82); font-size: 11px; }
+.connector-row-controls label.connector-enable-toggle { display: flex; min-height: 32px; align-items: center; gap: 6px; }
+.connector-confirm { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--sand-400); font-size: 12px; }
+.connector-note { margin: 0; color: var(--sand-400); font-size: 12px; }
 .canvas > * + .panel { margin-top: 12px; }
 .project-picker { display: grid; gap: 6px; padding: 14px 16px; }
 .project-picker-location { margin: 0; color: var(--sand-400); font-size: 12px; }
@@ -1275,6 +1287,9 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .access-list article, .skill-inventory-list article { min-height: 76px; padding: 14px 20px; border-color: var(--pam-line); }
 .access-icon { border-color: color-mix(in srgb, var(--pam-ice) 25%, transparent); border-radius: 16px; color: var(--pam-ice); background: var(--pam-ice-soft); }
 .access-list p, .skill-inventory-list p, .skill-inventory-list small { color: var(--pam-muted); }
+.connector-list article { border-color: var(--pam-line); }
+.connector-intro, .connector-note, .connector-confirm, .connector-row-controls label, .connector-credential-form label { color: var(--pam-muted); }
+.connector-row-controls input[type="url"], .connector-credential-form input { border-color: var(--pam-line); color: var(--pam-text); background: var(--pam-surface-raised); }
 .skill-inventory-panel, .skill-library-panel, .skill-audit-panel { margin-top: 16px; }
 .skill-inventory-summary, .skill-library-truth, .skill-audit-summary, .skill-audit-meta, .skill-audit-totals { border-color: var(--pam-line); background: var(--pam-surface); }
 .skill-library-truth { background: var(--pam-surface); }

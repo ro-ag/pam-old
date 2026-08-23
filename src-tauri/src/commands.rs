@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use pam_gui::{
     ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, CallersDto,
-    CatalogDto, CommandFence, DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto,
-    FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto,
-    FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, ModelInferDto, ModelMessageDto,
-    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
-    SkillLibraryRequest, SnapshotDto,
+    CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
+    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DesktopCore, DesktopErrorDto,
+    EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto,
+    FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId,
+    ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
+    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -196,6 +197,38 @@ pub(crate) struct FlowComposeRequest {
     definition: String,
 }
 
+// The optional credential secret is a debug-redacted pass-through value: this
+// request struct must never derive Debug or log its fields.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConnectorConfigureRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    connector: String,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    credential: Option<ConnectorCredentialAction>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConnectorTestRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    connector: String,
+}
+
 fn fence(
     project_handle: ProjectHandle,
     generation: GenerationId,
@@ -355,6 +388,55 @@ pub(crate) async fn model_infer(
             request.model,
             request.messages,
             request.max_output_tokens,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn connector_registry(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ConnectorsDto, DesktopErrorDto> {
+    state.core.connector_registry(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn connector_configure(
+    state: State<'_, DesktopState>,
+    request: ConnectorConfigureRequest,
+) -> Result<ConnectorConfigureDto, DesktopErrorDto> {
+    state
+        .core
+        .connector_configure(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            ConnectorConfigureParams {
+                connector: request.connector,
+                enabled: request.enabled,
+                base_url: request.base_url,
+                credential: request.credential,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn connector_test(
+    state: State<'_, DesktopState>,
+    request: ConnectorTestRequest,
+) -> Result<ConnectorTestDto, DesktopErrorDto> {
+    state
+        .core
+        .connector_test(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.connector,
         )
         .await
 }

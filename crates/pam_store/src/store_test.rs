@@ -24,13 +24,14 @@ use super::{
     AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
     ApprovalDecisionOutcome, AuditPruneOutcome, AuthorizationAudit, AuthorizationOutcome,
     AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
-    CallerRevocation, CancelOutcome, ExpectedOperationKind, FlowAuthorizationOutcome,
-    FlowAuthorizationRecoveryOutcome, FlowCheckpointDisposition, FlowEffectAuthorization,
-    FlowTerminalResult, GrantRevocation, MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE,
-    MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_EVENT_ID_BYTES,
-    MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES,
-    MAX_PROJECT_CURRENT_QUEUED, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectWorkload, PutGrant,
-    RequestState, SaveFlowCheckpoint, Store, StoreError, TerminalState,
+    CallerRevocation, CancelOutcome, ConnectorTestStatus, ExpectedOperationKind,
+    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, FlowCheckpointDisposition,
+    FlowEffectAuthorization, FlowTerminalResult, GrantRevocation, MAX_AUDIT_ACTION_BYTES,
+    MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
+    MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES,
+    MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_PROJECT_CURRENT_QUEUED, MAX_SKILLS_AUDIT_REPORT_BYTES,
+    ProjectWorkload, PutGrant, RequestState, SaveFlowCheckpoint, Store, StoreError, TerminalState,
+    UpsertConnectorConfig,
 };
 use crate::store::database_path;
 
@@ -6805,5 +6806,138 @@ async fn skills_audit_report_reads_reject_corrupt_schema_and_digest_without_cont
         assert!(!debug.contains("changed"));
         assert!(!debug.contains("secret"));
     }
+    close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn connector_config_upserts_partially_and_lists_deterministically() {
+    let (directory, path) = database_path("connector-config");
+    let store = Store::open(&path).unwrap();
+
+    let created = store
+        .upsert_connector_config(UpsertConnectorConfig {
+            connector_id: "github-actions".to_owned(),
+            enabled: None,
+            base_url: None,
+            now_ms: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.connector_id, "github-actions");
+    assert!(!created.enabled);
+    assert_eq!(created.base_url, None);
+    assert_eq!(created.last_test_status, None);
+    assert_eq!(created.updated_at_ms, 10);
+
+    let with_url = store
+        .upsert_connector_config(UpsertConnectorConfig {
+            connector_id: "github-actions".to_owned(),
+            enabled: Some(true),
+            base_url: Some("https://ghe.example.test/api/v3".to_owned()),
+            now_ms: 20,
+        })
+        .await
+        .unwrap();
+    assert!(with_url.enabled);
+    assert_eq!(
+        with_url.base_url.as_deref(),
+        Some("https://ghe.example.test/api/v3")
+    );
+
+    // A later partial update keeps the stored base URL and enablement.
+    let partial = store
+        .upsert_connector_config(UpsertConnectorConfig {
+            connector_id: "github-actions".to_owned(),
+            enabled: None,
+            base_url: None,
+            now_ms: 30,
+        })
+        .await
+        .unwrap();
+    assert!(partial.enabled);
+    assert_eq!(
+        partial.base_url.as_deref(),
+        Some("https://ghe.example.test/api/v3")
+    );
+    assert_eq!(partial.updated_at_ms, 30);
+
+    let listed = store.list_connectors().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0], partial);
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn connector_test_outcomes_are_recorded_and_survive_config_updates() {
+    let (directory, path) = database_path("connector-test-record");
+    let store = Store::open(&path).unwrap();
+
+    // Recording against a missing row creates a disabled configuration.
+    let failed = store
+        .record_connector_test("github-actions".to_owned(), ConnectorTestStatus::Failed, 40)
+        .await
+        .unwrap();
+    assert!(!failed.enabled);
+    assert_eq!(failed.last_test_status, Some(ConnectorTestStatus::Failed));
+    assert_eq!(failed.last_test_at_ms, Some(40));
+
+    let passed = store
+        .record_connector_test("github-actions".to_owned(), ConnectorTestStatus::Passed, 50)
+        .await
+        .unwrap();
+    assert_eq!(passed.last_test_status, Some(ConnectorTestStatus::Passed));
+    assert_eq!(passed.last_test_at_ms, Some(50));
+
+    // A configuration update preserves the recorded outcome.
+    let configured = store
+        .upsert_connector_config(UpsertConnectorConfig {
+            connector_id: "github-actions".to_owned(),
+            enabled: Some(true),
+            base_url: None,
+            now_ms: 60,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        configured.last_test_status,
+        Some(ConnectorTestStatus::Passed)
+    );
+    assert_eq!(configured.last_test_at_ms, Some(50));
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn connector_config_rejects_invalid_identities_and_base_urls() {
+    let (directory, path) = database_path("connector-config-invalid");
+    let store = Store::open(&path).unwrap();
+
+    for connector_id in [String::new(), "x".repeat(129), "bad\u{7}id".to_owned()] {
+        let error = store
+            .upsert_connector_config(UpsertConnectorConfig {
+                connector_id,
+                enabled: None,
+                base_url: None,
+                now_ms: 10,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::InvalidState(_)));
+    }
+    for base_url in ["short".to_owned(), format!("https://{}", "a".repeat(1024))] {
+        let error = store
+            .upsert_connector_config(UpsertConnectorConfig {
+                connector_id: "github-actions".to_owned(),
+                enabled: None,
+                base_url: Some(base_url),
+                now_ms: 10,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::InvalidState(_)));
+    }
+    assert!(store.list_connectors().await.unwrap().is_empty());
+
     close(store, &directory).await;
 }

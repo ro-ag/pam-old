@@ -104,6 +104,7 @@ async fn start_daemon(
             model: None,
             state_path: Some(state_path),
             brief_provider: None,
+            connector_secret_backend: None,
         },
         async {
             let _ = shutdown_rx.await;

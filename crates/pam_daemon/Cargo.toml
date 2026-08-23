@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 cap-fs-ext.workspace = true
 cap-std.workspace = true
+pam_connectors.workspace = true
 pam_core.workspace = true
 pam_flow.workspace = true
 pam_model.workspace = true

@@ -46,7 +46,7 @@ describe("daemon observatory", () => {
     expect(await screen.findByRole("heading", { name: "payments-api" })).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", { name: "Primary" });
     expect(within(navigation).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
-      .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Callers"]);
+      .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Connections"]);
     expect(screen.getByRole("separator", { name: "Resize project sidebar" })).toHaveAttribute("aria-valuenow", "248");
     expect(screen.getByRole("heading", { name: "Ready for the next agent" })).toBeInTheDocument();
     expect(screen.getByText("SOLVED")).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe("daemon observatory", () => {
     const navigation = screen.getByRole("navigation", { name: "Primary" });
     const entry = within(navigation).getByRole("button", { name: "Control Center" });
     expect(within(entry).getByLabelText("2 queued")).toBeInTheDocument();
-    expect(within(within(navigation).getByRole("button", { name: "Callers" })).queryByLabelText(/queued/)).not.toBeInTheDocument();
+    expect(within(within(navigation).getByRole("button", { name: "Connections" })).queryByLabelText(/queued/)).not.toBeInTheDocument();
   });
 
   it("switches and persists both variants of both named themes from the toolbar", async () => {
@@ -257,7 +257,7 @@ describe("daemon observatory", () => {
     fireEvent.keyDown(window, { key: "5", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "6", metaKey: true });
-    expect(await screen.findByRole("heading", { name: "Callers" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
 
@@ -473,7 +473,7 @@ describe("daemon observatory", () => {
     }
   });
 
-  it("supports the complete keyboard project-menu contract from the Callers view", async () => {
+  it("supports the complete keyboard project-menu contract from the Connections view", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge()} initialView="control-center" />);
     await screen.findByRole("heading", { name: "payments-api" });
@@ -527,14 +527,14 @@ describe("daemon observatory", () => {
     let palette = await screen.findByRole("dialog", { name: "Command palette" });
     let search = within(palette).getByRole("searchbox", { name: "Search commands" });
     await waitFor(() => expect(search).toHaveFocus());
-    await user.type(search, "callers");
+    await user.type(search, "connections");
     expect(within(palette).getAllByRole("option")).toHaveLength(1);
-    const callersCommand = within(palette).getByRole("option", { name: /Open Callers/ });
+    const connectionsCommand = within(palette).getByRole("option", { name: /Open Connections/ });
     await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(callersCommand).toHaveFocus());
+    await waitFor(() => expect(connectionsCommand).toHaveFocus());
     await user.keyboard("{Enter}");
 
-    expect(await screen.findByRole("heading", { name: "Callers" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
     await waitFor(() => expect(commandOpener).toHaveFocus());
 

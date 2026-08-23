@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod connectors;
 mod error;
 mod flow;
 mod lifecycle;
@@ -12,6 +13,8 @@ mod status;
 mod status_test;
 
 #[cfg(test)]
+mod connectors_test;
+#[cfg(test)]
 mod flow_test;
 #[cfg(test)]
 mod lifecycle_test;
@@ -23,7 +26,7 @@ mod model_service_test;
 mod ptrack_test;
 
 pub use error::{DaemonError, ExchangeError, StatusError};
-pub use lifecycle::{BriefProvider, DaemonConfig, run, serve_until};
+pub use lifecycle::{BriefProvider, ConnectorSecretOverride, DaemonConfig, run, serve_until};
 pub use ptrack::{RegisteredProject, registered_projects};
 pub use status::{
     ClientExchange, StatusExchange, StreamingExchange, StreamingExchangeError, request_exchange,

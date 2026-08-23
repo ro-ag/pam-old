@@ -3,8 +3,9 @@ use serde_json::json;
 use pam_gui::SkillLibraryRequest;
 
 use crate::commands::{
-    ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest, FencedRequest,
-    FlowComposeRequest, FlowGraphRequest, ModelInferRequest,
+    ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest,
+    ConnectorConfigureRequest, ConnectorTestRequest, FencedRequest, FlowComposeRequest,
+    FlowGraphRequest, ModelInferRequest,
 };
 
 const PROJECT_HANDLE: &str = "88d408ec-796b-4f56-b34c-f2a8d25f9128";
@@ -215,6 +216,85 @@ fn model_infer_request_rejects_unknown_fields_and_unknown_roles() {
     assert!(serde_json::from_value::<ModelInferRequest>(ambient).is_err());
     assert!(serde_json::from_value::<ModelInferRequest>(unknown_role).is_err());
     assert!(serde_json::from_value::<ModelInferRequest>(ambient_message_field).is_err());
+}
+
+#[test]
+fn connector_configure_request_accepts_the_fence_and_optional_credential_actions() {
+    let minimal = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions"
+    });
+    let set_credential = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "enabled": true,
+        "baseUrl": "https://api.github.com",
+        "credential": { "action": "set", "secret": "token-value-1234" }
+    });
+    let clear_credential = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "credential": { "action": "clear" }
+    });
+
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(minimal).is_ok());
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(set_credential).is_ok());
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(clear_credential).is_ok());
+}
+
+#[test]
+fn connector_configure_request_rejects_unknown_fields_and_invalid_credentials() {
+    let ambient = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "keychainPath": "/tmp/untrusted"
+    });
+    let unknown_action = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "credential": { "action": "export" }
+    });
+    let empty_secret = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "credential": { "action": "set", "secret": "" }
+    });
+
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(ambient).is_err());
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(unknown_action).is_err());
+    assert!(serde_json::from_value::<ConnectorConfigureRequest>(empty_secret).is_err());
+}
+
+#[test]
+fn connector_test_request_accepts_only_the_fence_and_connector_identity() {
+    let valid = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions"
+    });
+    let ambient = json!({
+        "projectHandle": PROJECT_HANDLE,
+        "generation": GENERATION,
+        "operationId": OPERATION_ID,
+        "connector": "github-actions",
+        "baseUrl": "https://api.github.com"
+    });
+
+    assert!(serde_json::from_value::<ConnectorTestRequest>(valid).is_ok());
+    assert!(serde_json::from_value::<ConnectorTestRequest>(ambient).is_err());
 }
 
 #[test]
