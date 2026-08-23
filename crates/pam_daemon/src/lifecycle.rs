@@ -29,6 +29,10 @@ use pam_connectors::{
         VerifyCredentials as JenkinsVerifyCredentials,
         VerifyCredentialsRequest as JenkinsVerifyCredentialsRequest,
     },
+    sonarqube::{
+        VerifyCredentials as SonarVerifyCredentials,
+        VerifyCredentialsRequest as SonarVerifyCredentialsRequest,
+    },
 };
 use pam_core::{
     APPLICATION_VERSION, ApprovalId, ContentDigest, EvidenceHandle, ProjectId, RequestId,
@@ -80,7 +84,8 @@ use tokio::{
 
 use crate::DaemonError;
 use crate::connectors::{
-    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, built_in_connector_ids, is_built_in,
+    ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, SONARQUBE, built_in_connector_ids,
+    is_built_in,
 };
 use crate::flow::{
     FLOW_OPERATION_KIND, FlowProcessing, FlowSubmissionError, PreparedFlowSubmission,
@@ -2686,6 +2691,25 @@ async fn run_connector_probe(
         let probe = Connector::<JenkinsVerifyCredentials>::execute(
             &jenkins,
             JenkinsVerifyCredentialsRequest::default(),
+            context,
+        );
+        await_connector_probe(probe).await?;
+        return Ok(format!("credential verified against {base_url}"));
+    }
+    if connector_id == SONARQUBE {
+        let Some(base_url) = base_url else {
+            return Err(
+                "connector sonarqube requires a configured base URL; set one with \
+                 connector.configure"
+                    .to_owned(),
+            );
+        };
+        let sonarqube = connectors
+            .sonarqube(base_url, token)
+            .map_err(|error| error.message().to_owned())?;
+        let probe = Connector::<SonarVerifyCredentials>::execute(
+            &sonarqube,
+            SonarVerifyCredentialsRequest::default(),
             context,
         );
         await_connector_probe(probe).await?;
