@@ -167,6 +167,28 @@ export function ProjectContextBar({
   );
 }
 
+// The inline project picker, shared by the project-shaped empty state and by
+// the panels that only gate part of their surface on an active project.
+export function ProjectPicker({
+  projects,
+  onSelect,
+}: {
+  projects: ProjectSummaryDto[];
+  onSelect: (project: ProjectSummaryDto) => void;
+}) {
+  return (
+    <div className="project-picker">
+      {projects.map((project) => (
+        <button type="button" className="button button--secondary" key={project.handle} onClick={() => onSelect(project)}>
+          <GitBranch size={17} aria-hidden="true" />
+          <span>{project.name}</span>
+          <small>{project.location}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // The calm project-shaped empty state: an inline picker when projects exist,
 // and a gentle discovery hint when the catalog is empty.
 export function ProjectPlaceholderView({
@@ -195,15 +217,7 @@ export function ProjectPlaceholderView({
         ) : (
           <>
             <h2>Pick a project to bring its queue into view.</h2>
-            <div className="project-picker">
-              {projects.map((project) => (
-                <button type="button" className="button button--secondary" key={project.handle} onClick={() => onSelect(project)}>
-                  <GitBranch size={17} aria-hidden="true" />
-                  <span>{project.name}</span>
-                  <small>{project.location}</small>
-                </button>
-              ))}
-            </div>
+            <ProjectPicker projects={projects} onSelect={onSelect} />
           </>
         )}
       </section>

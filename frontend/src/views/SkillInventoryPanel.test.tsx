@@ -79,7 +79,7 @@ describe("SkillInventoryPanel", () => {
     }));
     render(<SkillInventoryPanel bridge={bridge} fence={firstFence} />);
 
-    expect(await screen.findByText("No supported agent artifacts were found for this project.")).toBeInTheDocument();
+    expect(await screen.findByText("No supported agent artifacts were found in this scope.")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("No inventory drift detected");
   });
 

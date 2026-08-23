@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { CommandFence, SkillLibraryDto } from "../domain";
+import type { CommandFence, ProjectSummaryDto, SkillLibraryDto } from "../domain";
 import { fixtureBridge } from "../fixtures";
 import { SkillLibraryPanel } from "./SkillLibraryPanel";
 
@@ -10,6 +10,16 @@ const fence: CommandFence = {
   generation: "11111111-1111-4111-8111-111111111111",
   operationId: "22222222-2222-4222-8222-222222222222",
 };
+
+const daemonFence: CommandFence = {
+  projectHandle: "daemon",
+  generation: "daemon",
+  operationId: "44444444-4444-4444-8444-444444444444",
+};
+
+const projects: ProjectSummaryDto[] = [
+  { handle: "11111111-1111-4111-8111-111111111111", name: "payments-api", location: "/work/payments-api" },
+];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -435,5 +445,48 @@ describe("SkillLibraryPanel", () => {
     });
     await waitFor(() => expect(screen.queryByText("old-project-entry")).not.toBeInTheDocument());
     expect(within(screen.getByLabelText("Canonical library entries")).getByText("review-changes")).toBeInTheDocument();
+  });
+
+  it("lists and installs globally under the daemon authority while gating assignment", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const nativeManage = bridge.manageSkillLibrary.bind(bridge);
+    const fences: CommandFence[] = [];
+    bridge.manageSkillLibrary = vi.fn(async (requestFence, action) => {
+      fences.push(structuredClone(requestFence));
+      return nativeManage(requestFence, action);
+    });
+    const onSelectProject = vi.fn();
+    render(
+      <SkillLibraryPanel
+        bridge={bridge}
+        fence={daemonFence}
+        projects={projects}
+        onSelectProject={onSelectProject}
+      />,
+    );
+
+    const entries = await screen.findByLabelText("Canonical library entries");
+    expect(within(entries).getByText("review-changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adopt into library" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install into library" })).toBeInTheDocument();
+
+    for (const name of ["Enable target", "Disable target", "Preview materialization", "Inspect drift", "Preview resync"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole("combobox", { name: "Library entry" })).not.toBeInTheDocument();
+    expect(within(entries).queryByText("not inspected")).not.toBeInTheDocument();
+    expect(screen.getByText(/Pick a project to manage targets/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /payments-api/ }));
+    expect(onSelectProject).toHaveBeenCalledWith(projects[0]);
+    expect(fences.every((requestFence) => requestFence.projectHandle === "daemon" && requestFence.generation === "daemon")).toBe(true);
+  });
+
+  it("hides the picker but keeps the assignment hint when no project is registered", async () => {
+    render(<SkillLibraryPanel bridge={fixtureBridge()} fence={daemonFence} projects={[]} onSelectProject={vi.fn()} />);
+
+    expect(await screen.findByText(/Pick a project to manage targets/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
   });
 });

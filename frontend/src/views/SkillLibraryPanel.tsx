@@ -11,10 +11,12 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { sameFence, withOperation } from "../bridge";
+import { DAEMON_AUTHORITY, sameFence, withOperation } from "../bridge";
+import { ProjectPicker } from "../components/Shell";
 import type {
   CommandFence,
   PamBridge,
+  ProjectSummaryDto,
   SkillArtifactDto,
   SkillLibraryActionRequest,
   SkillLibraryActionResultDto,
@@ -234,9 +236,11 @@ function Provenance({ version }: { version: SkillLibraryVersionDto }) {
 function LibraryEntries({
   entries,
   inspections,
+  projectScoped,
 }: {
   entries: SkillLibraryEntryDto[];
   inspections: Record<string, SkillLibraryDriftDto>;
+  projectScoped: boolean;
 }) {
   if (entries.length === 0) {
     return <p className="panel-empty">The canonical library has no retained entries yet.</p>;
@@ -255,7 +259,7 @@ function LibraryEntries({
                 <code title={version.version}>{shortDigest(version.version)}</code>
                 <Provenance version={version} />
               </div>
-              <div className="skill-library-targets">
+              {projectScoped && <div className="skill-library-targets">
                 {libraryAgents.map((agent) => {
                   const key = { entryId: entry.entryId, version: version.version, agent };
                   const drift = inspections[keyId(key)]?.state ?? { state: "not_inspected" as const };
@@ -272,7 +276,7 @@ function LibraryEntries({
                   </article>
                   );
                 })}
-              </div>
+              </div>}
             </section>
           ))}
         </article>
@@ -284,9 +288,15 @@ function LibraryEntries({
 export interface SkillLibraryPanelProps {
   bridge: PamBridge;
   fence: CommandFence;
+  projects?: ProjectSummaryDto[];
+  onSelectProject?: (project: ProjectSummaryDto) => void;
 }
 
-export function SkillLibraryPanel({ bridge, fence }: SkillLibraryPanelProps) {
+// The library itself is global: entries, adoption, and installs run under
+// whichever authority the fence carries. Assignment — enable, materialize,
+// drift, resync — exists only for a project, so it is gated in place.
+export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject }: SkillLibraryPanelProps) {
+  const projectScoped = fence.projectHandle !== DAEMON_AUTHORITY;
   const [entries, setEntries] = useState<SkillLibraryEntryDto[] | null>(null);
   const [selection, setSelection] = useState<SkillLibraryKeyDto | null>(null);
   const [busy, setBusy] = useState<SkillLibraryActionRequest["action"] | null>(null);
@@ -548,7 +558,7 @@ export function SkillLibraryPanel({ bridge, fence }: SkillLibraryPanelProps) {
           <div><strong>Skill library unavailable</strong><p>{error}</p></div>
           <button type="button" className="button button--secondary" onClick={() => void load(true)}><ArrowClockwise size={18} /> Retry library</button>
         </div>
-      ) : entries ? <LibraryEntries entries={entries} inspections={inspections} /> : null}
+      ) : entries ? <LibraryEntries entries={entries} inspections={inspections} projectScoped={projectScoped} /> : null}
 
       {entries && (
         <div className="skill-library-workbench">
@@ -585,8 +595,15 @@ export function SkillLibraryPanel({ bridge, fence }: SkillLibraryPanelProps) {
           </section>
 
           <section aria-labelledby="skill-library-target-heading">
-            <div className="skill-library-section-title"><div><HardDrives size={19} /><h3 id="skill-library-target-heading">Manage exact target</h3></div><span>Every action is fenced to the active project generation.</span></div>
-            {selection ? (
+            <div className="skill-library-section-title"><div><HardDrives size={19} /><h3 id="skill-library-target-heading">Manage exact target</h3></div><span>{projectScoped ? "Every action is fenced to the active project generation." : "Assignment needs a project; the library above stays global."}</span></div>
+            {!projectScoped ? (
+              <>
+                <p className="panel-empty">Enabling, materializing, and inspecting drift belong to one project. Pick a project to manage targets.</p>
+                {onSelectProject && projects && projects.length > 0 && (
+                  <ProjectPicker projects={projects} onSelect={onSelectProject} />
+                )}
+              </>
+            ) : selection ? (
               <>
                 <div className="skill-library-selectors">
                   <label>Entry<select aria-label="Library entry" value={selection.entryId} onChange={(event) => chooseEntry(event.target.value)} disabled={busy !== null}>{entries.map((entry) => <option value={entry.entryId} key={entry.entryId}>{entry.entryId}</option>)}</select></label>
