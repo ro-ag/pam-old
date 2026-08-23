@@ -1,6 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- Owner-supplied lifeguard tower silhouette (cropped ground line),
-       knocked out of the full-bleed coral semicircle. -->
+       knocked out of the full-bleed coral semicircle.
+       Sun fill sweeps theme tokens coral-soft #ff9c77 -> coral #ff674f
+       (styles.css palette); sun-lit top rim, full coral at the horizon. -->
+  <linearGradient id="sunset" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ff9c77"/>
+    <stop offset="0.62" stop-color="#ff674f"/>
+    <stop offset="1" stop-color="#ff674f"/>
+  </linearGradient>
   <mask id="tower">
     <rect width="1024" height="1024" fill="#fff"/>
     <g transform="translate(6,354) scale(0.75)">
@@ -50,5 +57,5 @@
       <rect x="940" y="490" width="700" height="140" fill="#fff"/>
     </g>
   </mask>
-  <path fill="#FC6349" mask="url(#tower)" d="M 42 780 A 470 470 0 0 1 982 780 Z"/>
+  <path fill="url(#sunset)" mask="url(#tower)" d="M 42 780 A 470 470 0 0 1 982 780 Z"/>
 </svg>
