@@ -1,4 +1,4 @@
-import { CalendarBlank, FolderOpen, Lightning, Pulse, Queue } from "@phosphor-icons/react";
+import { CalendarBlank, Lightning, Pulse, Queue } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
 import { ProjectPicker } from "../components/Shell";
@@ -109,7 +109,7 @@ function StatTile({
       <span className="project-stat-icon">{icon}</span>
       <div>
         <small>{label}</small>
-        <strong>{value}</strong>
+        <strong title={value}>{value}</strong>
         {hint && <small>{hint}</small>}
       </div>
     </article>
@@ -119,10 +119,9 @@ function StatTile({
 export interface OverviewPanelProps {
   bridge: PamBridge;
   daemon: DaemonView;
-  projectCount: number;
 }
 
-export function OverviewPanel({ bridge, daemon, projectCount }: OverviewPanelProps) {
+export function OverviewPanel({ bridge, daemon }: OverviewPanelProps) {
   const [stats, setStats] = useState<DaemonStatsDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -161,24 +160,16 @@ export function OverviewPanel({ bridge, daemon, projectCount }: OverviewPanelPro
   return (
     <>
       <section className="project-overview" aria-label="Daemon overview">
-        <StatTile
-          icon={<FolderOpen size={21} weight="bold" />}
-          label="Projects"
-          value={String(projectCount)}
-        />
         <article className="project-stat group flex items-center gap-3">
-          <span className="project-stat-icon">
+          <span
+            className={`project-stat-icon${daemon.state === "running" ? "" : " project-stat-icon--attention"}`}
+          >
             <Pulse size={21} weight="bold" />
           </span>
           <div>
             <small>Watch status</small>
-            <strong>{daemon.detail}</strong>
+            <strong title={daemon.detail}>{daemon.detail}</strong>
           </div>
-          <span
-            className={`state-pill state-pill--${daemon.state === "running" ? "healthy" : "attention"}`}
-          >
-            {daemon.state}
-          </span>
         </article>
         <StatTile
           icon={<Queue size={21} weight="bold" />}
@@ -276,7 +267,7 @@ export function ControlCenterView({
         </div>
         {contextBar}
       </header>
-      <OverviewPanel bridge={bridge} daemon={daemon} projectCount={projects.length} />
+      <OverviewPanel bridge={bridge} daemon={daemon} />
       {project ? (
         <section className="project-detail" aria-label="Active project">
           <CurrentView {...project} />

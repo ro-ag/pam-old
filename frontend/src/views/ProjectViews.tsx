@@ -178,18 +178,13 @@ export function CurrentView({
       </header>
       <section className="project-overview" aria-label="Project overview">
         <article className="project-stat group flex items-center gap-3">
-          <span className="project-stat-icon"><Pulse size={21} weight="bold" /></span>
-          <div><small>Watch status</small><strong>{data.daemon.state === "running" ? "PAM is active" : "PAM is paused"}</strong></div>
-          <span className={`state-pill state-pill--${data.daemon.state === "running" ? "healthy" : "attention"}`}>{data.daemon.state}</span>
-        </article>
-        <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><Queue size={21} weight="bold" /></span>
-          <div><small>Project queue</small><strong>{data.current.queue.length} request{data.current.queue.length === 1 ? "" : "s"}</strong></div>
+          <div><small>Project queue</small><strong title={`${data.current.queue.length} request${data.current.queue.length === 1 ? "" : "s"}`}>{data.current.queue.length} request{data.current.queue.length === 1 ? "" : "s"}</strong></div>
           <span className="project-stat-value">{data.current.queue.length}</span>
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><CheckCircle size={21} weight="bold" /></span>
-          <div><small>Latest handoff</small><strong>{outcomeLabel}</strong></div>
+          <div><small>Latest handoff</small><strong title={outcomeLabel}>{outcomeLabel}</strong></div>
           <span className={`state-pill state-pill--${outcome?.state === "succeeded" ? "succeeded" : outcome ? "attention" : "not-reported"}`}>{outcome?.state ?? "none"}</span>
         </article>
       </section>

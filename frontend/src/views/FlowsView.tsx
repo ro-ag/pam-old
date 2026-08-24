@@ -360,7 +360,7 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
               {workspace.definitions.map((flow) => (
                 <button type="button" className={selected?.identity?.id === flow.identity.id ? "is-active" : ""} aria-pressed={selected?.identity?.id === flow.identity.id} key={flow.handle} onClick={() => void open(flow.handle)}>
                   <GitBranch size={18} />
-                  <span><strong>{flow.identity.id}</strong><small>{flow.identity.fileName}</small></span>
+                  <span><strong title={flow.identity.id}>{flow.identity.id}</strong><small title={flow.identity.fileName}>{flow.identity.fileName}</small></span>
                   <span className="state-pill state-pill--ready">r{flow.identity.revision}</span>
                 </button>
               ))}

@@ -48,8 +48,8 @@ describe("ControlCenterView", () => {
 
     expect(screen.getByRole("heading", { name: "Control center" })).toBeInTheDocument();
     const overview = screen.getByRole("region", { name: "Daemon overview" });
-    expect(within(overview).getByText("Projects")).toBeInTheDocument();
-    expect(within(overview).getByText("3")).toBeInTheDocument();
+    // The sidebar switcher already lists projects; the overview does not repeat the count.
+    expect(within(overview).queryByText("Projects")).not.toBeInTheDocument();
     expect(within(overview).getByText("Watch status")).toBeInTheDocument();
     expect(within(overview).getByText("Active days")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: /Daily daemon activity/ })).toBeInTheDocument();
@@ -57,6 +57,9 @@ describe("ControlCenterView", () => {
     // The active project keeps its content, demoted below the overview.
     expect(screen.getByRole("region", { name: "Active project" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ready for the next agent" })).toBeInTheDocument();
+
+    // One watch-status source of truth per screen: the daemon overview row.
+    expect(screen.getAllByText("Watch status")).toHaveLength(1);
   });
 
   it("offers a compact project picker when no project is active", async () => {
