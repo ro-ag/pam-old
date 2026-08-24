@@ -4,6 +4,44 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-24
+
+### Added
+
+- Control Center now opens on a daemon-wide overview: stat tiles for
+  projects, watch status, queue depth, events, active days, and streak, plus
+  a 26-week daily-activity heatmap. The active project keeps its queue and
+  outcomes in a second section, and without an active project a compact
+  picker panel replaces the full-page placeholder.
+- New `daemon.stats` capability serving per-day activity totals from a
+  durable daily rollup (store migration 0014) that survives audit-event
+  pruning.
+- New Console view (⌘6) tailing the daemon's diagnostic log with severity
+  filter, copy, and refresh, backed by the new `daemon.logs` capability.
+- Daemon diagnostics: a bounded in-memory log ring plus a size-rotated
+  `daemon.log` under the state directory records startup, warnings,
+  failures, and the exit reason; the GUI-spawned daemon's stderr is captured
+  to `logs/daemon-stderr.log` instead of being discarded.
+- The sidebar brand shows the packaged app version.
+
+### Changed
+
+- The daemon survives per-request failures: request-handler panics and
+  errors, undeliverable responses, lone transport receive failures, and
+  failed queued operations are logged and no longer stop the daemon.
+- GUI timeouts are classified through the daemon ownership lock: a stopped
+  daemon now reports itself as paused with a one-click start affordance
+  instead of a generic "request timed out" retry loop, and an unresponsive
+  daemon reports its pid with console guidance.
+- On macOS the daemon warms the native credential store at startup, keeping
+  the first connector request inside its deadline while the security server
+  evaluates the fresh binary's code signature.
+
+### Fixed
+
+- A scheduler teardown panic (`JoinHandle` polled after completion) that
+  could mask the daemon's real shutdown result.
+
 ## [0.1.2] - 2026-08-24
 
 ### Added
