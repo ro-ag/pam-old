@@ -64,3 +64,13 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-22
 - cost: 15
 - status: watching
+
+## junk-removal-grep-references
+- kind: habit
+- scope: project
+- rule: Before untracking or deleting a file as 'junk/residual', grep the repo for references — build scripts may consume dotfiles like .openai/hosting.json
+- fix: rg -l '<filename>' before git rm; prototype/scripts/prepare-sites-build.mjs required prototype/.openai/hosting.json and CI prototype job failed at npm run test:sites
+- hits: 2026-08-24
+- cost: 0
+- status: watching
+
