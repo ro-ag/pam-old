@@ -696,21 +696,28 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.24, ease: [0.33, 1, 0.68, 1] }}
             >
-              {state.activeView === "control-center" && (projectData && state.activeFence ? (
+              {state.activeView === "control-center" && (
                 <ControlCenterView
+                  key={`control-center:${refreshTick}`}
+                  bridge={bridge}
+                  daemon={daemon}
+                  projects={state.catalog.projects}
+                  onSelectProject={selectProject}
                   contextBar={projectContextBar}
-                  data={projectData}
-                  onCopy={(brief) => void copyBrief(brief)}
-                  onEvidence={(handle) => void loadEvidence(handle)}
-                  onContinue={() => { dispatch({ type: "navigate", view: "flows" }); showToast("Flow workspace opened"); }}
-                  onOpenQueue={openQueue}
-                  onOpenApproval={() => { if (approvalKey && overlayAuthority) openOverlay({ id: `approval:${approvalKey}`, kind: "approval", authority: overlayAuthority, approvalKey }, false, true); }}
-                  onRecoverDaemon={toggleDaemon}
-                  onRefresh={refresh}
-                  onRegisterCaller={registerGuiCaller}
-                  registrationBusy={busy}
+                  project={projectData && state.activeFence ? {
+                    data: projectData,
+                    onCopy: (brief) => void copyBrief(brief),
+                    onEvidence: (handle) => void loadEvidence(handle),
+                    onContinue: () => { dispatch({ type: "navigate", view: "flows" }); showToast("Flow workspace opened"); },
+                    onOpenQueue: openQueue,
+                    onOpenApproval: () => { if (approvalKey && overlayAuthority) openOverlay({ id: `approval:${approvalKey}`, kind: "approval", authority: overlayAuthority, approvalKey }, false, true); },
+                    onRecoverDaemon: toggleDaemon,
+                    onRefresh: refresh,
+                    onRegisterCaller: registerGuiCaller,
+                    registrationBusy: busy,
+                  } : null}
                 />
-              ) : projectPlaceholder("Control center", "The project's queue, runs, and outcomes in one calm place."))}
+              )}
               {state.activeView === "access" && (projectData
                 ? <AccessView contextBar={projectContextBar} data={projectData} />
                 : projectPlaceholder("Access", "Narrow capabilities, visible to the developer."))}

@@ -17,6 +17,7 @@
     "allow-load-flow-workspace",
     "allow-daemon-activity",
     "allow-daemon-logs",
+    "allow-daemon-stats",
     "allow-caller-registry",
     "allow-model-status",
     "allow-model-infer",

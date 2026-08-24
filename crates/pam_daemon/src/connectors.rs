@@ -151,6 +151,24 @@ impl ConnectorRuntime {
         }
     }
 
+    /// Warms the native credential store in the background.
+    ///
+    /// The security server evaluates this process's code signature on its
+    /// first keychain access, which can take seconds; paying that cost at
+    /// startup keeps the first connector request inside its deadline.
+    pub(crate) fn warm(&self, log: crate::logging::DaemonLog) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let outcome = runtime.credential_present("github").await;
+            log.info(format!(
+                "credential store warmed in {} ms (reachable: {})",
+                started.elapsed().as_millis(),
+                outcome.is_ok()
+            ));
+        });
+    }
+
     /// Runs one credential-store operation at a blocking boundary.
     ///
     /// Without an injected backend the operating-system store is opened per

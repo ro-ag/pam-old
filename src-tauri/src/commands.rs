@@ -3,11 +3,11 @@ use std::sync::Arc;
 use pam_gui::{
     ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto,
     CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
-    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DesktopCore,
-    DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle,
-    FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto,
-    FlowWorkspaceDto, GenerationId, HealthDto, ModelInferDto, ModelMessageDto, ModelStatusDto,
-    OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
+    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DaemonStatsDto,
+    DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
+    FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
+    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, ModelInferDto, ModelMessageDto,
+    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
     SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -373,6 +373,24 @@ pub(crate) async fn daemon_logs(
     state
         .core
         .daemon_logs(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.limit,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_stats(
+    state: State<'_, DesktopState>,
+    request: ActivityRequest,
+) -> Result<DaemonStatsDto, DesktopErrorDto> {
+    state
+        .core
+        .daemon_stats(
             fence(
                 request.project_handle,
                 request.generation,

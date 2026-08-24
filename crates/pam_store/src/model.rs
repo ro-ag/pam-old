@@ -106,6 +106,13 @@ pub struct RecentAuditEvents {
     pub truncated: bool,
 }
 
+/// One UTC day of the durable activity rollup, which survives audit pruning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivityDay {
+    pub day_start_ms: u64,
+    pub events: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallerRegistration {
     pub caller_id: CallerId,

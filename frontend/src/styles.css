@@ -1589,3 +1589,17 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
   .resize-separator[aria-disabled="true"]::after { background: transparent; }
 }
 }
+
+/* Control-center overview heatmap */
+.heatmap-panel { padding-bottom: 14px; }
+.heatmap-scroll { overflow-x: auto; padding: 6px 18px 12px; }
+.heatmap { display: flex; gap: 3px; width: max-content; }
+.heatmap-week { display: flex; flex-direction: column; gap: 3px; }
+.heatmap-cell { width: 12px; height: 12px; border-radius: 3px; background: color-mix(in srgb, var(--sand-400) 14%, transparent); }
+.heatmap-cell--outside { opacity: 0; }
+.heat-1 { background: color-mix(in srgb, var(--coral) 30%, transparent); }
+.heat-2 { background: color-mix(in srgb, var(--coral) 52%, transparent); }
+.heat-3 { background: color-mix(in srgb, var(--coral) 74%, transparent); }
+.heat-4 { background: var(--coral); }
+.heatmap-legend { display: flex; align-items: center; gap: 4px; padding: 0 18px; color: var(--sand-400); }
+.project-detail { margin-top: 4px; }

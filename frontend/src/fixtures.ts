@@ -10,8 +10,10 @@ import type {
   ConnectorSummaryDto,
   ConnectorTestDto,
   ConnectorsDto,
+  ActivityDayDto,
   DaemonLogEntryDto,
   DaemonLogsDto,
+  DaemonStatsDto,
   EvidenceDataDto,
   FlowDefinitionJson,
   FlowDocumentDataDto,
@@ -56,6 +58,14 @@ const daemonLogEntries: DaemonLogEntryDto[] = [
   { timestampMs: 1_777_001_500_000, severity: "error", message: "queued operation failed: store row for request gui-flow-7 vanished mid-lease" },
   { timestampMs: 1_777_001_521_000, severity: "info", message: "request handler completed project.current in 12 ms" },
 ];
+
+const DAY_MS = 86_400_000;
+// Anchored to the wall clock so the overview heatmap demo fills to today.
+const statsAnchorDay = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+const daemonStatDays: ActivityDayDto[] = Array.from({ length: 140 }, (_, index) => ({
+  dayStartMs: statsAnchorDay - (139 - index) * DAY_MS,
+  events: (index * 7) % 11 === 0 ? 0 : ((index * 13) % 23) + 1,
+})).filter((day) => day.events > 0);
 
 const registeredCallers: CallerDto[] = [
   { callerId: "gui:pam-desktop", registeredAtMs: 1_776_900_000_000, revokedAtMs: null },
@@ -686,6 +696,24 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       if (scenario === "empty") return { status: "ok", entries: [] };
       const bounded = daemonLogEntries.slice(-(limit ?? daemonLogEntries.length));
       return clone({ status: "ok" as const, entries: bounded });
+    },
+    async daemonStats(_fence, days): Promise<DaemonStatsDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            code: "daemon_offline",
+            detail: "PAM is paused, so activity statistics are unavailable.",
+            recovery: "Start PAM to see the activity overview.",
+          },
+        };
+      }
+      if (scenario === "empty") return { status: "ok", days: [] };
+      const window = (days && days > 0 ? days : 182) * DAY_MS;
+      return clone({
+        status: "ok" as const,
+        days: daemonStatDays.filter((day) => day.dayStartMs >= statsAnchorDay - window),
+      });
     },
     async modelStatus(_fence): Promise<ModelStatusDto> {
       if (!daemonRunning) {
