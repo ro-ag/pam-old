@@ -10,6 +10,8 @@ import type {
   ConnectorSummaryDto,
   ConnectorTestDto,
   ConnectorsDto,
+  DaemonLogEntryDto,
+  DaemonLogsDto,
   EvidenceDataDto,
   FlowDefinitionJson,
   FlowDocumentDataDto,
@@ -46,6 +48,13 @@ const activityEvents: ActivityEventDto[] = [
   { sequence: 3, projectId: "11111111-1111-4111-8111-111111111111", callerId: "cli:release-agent", action: "flow.save", decision: "approval_required", outcome: null, occurredAtMs: 1_777_001_460_000 },
   { sequence: 2, projectId: "22222222-2222-4222-8222-222222222222", callerId: "cli:release-agent", action: "project.refresh", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_400_000 },
   { sequence: 1, projectId: null, callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000 },
+];
+
+const daemonLogEntries: DaemonLogEntryDto[] = [
+  { timestampMs: 1_777_001_300_000, severity: "info", message: "PAM daemon ready (version fixture-0.1.0, protocol 7)." },
+  { timestampMs: 1_777_001_405_000, severity: "warn", message: "rejected malformed client frame: expected identity and body frames, received 3" },
+  { timestampMs: 1_777_001_500_000, severity: "error", message: "queued operation failed: store row for request gui-flow-7 vanished mid-lease" },
+  { timestampMs: 1_777_001_521_000, severity: "info", message: "request handler completed project.current in 12 ms" },
 ];
 
 const registeredCallers: CallerDto[] = [
@@ -662,6 +671,21 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       if (scenario === "empty") return { status: "ok", events: [], truncated: false };
       const bounded = activityEvents.slice(0, limit ?? activityEvents.length);
       return clone({ status: "ok" as const, events: bounded, truncated: bounded.length < activityEvents.length });
+    },
+    async daemonLogs(_fence, limit): Promise<DaemonLogsDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            code: "daemon_offline",
+            detail: "PAM is paused, so no daemon diagnostics are being recorded.",
+            recovery: "Start PAM to resume the console.",
+          },
+        };
+      }
+      if (scenario === "empty") return { status: "ok", entries: [] };
+      const bounded = daemonLogEntries.slice(-(limit ?? daemonLogEntries.length));
+      return clone({ status: "ok" as const, entries: bounded });
     },
     async modelStatus(_fence): Promise<ModelStatusDto> {
       if (!daemonRunning) {

@@ -46,7 +46,7 @@ describe("daemon observatory", () => {
     expect(await screen.findByRole("heading", { name: "payments-api" })).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", { name: "Primary" });
     expect(within(navigation).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
-      .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Connections"]);
+      .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Console", "Connections"]);
     // Project context lives in the view headers now: no sidebar project menu.
     const sidebar = screen.getByRole("complementary", { name: "Daemon navigation" });
     expect(within(sidebar).queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
@@ -247,7 +247,7 @@ describe("daemon observatory", () => {
     expect(screen.getByRole("button", { name: "Retry safely" })).toBeEnabled();
   });
 
-  it("supports keyboard resizing, the six view shortcuts, and Escape drawer recovery", async () => {
+  it("supports keyboard resizing, the seven view shortcuts, and Escape drawer recovery", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge()} />);
     await screen.findByRole("heading", { name: "Control center" });
@@ -266,6 +266,8 @@ describe("daemon observatory", () => {
     fireEvent.keyDown(window, { key: "5", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "6", metaKey: true });
+    expect(await screen.findByRole("heading", { name: "Console" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "7", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();

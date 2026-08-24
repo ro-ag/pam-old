@@ -5,9 +5,9 @@ use pam_daemon::request_exchange;
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
-    ConnectorListResult, ConnectorTestResult, Failure, FailureCode, ModelGenerationResult,
-    ModelMessage, ModelStatusResult, ProtocolContractError, RequestEnvelope, ResultBody,
-    ResultPayload,
+    ConnectorListResult, ConnectorTestResult, DaemonLogsResult, Failure, FailureCode,
+    ModelGenerationResult, ModelMessage, ModelStatusResult, ProtocolContractError, RequestEnvelope,
+    ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -59,6 +59,33 @@ pub(crate) async fn load_daemon_activity(
         failure_state,
         |payload| match payload {
             ResultPayload::DaemonActivity(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn load_daemon_logs(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    project_id: ProjectId,
+    limit: u32,
+) -> ObservatoryState<DaemonLogsResult> {
+    let request = RequestEnvelope::daemon_logs(
+        unique_request_id("gui-daemon-logs"),
+        caller_id,
+        project_id,
+        unique_idempotency("gui-daemon-logs"),
+        limit,
+    )
+    .authenticated(credential);
+    load(
+        request,
+        "daemon-logs",
+        OBSERVATORY_TIMEOUT,
+        failure_state,
+        |payload| match payload {
+            ResultPayload::DaemonLogs(result) => Some(result),
             _ => None,
         },
     )

@@ -50,6 +50,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::load_evidence,
             commands::load_flow_workspace,
             commands::daemon_activity,
+            commands::daemon_logs,
             commands::caller_registry,
             commands::model_status,
             commands::model_infer,

@@ -43,6 +43,7 @@ import {
 } from "./components/Surfaces";
 import { ActivityView } from "./views/ActivityView";
 import { ConnectionsView } from "./views/ConnectionsView";
+import { ConsoleView } from "./views/ConsoleView";
 import { ControlCenterView } from "./views/ControlCenterView";
 import { FlowsView } from "./views/FlowsView";
 import { AccessView } from "./views/ProjectViews";
@@ -411,8 +412,10 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                 : event.key === "5"
                   ? "activity"
                   : event.key === "6"
-                    ? "callers"
-                    : null;
+                    ? "console"
+                    : event.key === "7"
+                      ? "callers"
+                      : null;
         if (view) { event.preventDefault(); dispatch({ type: "navigate", view }); }
         if (event.key.toLowerCase() === "r") { event.preventDefault(); refresh(); }
       }
@@ -593,7 +596,8 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
-    { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘6" },
+    { id: "view-console", label: "Open Console", description: "Show the daemon's diagnostic log for debugging.", shortcut: "⌘6" },
+    { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘7" },
     ...(projectActive
       ? [{ id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." }]
       : []),
@@ -615,9 +619,11 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
             ? "flows"
             : id === "view-activity"
               ? "activity"
-              : id === "view-callers"
-                ? "callers"
-                : null;
+              : id === "view-console"
+                ? "console"
+                : id === "view-callers"
+                  ? "callers"
+                  : null;
     if (view) {
       dispatch({ type: "navigate", view });
       closeActiveOverlay();
@@ -731,6 +737,15 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   modelStatus={modelStatus}
                   onReloadModel={reloadModelStatus}
                   onOpenModelChat={openModelChat}
+                  onStartDaemon={toggleDaemon}
+                />
+              )}
+              {state.activeView === "console" && (
+                <ConsoleView
+                  key={`console:${refreshTick}`}
+                  daemon={daemon}
+                  bridge={bridge}
+                  pending={busy}
                   onStartDaemon={toggleDaemon}
                 />
               )}

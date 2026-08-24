@@ -10,6 +10,7 @@ const COMMANDS: &[&str] = &[
     "load_evidence",
     "load_flow_workspace",
     "daemon_activity",
+    "daemon_logs",
     "caller_registry",
     "model_status",
     "model_infer",
