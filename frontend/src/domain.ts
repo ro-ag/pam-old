@@ -1,4 +1,4 @@
-export type ViewId = "control-center" | "access" | "skills" | "flows" | "activity" | "callers";
+export type ViewId = "control-center" | "access" | "skills" | "flows" | "activity" | "console" | "callers";
 export type ApprovalDecision = "approve" | "deny";
 export type BridgeMode = "native" | "fixture";
 
@@ -482,6 +482,16 @@ export type ActivityDto =
   | { status: "ok"; events: ActivityEventDto[]; truncated: boolean }
   | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
 
+export interface DaemonLogEntryDto {
+  timestampMs: number;
+  severity: string;
+  message: string;
+}
+
+export type DaemonLogsDto =
+  | { status: "ok"; entries: DaemonLogEntryDto[] }
+  | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
+
 export interface ModelSummaryDto {
   modelId: string;
   sizeBytes: number;
@@ -561,6 +571,7 @@ export interface PamBridge {
   catalog(): Promise<CatalogDto>;
   daemonHealth(fence: CommandFence): Promise<HealthDto>;
   daemonActivity(fence: CommandFence, limit?: number): Promise<ActivityDto>;
+  daemonLogs(fence: CommandFence, limit?: number): Promise<DaemonLogsDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
   connectorRegistry(fence: CommandFence): Promise<ConnectorsDto>;
   connectorConfigure(fence: CommandFence, params: ConnectorConfigureParams): Promise<ConnectorConfigureDto>;

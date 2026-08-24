@@ -3,8 +3,9 @@ use std::sync::Arc;
 use pam_gui::{
     ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto,
     CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
-    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DesktopCore, DesktopErrorDto,
-    EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto,
+    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DesktopCore,
+    DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle,
+    FlowDocumentDto,
     FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId,
     HealthDto, ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle,
     SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
@@ -354,6 +355,24 @@ pub(crate) async fn daemon_activity(
     state
         .core
         .daemon_activity(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.limit,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_logs(
+    state: State<'_, DesktopState>,
+    request: ActivityRequest,
+) -> Result<DaemonLogsDto, DesktopErrorDto> {
+    state
+        .core
+        .daemon_logs(
             fence(
                 request.project_handle,
                 request.generation,

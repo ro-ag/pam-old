@@ -353,6 +353,10 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .access-list { display: grid; }
 .access-list article { display: grid; min-height: 74px; grid-template-columns: 40px minmax(0, 1fr) max-content; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--line); }
 .access-list article:last-child { border-bottom: 0; }
+.console-list article.console-line { min-height: 0; grid-template-columns: max-content max-content minmax(0, 1fr); padding: 8px 18px; }
+.button.button--secondary.is-active { border-color: rgba(255, 144, 101, 0.45); color: var(--sand-100); background: rgba(255, 144, 101, 0.14); }
+.console-line time { color: var(--sand-400); font-variant-numeric: tabular-nums; font-size: 12px; }
+.console-line p { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
 .access-icon { display: grid; width: calc(37px * var(--density)); height: calc(37px * var(--density)); place-items: center; border: 1px solid var(--line-warm); border-radius: 50%; color: var(--coral-soft); }
 .access-list article > div { display: grid; min-width: 0; gap: 4px; }
 .access-list p { margin: 0; overflow-wrap: anywhere; color: var(--sand-400); font-size: 13px; }

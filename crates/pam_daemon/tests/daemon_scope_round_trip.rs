@@ -115,6 +115,34 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
         }
     ));
 
+    let logs = request_exchange(
+        &endpoint,
+        &authenticated(RequestEnvelope::daemon_logs(
+            RequestId::from("scope-logs"),
+            caller.clone(),
+            scope.clone(),
+            IdempotencyKey::from("scope-logs-key"),
+            0,
+        )),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    match logs.result.body {
+        ResultBody::Success {
+            truth: OperationTruth::Observed,
+            payload: ResultPayload::DaemonLogs(logs),
+        } => {
+            // The startup "ready" line is always present in the ring.
+            assert!(
+                logs.entries
+                    .iter()
+                    .any(|entry| entry.message.contains("PAM daemon ready"))
+            );
+        }
+        other => panic!("daemon logs read failed: {other:?}"),
+    }
+
     let callers = request_exchange(
         &endpoint,
         &authenticated(RequestEnvelope::caller_list(

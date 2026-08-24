@@ -18,9 +18,9 @@ use pam_platform::{CallerKind, caller_id, discover_project};
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult, CallerSummary,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ConnectorTestDisposition, ConnectorTestResult, FailureCode, MAX_MODEL_OUTPUT_TOKENS,
-    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
-    ModelSummary, ProjectRequestState, ProjectRequestSummary,
+    ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult, FailureCode, LogSeverity,
+    MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
+    ModelStatusResult, ModelSummary, ProjectRequestState, ProjectRequestSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -44,7 +44,8 @@ use crate::{
     },
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
-        load_model_status, run_connector_configure, run_connector_test, run_model_infer,
+        load_daemon_logs, load_model_status, run_connector_configure, run_connector_test,
+        run_model_infer,
     },
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
@@ -632,6 +633,26 @@ pub struct ActivityEventDto {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+pub enum DaemonLogsDto {
+    Ok { entries: Vec<DaemonLogEntryDto> },
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonLogEntryDto {
+    pub timestamp_ms: u64,
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CallersDto {
     Ok { callers: Vec<CallerDto> },
     Blocked { failure: FailureDto },
@@ -1183,7 +1204,9 @@ impl DesktopCore {
             .current_dir(&spawn_root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // A daemon that dies at startup must leave its reason somewhere:
+            // stderr lands next to the daemon's own log file.
+            .stderr(daemon_stderr_capture());
         #[cfg(unix)]
         command.process_group(0);
         let mut child = command.spawn().map_err(|error| {
@@ -1445,6 +1468,34 @@ impl DesktopCore {
             Err(state) => state,
         };
         let data = activity_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Loads the bounded oldest-first daemon diagnostic log slice.
+    ///
+    /// A `None` limit requests the daemon default; the daemon clamps any limit
+    /// to its bounded maximum. Daemon failures are classified in the returned
+    /// DTO: an explicit policy deny is blocked, everything else unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn daemon_logs(
+        &self,
+        fence: CommandFence,
+        limit: Option<u32>,
+    ) -> DesktopResult<DaemonLogsDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => {
+                load_daemon_logs(caller, credential, scope.project_id(), limit.unwrap_or(0)).await
+            }
+            Err(state) => state,
+        };
+        let data = daemon_logs_dto(observed);
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -2017,6 +2068,23 @@ fn default_daemon_executable() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from(executable_name("pam")))
 }
 
+/// Best-effort append capture for the spawned daemon's stderr, next to the
+/// daemon's own rotating log. Falls back to discarding when unavailable.
+fn daemon_stderr_capture() -> Stdio {
+    let Ok(data_dir) = pam_platform::user_data_dir() else {
+        return Stdio::null();
+    };
+    let logs = data_dir.join("logs");
+    if std::fs::create_dir_all(&logs).is_err() {
+        return Stdio::null();
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join("daemon-stderr.log"))
+        .map_or_else(|_| Stdio::null(), Stdio::from)
+}
+
 fn gui_registration_command(executable: &Path, root: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(executable);
     command
@@ -2548,6 +2616,40 @@ fn activity_event_dto(event: ActivityEventSummary) -> ActivityEventDto {
         decision: bounded_detail(event.decision),
         outcome: bounded_detail(event.outcome),
         occurred_at_ms: event.occurred_at_ms,
+    }
+}
+
+fn daemon_logs_dto(state: ObservatoryState<DaemonLogsResult>) -> DaemonLogsDto {
+    match state {
+        ObservatoryState::Available(result) => DaemonLogsDto::Ok {
+            entries: result
+                .entries
+                .into_iter()
+                .map(|entry| DaemonLogEntryDto {
+                    timestamp_ms: entry.timestamp_ms,
+                    severity: match entry.severity {
+                        LogSeverity::Info => "info".to_owned(),
+                        LogSeverity::Warn => "warn".to_owned(),
+                        LogSeverity::Error => "error".to_owned(),
+                    },
+                    message: bounded_detail(entry.message),
+                })
+                .collect(),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => DaemonLogsDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => DaemonLogsDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
     }
 }
 

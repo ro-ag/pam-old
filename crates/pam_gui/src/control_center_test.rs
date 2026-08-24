@@ -66,3 +66,42 @@ fn project_catalog_keeps_current_first_and_deduplicates_canonical_roots() {
     assert_eq!(projects[0].id, Some(ProjectId::new("project-pam")));
     assert_eq!(projects[1].root, PathBuf::from("/projects/other"));
 }
+
+#[test]
+fn timeout_with_no_daemon_process_classifies_as_offline() {
+    let state = super::control_center::health_from_timeout(
+        Some(pam_platform::DaemonRuntimeState::NotRunning),
+        &pam_daemon::ExchangeError::DeadlineExceeded,
+    );
+    assert_eq!(state, HealthState::Offline);
+}
+
+#[test]
+fn timeout_with_a_live_daemon_reports_an_unresponsive_daemon() {
+    let state = super::control_center::health_from_timeout(
+        Some(pam_platform::DaemonRuntimeState::Running { pid: Some(4242) }),
+        &pam_daemon::ExchangeError::DeadlineExceeded,
+    );
+    match state {
+        HealthState::Degraded { detail, recovery } => {
+            assert!(detail.contains("pid 4242"));
+            assert!(detail.contains("did not respond in time"));
+            assert!(recovery.is_some());
+        }
+        other => panic!("expected degraded, got {other:?}"),
+    }
+}
+
+#[test]
+fn timeout_with_an_unreadable_probe_keeps_the_original_error() {
+    let state = super::control_center::health_from_timeout(
+        None,
+        &pam_daemon::ExchangeError::DeadlineExceeded,
+    );
+    match state {
+        HealthState::Degraded { detail, .. } => {
+            assert_eq!(detail, "PAM daemon request timed out.");
+        }
+        other => panic!("expected degraded, got {other:?}"),
+    }
+}
