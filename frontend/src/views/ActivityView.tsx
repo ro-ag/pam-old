@@ -104,13 +104,12 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
       </header>
       <section className="project-overview" aria-label="Daemon health">
         <article className="project-stat group flex items-center gap-3">
-          <span className="project-stat-icon"><Pulse size={21} weight="bold" /></span>
-          <div><small>Watch status</small><strong>{daemon.detail}</strong></div>
-          <span className={`state-pill state-pill--${daemon.state === "running" ? "healthy" : "attention"}`}>{daemon.state}</span>
+          <span className={`project-stat-icon${daemon.state === "running" ? "" : " project-stat-icon--attention"}`}><Pulse size={21} weight="bold" /></span>
+          <div><small>Watch status</small><strong title={daemon.detail}>{daemon.detail}</strong></div>
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><CheckCircle size={21} weight="bold" /></span>
-          <div><small>Daemon version</small><strong>{daemon.model ?? "Not reported"}</strong></div>
+          <div><small>Daemon version</small><strong title={daemon.model ?? "Not reported"}>{daemon.model ?? "Not reported"}</strong></div>
         </article>
         <article className="project-stat group flex items-center gap-3">
           <span className="project-stat-icon"><Queue size={21} weight="bold" /></span>
@@ -122,12 +121,12 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
           {!modelStatus ? (
             <div><small>Local model</small><strong>Checking the local model…</strong></div>
           ) : modelStatus.status !== "ok" ? (
-            <div><small>Local model</small><strong>{modelStatus.failure.detail}</strong></div>
+            <div><small>Local model</small><strong title={modelStatus.failure.detail}>{modelStatus.failure.detail}</strong></div>
           ) : modelStatus.loaded ? (
             <>
               <div>
                 <small>Local model</small>
-                <strong>{modelStatus.loaded.modelId}</strong>
+                <strong title={modelStatus.loaded.modelId}>{modelStatus.loaded.modelId}</strong>
                 <small>{formatModelSize(modelStatus.loaded.sizeBytes)}</small>
               </div>
               <span className="state-pill state-pill--healthy">loaded</span>
@@ -136,7 +135,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
             <>
               <div>
                 <small>Local model</small>
-                <strong>{modelStatus.registered[0].modelId}</strong>
+                <strong title={modelStatus.registered[0].modelId}>{modelStatus.registered[0].modelId}</strong>
                 <small>{formatModelSize(modelStatus.registered[0].sizeBytes)}</small>
               </div>
               <span className="state-pill state-pill--observed">on deck</span>
