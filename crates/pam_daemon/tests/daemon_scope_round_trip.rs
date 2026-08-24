@@ -143,6 +143,27 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
         other => panic!("daemon logs read failed: {other:?}"),
     }
 
+    let stats = request_exchange(
+        &endpoint,
+        &authenticated(RequestEnvelope::daemon_stats(
+            RequestId::from("scope-stats"),
+            caller.clone(),
+            scope.clone(),
+            IdempotencyKey::from("scope-stats-key"),
+            0,
+        )),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        stats.result.body,
+        ResultBody::Success {
+            truth: OperationTruth::Observed,
+            payload: ResultPayload::DaemonStats(_),
+        }
+    ));
+
     let callers = request_exchange(
         &endpoint,
         &authenticated(RequestEnvelope::caller_list(

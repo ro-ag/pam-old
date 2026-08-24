@@ -33,7 +33,8 @@ use uuid::Uuid;
 use crate::evidence::{self, EvidenceFiles};
 use crate::{
     AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
-    ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome, AuthorizationAudit,
+    ActivityDay, ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome,
+    AuthorizationAudit,
     AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
     CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
     EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention, ExpectedOperationKind,
@@ -59,7 +60,7 @@ const STATUS_OPERATION_KIND: &str = "status";
 const LEGACY_STATUS_OPERATION_KIND: &str = "daemon_status";
 const FLOW_CAPABILITY_NAME: &str = "flow.run";
 const EFFECT_APPROVAL_AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
-pub(super) const LATEST_SCHEMA_VERSION: u32 = 13;
+pub(super) const LATEST_SCHEMA_VERSION: u32 = 14;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_initial.sql")),
     (2, include_str!("../migrations/0002_evidence.sql")),
@@ -86,6 +87,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         include_str!("../migrations/0012_skills_audit_reports.sql"),
     ),
     (13, include_str!("../migrations/0013_connectors.sql")),
+    (14, include_str!("../migrations/0014_activity_days.sql")),
 ];
 
 type Response<T> = oneshot::Sender<Result<T, StoreError>>;
@@ -638,6 +640,24 @@ impl Store {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Audit(AuditCommand::Recent {
             limit,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Reads per-day activity totals since `since_ms`, oldest first.
+    ///
+    /// Counts come from the durable daily rollup, which survives audit-event
+    /// pruning; the result is bounded to the newest 400 days.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn activity_days(&self, since_ms: u64) -> Result<Vec<ActivityDay>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Audit(AuditCommand::Days {
+            since_ms,
             response: response_tx,
         }))
         .await?;
@@ -1843,6 +1863,10 @@ enum AuditCommand {
         limit: u32,
         response: Response<RecentAuditEvents>,
     },
+    Days {
+        since_ms: u64,
+        response: Response<Vec<ActivityDay>>,
+    },
 }
 
 enum EvidenceCommand {
@@ -2195,6 +2219,9 @@ fn run_audit_command(connection: &mut Connection, command: AuditCommand) {
         ),
         AuditCommand::Recent { limit, response } => {
             respond(response, recent_audit_events(connection, limit));
+        }
+        AuditCommand::Days { since_ms, response } => {
+            respond(response, activity_days(connection, since_ms));
         }
     }
 }
@@ -3296,6 +3323,14 @@ fn append_audit_event_tx(
         ],
     )?;
     let sequence = unsigned_integer(transaction.last_insert_rowid())?;
+    // The daily rollup is durable: it keeps the long-term activity picture
+    // after the underlying audit events are pruned.
+    let day_start = occurred_at - occurred_at.rem_euclid(DAY_MS);
+    transaction.execute(
+        "INSERT INTO activity_days(day_start_ms, events) VALUES (?1, 1)
+         ON CONFLICT(day_start_ms) DO UPDATE SET events = events + 1",
+        [day_start],
+    )?;
     Ok(AuditEventRecord {
         sequence,
         event_id: event.event_id,
@@ -3308,6 +3343,34 @@ fn append_audit_event_tx(
         occurred_at_ms: event.occurred_at_ms,
         retain_until_ms: event.retain_until_ms,
     })
+}
+
+/// Milliseconds per UTC day for the durable activity rollup.
+const DAY_MS: i64 = 86_400_000;
+/// Newest days served from the rollup in one read.
+const MAX_ACTIVITY_DAYS: usize = 400;
+
+fn activity_days(connection: &Connection, since_ms: u64) -> Result<Vec<ActivityDay>, StoreError> {
+    let since = sql_integer(since_ms)?;
+    let mut statement = connection.prepare(
+        "SELECT day_start_ms, events FROM activity_days
+         WHERE day_start_ms >= ?1
+         ORDER BY day_start_ms DESC
+         LIMIT ?2",
+    )?;
+    let mut days = statement
+        .query_map(
+            params![since, i64::try_from(MAX_ACTIVITY_DAYS).expect("bound fits")],
+            |row| {
+                Ok(ActivityDay {
+                    day_start_ms: row.get::<_, i64>(0)?.max(0) as u64,
+                    events: row.get::<_, i64>(1)?.max(0) as u64,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    days.reverse();
+    Ok(days)
 }
 
 fn export_audit_events(

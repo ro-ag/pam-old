@@ -73,7 +73,8 @@ use pam_protocol::{
     ApprovalDecisionResult, BriefProvenance, BriefResult, CallerListResult, CallerSummary,
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
+    ActivityDaySummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult,
+    DaemonLogEntry, DaemonStatsResult,
     DaemonLogsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata, EvidenceRedaction,
     EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity, ModelFinishReason,
     ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
@@ -84,7 +85,8 @@ use pam_protocol::{
     StatusResult, decode_request_envelope, decode_server_message_envelope, encode,
 };
 use pam_store::{
-    AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision as StoreApprovalDecision,
+    AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
+    ApprovalDecision as StoreApprovalDecision,
     ApprovalDecisionOutcome, AuditEventRecord, AuthorizationAudit, AuthorizationOutcome,
     AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
     CancelOutcome, ConnectorRecord, ConnectorTestStatus, EventRecord, ExpectedOperationKind,
@@ -1009,6 +1011,10 @@ async fn handle_incoming(
             handle_daemon_logs(&request, *limit, incoming, &log, &outbound).await;
             Ok(())
         }
+        (Capability::DaemonStats, RequestPayload::DaemonStats { days }) => {
+            handle_daemon_stats(&request, *days, incoming, &store, &outbound).await;
+            Ok(())
+        }
         (Capability::CallerList, RequestPayload::CallerList) => {
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
@@ -1128,6 +1134,7 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::DaemonStop
             | Capability::DaemonActivity
             | Capability::DaemonLogs
+            | Capability::DaemonStats
             | Capability::CallerList
             | Capability::ModelStatus
             | Capability::ModelInfer
@@ -1287,6 +1294,7 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
                 RequestPayload::DaemonActivity { .. }
             )
             | (Capability::DaemonLogs, RequestPayload::DaemonLogs { .. })
+            | (Capability::DaemonStats, RequestPayload::DaemonStats { .. })
             | (Capability::CallerList, RequestPayload::CallerList)
             | (Capability::ProjectCurrent, RequestPayload::ProjectCurrent)
             | (
@@ -1466,6 +1474,7 @@ pub(super) fn policy_resource(
         | RequestPayload::Stop
         | RequestPayload::DaemonActivity { .. }
         | RequestPayload::DaemonLogs { .. }
+        | RequestPayload::DaemonStats { .. }
         | RequestPayload::CallerList
         | RequestPayload::ModelStatus => "daemon".to_owned(),
         RequestPayload::ProjectCurrent => "project".to_owned(),
@@ -1681,6 +1690,7 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::DaemonStop
         | Capability::DaemonActivity
         | Capability::DaemonLogs
+        | Capability::DaemonStats
         | Capability::CallerList
         | Capability::ModelStatus
         | Capability::ConnectorList
@@ -2330,6 +2340,8 @@ const DEFAULT_ACTIVITY_LIMIT: u32 = 50;
 const MAX_ACTIVITY_LIMIT: u32 = 100;
 const DEFAULT_LOGS_LIMIT: usize = 200;
 const MAX_LOGS_LIMIT: u32 = 512;
+const DEFAULT_STATS_DAYS: u64 = 182;
+const MAX_STATS_DAYS: u32 = 366;
 
 /// Clamps a requested activity feed limit to 1..=100; zero selects the default.
 pub(super) const fn clamp_activity_limit(limit: u32) -> u32 {
@@ -2350,6 +2362,58 @@ const fn clamp_logs_limit(limit: u32) -> usize {
         MAX_LOGS_LIMIT as usize
     } else {
         limit as usize
+    }
+}
+
+/// Clamps a requested stats window to 1..=366 days; zero selects the default.
+const fn clamp_stats_days(days: u32) -> u64 {
+    if days == 0 {
+        DEFAULT_STATS_DAYS
+    } else if days > MAX_STATS_DAYS {
+        MAX_STATS_DAYS as u64
+    } else {
+        days as u64
+    }
+}
+
+async fn handle_daemon_stats(
+    request: &RequestEnvelope,
+    days: u32,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+) {
+    const DAY_MS: u64 = 86_400_000;
+    let window = clamp_stats_days(days).saturating_mul(DAY_MS);
+    let since = now_ms().saturating_sub(window);
+    let since = since - since % DAY_MS;
+    let observed = match store.activity_days(since).await {
+        Ok(observed) => observed,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return;
+        }
+    };
+    let result = DaemonStatsResult {
+        days: observed.into_iter().map(activity_day_summary).collect(),
+    };
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Observed,
+            ResultPayload::DaemonStats(result),
+        ))],
+        None,
+    )
+    .await;
+}
+
+const fn activity_day_summary(day: ActivityDay) -> ActivityDaySummary {
+    ActivityDaySummary {
+        day_start_ms: day.day_start_ms,
+        events: day.events,
     }
 }
 
@@ -3964,6 +4028,7 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::Stop
         | RequestPayload::DaemonActivity { .. }
         | RequestPayload::DaemonLogs { .. }
+        | RequestPayload::DaemonStats { .. }
         | RequestPayload::CallerList
         | RequestPayload::ProjectCurrent
         | RequestPayload::ApprovalDecide { .. }

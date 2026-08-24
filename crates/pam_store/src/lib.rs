@@ -18,8 +18,9 @@ pub use inventory::{
     MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT, SkillInventoryDrift, StoredAgentArtifact,
 };
 pub use model::{
-    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
-    ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome, AuthorizationAudit,
+    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
+    ApprovalDecision, ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome,
+    AuthorizationAudit,
     AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
     CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
     EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRedaction, EvidenceRetention,

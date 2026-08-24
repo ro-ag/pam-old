@@ -18,7 +18,8 @@ use pam_platform::{CallerKind, caller_id, discover_project};
 use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult, CallerSummary,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult, FailureCode, LogSeverity,
+    ActivityDaySummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
+    DaemonStatsResult, FailureCode, LogSeverity,
     MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
     ModelStatusResult, ModelSummary, ProjectRequestState, ProjectRequestSummary,
 };
@@ -44,8 +45,8 @@ use crate::{
     },
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
-        load_daemon_logs, load_model_status, run_connector_configure, run_connector_test,
-        run_model_infer,
+        load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
+        run_connector_test, run_model_infer,
     },
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
@@ -645,6 +646,25 @@ pub struct DaemonLogEntryDto {
     pub timestamp_ms: u64,
     pub severity: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum DaemonStatsDto {
+    Ok { days: Vec<ActivityDayDto> },
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivityDayDto {
+    pub day_start_ms: u64,
+    pub events: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1496,6 +1516,35 @@ impl DesktopCore {
             Err(state) => state,
         };
         let data = daemon_logs_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Loads the bounded per-day activity totals from the durable rollup.
+    ///
+    /// A `None` window requests the daemon default; the daemon clamps any
+    /// window to its bounded maximum. Daemon failures are classified in the
+    /// returned DTO: an explicit policy deny is blocked, everything else
+    /// unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn daemon_stats(
+        &self,
+        fence: CommandFence,
+        days: Option<u32>,
+    ) -> DesktopResult<DaemonStatsDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => {
+                load_daemon_stats(caller, credential, scope.project_id(), days.unwrap_or(0)).await
+            }
+            Err(state) => state,
+        };
+        let data = daemon_stats_dto(observed);
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -2650,6 +2699,35 @@ fn daemon_logs_dto(state: ObservatoryState<DaemonLogsResult>) -> DaemonLogsDto {
         } => DaemonLogsDto::Unavailable {
             failure: unavailable_failure(code, detail, recovery),
         },
+    }
+}
+
+fn daemon_stats_dto(state: ObservatoryState<DaemonStatsResult>) -> DaemonStatsDto {
+    match state {
+        ObservatoryState::Available(result) => DaemonStatsDto::Ok {
+            days: result.days.into_iter().map(activity_day_dto).collect(),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => DaemonStatsDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => DaemonStatsDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+const fn activity_day_dto(day: ActivityDaySummary) -> ActivityDayDto {
+    ActivityDayDto {
+        day_start_ms: day.day_start_ms,
+        events: day.events,
     }
 }
 

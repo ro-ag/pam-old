@@ -21,7 +21,8 @@ use rusqlite::{Connection, params};
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
+    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
+    ApprovalDecision,
     ApprovalDecisionOutcome, AuditPruneOutcome, AuthorizationAudit, AuthorizationOutcome,
     AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
     CallerRevocation, CancelOutcome, ConnectorTestStatus, ExpectedOperationKind,
@@ -6940,4 +6941,59 @@ async fn connector_config_rejects_invalid_identities_and_base_urls() {
     assert!(store.list_connectors().await.unwrap().is_empty());
 
     close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn activity_day_rollup_counts_events_and_survives_pruning() {
+    let (_directory, path) = database_path("activity-days");
+    let store = Store::open(&path).unwrap();
+
+    const DAY_MS: u64 = 86_400_000;
+    for (event_id, occurred_at) in [
+        ("day0-first", 10),
+        ("day0-second", 20),
+        ("day1-only", DAY_MS + 5),
+    ] {
+        store
+            .append_audit_event(audit_event(
+                event_id,
+                "project-a",
+                "caller-a",
+                occurred_at,
+                occurred_at + 100,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let days = store.activity_days(0).await.unwrap();
+    assert_eq!(days.len(), 2);
+    assert_eq!(days[0], ActivityDay { day_start_ms: 0, events: 2 });
+    assert_eq!(
+        days[1],
+        ActivityDay {
+            day_start_ms: DAY_MS,
+            events: 1
+        }
+    );
+
+    // `since` bounds the window from below.
+    let recent_only = store.activity_days(DAY_MS).await.unwrap();
+    assert_eq!(recent_only, vec![days[1]]);
+
+    // Pruning the underlying audit events must not erase the rollup.
+    store
+        .prune_audit_events(ProjectId::from("project-a"), 2 * DAY_MS, 10)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .recent_audit_events(10)
+            .await
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    assert_eq!(store.activity_days(0).await.unwrap(), days);
+    store.shutdown().await.unwrap();
 }

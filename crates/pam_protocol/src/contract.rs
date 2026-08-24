@@ -177,6 +177,34 @@ impl RequestEnvelope {
         }
     }
 
+    /// Creates an authenticated daemon activity-statistics request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The daemon clamps `days` to its bounded maximum; zero
+    /// requests the daemon default window. Counts come from the durable daily
+    /// rollup, so they survive audit-event pruning.
+    #[must_use]
+    pub fn daemon_stats(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        days: u32,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::DaemonStats,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::DaemonStats { days },
+        }
+    }
+
     /// Creates an authenticated caller registry listing request.
     ///
     /// Attach the caller credential with [`Self::authenticated`] before sending
@@ -881,6 +909,7 @@ pub enum Capability {
     DaemonStop,
     DaemonActivity,
     DaemonLogs,
+    DaemonStats,
     CallerList,
     ProjectCurrent,
     ApprovalDecide,
@@ -908,6 +937,7 @@ impl Capability {
             Self::DaemonStop => "daemon.stop",
             Self::DaemonActivity => "daemon.activity",
             Self::DaemonLogs => "daemon.logs",
+            Self::DaemonStats => "daemon.stats",
             Self::CallerList => "caller.list",
             Self::ProjectCurrent => "project.current",
             Self::ApprovalDecide => "approval.decide",
@@ -1069,6 +1099,9 @@ pub enum RequestPayload {
     },
     DaemonLogs {
         limit: u32,
+    },
+    DaemonStats {
+        days: u32,
     },
     CallerList,
     ProjectCurrent,
@@ -1245,6 +1278,7 @@ pub enum ResultPayload {
     DaemonLifecycle(DaemonLifecycleResult),
     DaemonActivity(ActivityResult),
     DaemonLogs(DaemonLogsResult),
+    DaemonStats(DaemonStatsResult),
     CallerList(CallerListResult),
     ProjectCurrent(ProjectCurrentResult),
     ApprovalDecision(ApprovalDecisionResult),
@@ -1947,6 +1981,22 @@ pub struct DaemonLifecycleResult {
 pub struct ActivityResult {
     pub events: Vec<ActivityEventSummary>,
     pub truncated: bool,
+}
+
+/// Bounded oldest-first per-day activity totals from the durable rollup.
+///
+/// Days with zero events are omitted. The rollup survives audit-event
+/// pruning, so it carries the long-term activity picture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonStatsResult {
+    pub days: Vec<ActivityDaySummary>,
+}
+
+/// One UTC day of daemon-wide activity.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActivityDaySummary {
+    pub day_start_ms: u64,
+    pub events: u64,
 }
 
 /// Bounded oldest-first slice of the daemon's in-memory diagnostic log.

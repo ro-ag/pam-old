@@ -187,12 +187,13 @@ pub enum Decision {
 /// a baseline configure would let any local caller redirect a connector's
 /// base URL to a host it controls and then exfiltrate the stored credential
 /// by running a test against it.
-pub const BASELINE_CAPABILITIES: [&str; 8] = [
+pub const BASELINE_CAPABILITIES: [&str; 9] = [
     "daemon.status",
     "project.current",
     "daemon.stop",
     "daemon.activity",
     "daemon.logs",
+    "daemon.stats",
     "caller.list",
     "model.status",
     "connector.list",

@@ -15,6 +15,7 @@ const COMMANDS: &[&str] = &[
     "load_flow_workspace",
     "daemon_activity",
     "daemon_logs",
+    "daemon_stats",
     "caller_registry",
     "model_status",
     "model_infer",
