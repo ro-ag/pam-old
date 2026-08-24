@@ -1081,7 +1081,7 @@ describe("daemon observatory", () => {
 
     await user.click(await screen.findByRole("button", { name: "Chat" }));
     const drawer = await screen.findByRole("dialog", { name: "Model chat" });
-    expect(within(drawer).getAllByText("qwen3-14b-instruct-q4").length).toBeGreaterThan(0);
+    expect(within(drawer).getAllByText("qwen/qwen3-14b-instruct-q4").length).toBeGreaterThan(0);
     expect(within(drawer).getByText(/close the drawer and the transcript drifts away/)).toBeInTheDocument();
 
     await user.type(within(drawer).getByRole("textbox", { name: "Message the model" }), "hello tide");

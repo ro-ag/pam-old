@@ -1,10 +1,11 @@
-import { CalendarBlank, Lightning, Pulse, Queue } from "@phosphor-icons/react";
+import { Brain, CalendarBlank, Check, Copy, Lightning, Power, Pulse, Queue } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
 import { ProjectPicker } from "../components/Shell";
-import type { ActivityDayDto, DaemonStatsDto, PamBridge, ProjectSummaryDto } from "../domain";
+import type { ActivityDayDto, DaemonStatsDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
 import type { DaemonView } from "../selectors";
 import { presentError } from "../state";
+import { formatModelSize } from "./ActivityView";
 import { CurrentView, type CurrentViewProps } from "./ProjectViews";
 
 const DAY_MS = 86_400_000;
@@ -240,12 +241,192 @@ export function OverviewPanel({ bridge, daemon }: OverviewPanelProps) {
   );
 }
 
+type VerifyState =
+  | { state: "idle" }
+  | { state: "running" }
+  | { state: "pass"; ms: number; tokens: number }
+  | { state: "fail"; detail: string };
+
+const MODEL_IMPORT_COMMAND =
+  "pam model import <vendor>/<name> --path /absolute/path/model.gguf "
+  + "--digest sha256:<hex> --size-bytes <bytes> --license-id <spdx-id> "
+  + "--license-url <url> --license-notice-digest sha256:<hex> --accept-license";
+
+export interface ModelPanelProps {
+  bridge: PamBridge;
+  daemon: DaemonView;
+  modelStatus: ModelStatusDto | null;
+  /** True while a daemon lifecycle command is in flight. */
+  modelBusy: boolean;
+  onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
+  onStartWithModel: (modelId: string) => void;
+}
+
+// The local model runtime, one panel on the launch view: state, identity,
+// a live verification round-trip, and the path from "no model" to "loaded".
+export function ModelPanel({
+  bridge,
+  daemon,
+  modelStatus,
+  modelBusy,
+  onOpenModelChat,
+  onStartWithModel,
+}: ModelPanelProps) {
+  const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
+  const [copied, setCopied] = useState(false);
+  const offline = daemon.state === "stopped";
+  const loaded = modelStatus?.status === "ok" ? modelStatus.loaded : null;
+  const registered = modelStatus?.status === "ok" ? modelStatus.registered : [];
+  const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
+
+  const runVerify = async (modelId: string) => {
+    setVerify({ state: "running" });
+    const startedAt = performance.now();
+    try {
+      const response = await bridge.modelInfer(
+        withDaemonOperation(),
+        modelId,
+        [{ role: "user", content: "Reply with a single word: ready." }],
+        16,
+      );
+      const ms = Math.round(performance.now() - startedAt);
+      if (response.status === "ok") {
+        setVerify({ state: "pass", ms, tokens: response.usage.emittedOutputTokens });
+      } else {
+        setVerify({
+          state: "fail",
+          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+        });
+      }
+    } catch (error) {
+      setVerify({ state: "fail", detail: presentError(error) });
+    }
+  };
+
+  const copyImportCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(MODEL_IMPORT_COMMAND);
+      setCopied(true);
+    } catch {
+      // Clipboard access is optional; the command stays selectable on screen.
+    }
+  };
+
+  const pill = offline || !modelStatus || modelStatus.status !== "ok"
+    ? { label: offline ? "unreachable" : !modelStatus ? "checking" : "unreachable", tone: offline || modelStatus ? "attention" : "not-reported" }
+    : loaded
+      ? { label: "loaded", tone: "healthy" }
+      : registered.length > 0
+        ? { label: "on deck", tone: "observed" }
+        : { label: "none", tone: "not-reported" };
+
+  const restartRow = (model: { modelId: string; sizeBytes: number }) => (
+    <article key={model.modelId}>
+      <span className="access-icon"><Brain size={21} /></span>
+      <div>
+        <strong title={model.modelId}>{model.modelId}</strong>
+        <p>{formatModelSize(model.sizeBytes)} on disk</p>
+      </div>
+      <button
+        type="button"
+        className="button button--secondary button--small"
+        disabled={modelBusy}
+        onClick={() => onStartWithModel(model.modelId)}
+      >
+        <Power size={17} /> {restartLabel}
+      </button>
+    </article>
+  );
+
+  return (
+    <section className="panel model-panel" aria-labelledby="model-panel-heading">
+      <div className="panel-title">
+        <div>
+          <span className="eyebrow">Local model</span>
+          <h2 id="model-panel-heading">Model runtime</h2>
+        </div>
+        <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
+      </div>
+      {offline ? (
+        <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+      ) : !modelStatus ? (
+        <p className="panel-empty">Checking the local model…</p>
+      ) : modelStatus.status !== "ok" ? (
+        <p className="panel-empty">
+          {[modelStatus.failure.detail, modelStatus.failure.recovery].filter(Boolean).join(" ")}
+        </p>
+      ) : loaded ? (
+        <div className="model-runtime">
+          <div className="model-identity">
+            <strong title={loaded.modelId}>{loaded.modelId}</strong>
+            <small>{formatModelSize(loaded.sizeBytes)} on disk · loads fully into memory</small>
+          </div>
+          <div className="model-actions">
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              disabled={verify.state === "running"}
+              onClick={() => void runVerify(loaded.modelId)}
+            >
+              {verify.state === "running" ? "Verifying…" : "Verify"}
+            </button>
+            <button
+              type="button"
+              className="button button--primary button--small"
+              onClick={(event) => onOpenModelChat(loaded.modelId, event.currentTarget)}
+            >
+              Chat
+            </button>
+          </div>
+          {verify.state === "pass" && (
+            <p className="model-verify is-pass" role="status">
+              <Check size={16} aria-hidden="true" /> Verified · {verify.ms} ms · {verify.tokens} token{verify.tokens === 1 ? "" : "s"} back
+            </p>
+          )}
+          {verify.state === "fail" && (
+            <p className="model-verify is-fail" role="alert">{verify.detail}</p>
+          )}
+          {registered.some((model) => model.modelId !== loaded.modelId) && (
+            <div className="access-list model-rows">
+              {registered.filter((model) => model.modelId !== loaded.modelId).map(restartRow)}
+            </div>
+          )}
+        </div>
+      ) : registered.length > 0 ? (
+        <div className="model-runtime">
+          <p className="model-note">A model is registered but not loaded. Bring it into memory to chat and verify.</p>
+          <div className="access-list model-rows">{registered.map(restartRow)}</div>
+        </div>
+      ) : (
+        <div className="model-runtime model-guide">
+          <p className="model-note">No local model is registered yet. Three steps bring one on watch:</p>
+          <ol>
+            <li>Download a GGUF build of the model you want to run locally.</li>
+            <li>
+              Register it with the daemon:
+              <pre><code>{MODEL_IMPORT_COMMAND}</code></pre>
+              <button type="button" className="button button--secondary button--small" onClick={() => void copyImportCommand()}>
+                {copied ? <Check size={17} /> : <Copy size={17} />} {copied ? "Copied" : "Copy command"}
+              </button>
+            </li>
+            <li>Return here and start PAM with the registered model.</li>
+          </ol>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export interface ControlCenterViewProps {
   bridge: PamBridge;
   daemon: DaemonView;
   projects: ProjectSummaryDto[];
   onSelectProject: (project: ProjectSummaryDto) => void;
   contextBar?: ReactNode;
+  modelStatus: ModelStatusDto | null;
+  modelBusy: boolean;
+  onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
+  onStartWithModel: (modelId: string) => void;
   /** Present while a project is active; the project keeps a calm, second row. */
   project: CurrentViewProps | null;
 }
@@ -256,6 +437,10 @@ export function ControlCenterView({
   projects,
   onSelectProject,
   contextBar,
+  modelStatus,
+  modelBusy,
+  onOpenModelChat,
+  onStartWithModel,
   project,
 }: ControlCenterViewProps) {
   return (
@@ -268,6 +453,14 @@ export function ControlCenterView({
         {contextBar}
       </header>
       <OverviewPanel bridge={bridge} daemon={daemon} />
+      <ModelPanel
+        bridge={bridge}
+        daemon={daemon}
+        modelStatus={modelStatus}
+        modelBusy={modelBusy}
+        onOpenModelChat={onOpenModelChat}
+        onStartWithModel={onStartWithModel}
+      />
       {project ? (
         <section className="project-detail" aria-label="Active project">
           <CurrentView {...project} />

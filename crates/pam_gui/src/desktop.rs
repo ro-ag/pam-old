@@ -1195,7 +1195,20 @@ impl DesktopCore {
     /// # Errors
     ///
     /// Returns a bounded error for stale authority or process startup failure.
-    pub async fn start_daemon(&self, fence: CommandFence) -> DesktopResult<Option<SnapshotDto>> {
+    pub async fn start_daemon(
+        &self,
+        fence: CommandFence,
+        model: Option<String>,
+    ) -> DesktopResult<Option<SnapshotDto>> {
+        // Validate the optional model identity before any authority or process
+        // work; the protocol's vendor/name contract is the single source of truth.
+        if let Some(model) = &model {
+            ModelSummary::new(model.clone(), 1).map_err(|_| {
+                DesktopErrorDto::invalid_input(
+                    "The model identity must be a registered vendor/name pair.",
+                )
+            })?;
+        }
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
         let (executable, spawn_root) = {
@@ -1220,6 +1233,7 @@ impl DesktopCore {
             // --recover is idempotent: it only clears a stale socket, and a
             // live daemon still holds the ownership lock.
             .args(["daemon", "--recover"])
+            .args(model.as_ref().map(|key| format!("--model={key}")))
             .env(pam_platform::LAUNCH_GRANT_ENV, grant)
             .current_dir(&spawn_root)
             .stdin(Stdio::null())
