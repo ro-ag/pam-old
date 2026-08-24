@@ -4,6 +4,26 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-24
+
+### Added
+
+- Public help and documentation site served from GitHub Pages at
+  <https://ro-ag.github.io/pam/>: install matrix, first-run guide, flows,
+  connectors, local model, and troubleshooting (including the macOS login
+  keychain `errSecAuthFailed (-25293)` repair).
+- Fresh desktop screenshots of the control center, flows, skills, access,
+  connections, and activity views under `docs/assets/screenshots/`, captured
+  from the fixture frontend in both theme families.
+
+### Changed
+
+- README restructured as a showcase: project mark, release/CI/docs badges,
+  screenshot gallery, theme grid, install matrix, quickstart, approvals,
+  local model, security model, and development sections.
+- Root `node_modules/` build residue is no longer tracked and is ignored
+  going forward.
+
 ## [0.1.1] - 2026-08-24
 
 ### Fixed
