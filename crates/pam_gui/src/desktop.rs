@@ -2024,14 +2024,16 @@ fn gui_registration_command(executable: &Path, root: &Path) -> tokio::process::C
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // The helper prints only sanitized, bounded diagnostics; its first
+        // stderr line is the failure reason surfaced to the user.
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     command
 }
 
 async fn run_gui_registration(executable: &Path, root: &Path) -> DesktopResult<()> {
     let mut command = gui_registration_command(executable, root);
-    let status = tokio::time::timeout(GUI_REGISTRATION_TIMEOUT, command.status())
+    let output = tokio::time::timeout(GUI_REGISTRATION_TIMEOUT, command.output())
         .await
         .map_err(|_| {
             DesktopErrorDto::unavailable(
@@ -2045,13 +2047,21 @@ async fn run_gui_registration(executable: &Path, root: &Path) -> DesktopResult<(
                 Some(error.to_string()),
             )
         })?;
-    if !status.success() {
+    if !output.status.success() {
         return Err(DesktopErrorDto::unavailable(
-            format!("PAM GUI caller registration failed with {status}."),
+            registration_failure_detail(&output),
             Some("Retry registration or inspect the local PAM data store.".to_owned()),
         ));
     }
     Ok(())
+}
+
+pub(crate) fn registration_failure_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(reason) => format!("PAM GUI caller registration failed: {reason}"),
+        None => format!("PAM GUI caller registration failed with {}.", output.status),
+    }
 }
 
 #[cfg(windows)]

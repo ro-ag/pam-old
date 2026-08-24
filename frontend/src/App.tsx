@@ -481,7 +481,10 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     const fence = withOperation(state.activeFence!);
     void executeDataCommand(
       fence,
-      () => bridge.registerGuiCaller(fence).catch(() => {
+      () => bridge.registerGuiCaller(fence).catch((error: unknown) => {
+        // Bounded desktop errors carry a sanitized reason; surface it.
+        // Anything else stays behind fixed copy so raw internals never render.
+        if (typeof error === "object" && error !== null && "kind" in error) throw error;
         throw new Error("GUI caller registration could not be completed. Retry from this screen.");
       }),
       "GUI caller registered",

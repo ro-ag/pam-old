@@ -1017,6 +1017,23 @@ describe("daemon observatory", () => {
     expect(bridge.registerGuiCaller).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces the bounded desktop reason when registration fails with a typed error", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("missing-credential");
+    bridge.registerGuiCaller = vi.fn().mockRejectedValue({
+      kind: "unavailable",
+      message: "PAM GUI caller registration failed: PAM's native credential store is unavailable.",
+      recovery: "Retry registration or inspect the local PAM data store.",
+    });
+    render(<App bridge={bridge} initialView="control-center" />);
+
+    await user.click(await screen.findByRole("button", { name: "Register GUI caller" }));
+
+    expect(await screen.findByText(/PAM's native credential store is unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText("GUI caller registration could not be completed. Retry from this screen.")).not.toBeInTheDocument();
+    expect(bridge.registerGuiCaller).toHaveBeenCalledTimes(1);
+  });
+
   it("never substitutes fixture data after a production bridge failure", async () => {
     const bridge = fixtureBridge();
     bridge.bootstrap = vi.fn().mockRejectedValue(new Error("daemon socket unavailable"));
