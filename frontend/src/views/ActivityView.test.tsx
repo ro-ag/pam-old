@@ -26,8 +26,8 @@ async function activityProps(scenario: FixtureScenario = "solved", modelStatus: 
 
 const loadedStatus: ModelStatusDto = {
   status: "ok",
-  loaded: { modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 },
-  registered: [{ modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 }],
+  loaded: { modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 },
+  registered: [{ modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 }],
 };
 
 describe("ActivityView", () => {
@@ -132,24 +132,24 @@ describe("ActivityView", () => {
     const props = await activityProps("solved", loadedStatus);
     render(<ActivityView {...props} />);
 
-    expect(screen.getByText("qwen3-14b-instruct-q4")).toBeInTheDocument();
+    expect(screen.getByText("qwen/qwen3-14b-instruct-q4")).toBeInTheDocument();
     expect(screen.getByText("19.5 GB")).toBeInTheDocument();
     expect(screen.getByText("loaded")).toBeInTheDocument();
     await waitFor(() => expect(props.onReloadModel).toHaveBeenCalled());
 
     await user.click(screen.getByRole("button", { name: "Chat" }));
-    expect(props.onOpenModelChat).toHaveBeenCalledWith("qwen3-14b-instruct-q4", expect.any(HTMLElement));
+    expect(props.onOpenModelChat).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4", expect.any(HTMLElement));
   });
 
   it("shows a registered-but-not-loaded model as on deck with chat available", async () => {
     const props = await activityProps("solved", {
       status: "ok",
       loaded: null,
-      registered: [{ modelId: "qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 }],
+      registered: [{ modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 }],
     });
     render(<ActivityView {...props} />);
 
-    expect(screen.getByText("qwen3-4b-instruct-q4")).toBeInTheDocument();
+    expect(screen.getByText("qwen/qwen3-4b-instruct-q4")).toBeInTheDocument();
     expect(screen.getByText("on deck")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled();
   });

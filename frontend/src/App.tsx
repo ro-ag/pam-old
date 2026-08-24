@@ -480,6 +480,14 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       await bridge.startDaemon(withDaemonOperation());
     }, "PAM restarted");
   };
+  // Loading a model means restarting the daemon with --model: stop if needed,
+  // start carrying the key, then re-read the model surface.
+  const startWithModel = (modelId: string) => {
+    void runDaemonLifecycle(async () => {
+      if (daemon.state === "running") await bridge.stopDaemon(withDaemonOperation());
+      await bridge.startDaemon(withDaemonOperation(), modelId);
+    }, "PAM is on watch with the model").then(() => void loadModelStatus());
+  };
   const registerGuiCaller = () => {
     const fence = withOperation(state.activeFence!);
     void executeDataCommand(
@@ -704,6 +712,10 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   projects={state.catalog.projects}
                   onSelectProject={selectProject}
                   contextBar={projectContextBar}
+                  modelStatus={modelStatus}
+                  modelBusy={busy}
+                  onOpenModelChat={openModelChat}
+                  onStartWithModel={startWithModel}
                   project={projectData && state.activeFence ? {
                     data: projectData,
                     onCopy: (brief) => void copyBrief(brief),

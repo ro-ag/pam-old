@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { withDaemonOperation } from "../bridge";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
@@ -23,6 +24,10 @@ async function controlCenterProps(scenario: FixtureScenario = "solved", withProj
       : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
     projects: catalog.projects,
     onSelectProject: vi.fn(),
+    modelStatus: await bridge.modelStatus(withDaemonOperation()),
+    modelBusy: false,
+    onOpenModelChat: vi.fn(),
+    onStartWithModel: vi.fn(),
     project:
       withProject && control
         ? {
@@ -78,6 +83,76 @@ describe("ControlCenterView", () => {
     expect(
       screen.getByText("The activity picture returns when PAM is back on watch."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("model runtime panel", () => {
+  it("shows the loaded model with size and verifies it with a live round-trip", async () => {
+    const props = await controlCenterProps();
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("loaded")).toBeInTheDocument();
+    expect(within(panel).getByText("qwen/qwen3-14b-instruct-q4")).toBeInTheDocument();
+    expect(within(panel).getByText(/19\.5 GB/)).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Verify" }));
+    expect(await within(panel).findByText(/Verified · \d+ ms/)).toBeInTheDocument();
+  });
+
+  it("reports a failed verification with the bounded failure detail", async () => {
+    const props = await controlCenterProps("model-infer-blocked");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Verify" }));
+    expect(
+      await within(panel).findByText(/Project policy has not granted model\.infer/),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the chat from the panel in one click", async () => {
+    const props = await controlCenterProps();
+    render(<ControlCenterView {...props} />);
+
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "Model runtime" })).getByRole("button", { name: "Chat" }),
+    );
+    expect(props.onOpenModelChat).toHaveBeenCalledWith(
+      "qwen/qwen3-14b-instruct-q4",
+      expect.any(HTMLElement),
+    );
+  });
+
+  it("offers a restart with a registered model when nothing is loaded", async () => {
+    const props = await controlCenterProps("model-on-deck");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("on deck")).toBeInTheDocument();
+    await userEvent.click(
+      within(panel).getAllByRole("button", { name: /Restart PAM with this model/ })[0],
+    );
+    expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
+  });
+
+  it("walks through the import steps when no model is registered", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("none")).toBeInTheDocument();
+    expect(within(panel).getByText(/pam model import/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /Copy command/ })).toBeInTheDocument();
+  });
+
+  it("marks the runtime unreachable while PAM is paused", async () => {
+    const props = await controlCenterProps("offline", false);
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("unreachable")).toBeInTheDocument();
+    expect(within(panel).getByText(/local model runtime is not reachable/)).toBeInTheDocument();
   });
 });
 

@@ -1604,6 +1604,22 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 }
 }
 
+/* Control-center model runtime panel */
+.model-runtime { display: grid; gap: calc(10px * var(--density)); padding: calc(12px * var(--density)) 18px calc(14px * var(--density)); }
+.model-identity { display: grid; min-width: 0; gap: 2px; }
+.model-identity strong { overflow: hidden; color: var(--pam-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.model-identity small, .model-note { color: var(--pam-muted); font-size: 12px; }
+.model-note { margin: 0; }
+.model-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-verify { display: flex; gap: 6px; align-items: center; margin: 0; font-size: 12px; }
+.model-verify.is-pass { color: var(--pam-success); }
+.model-verify.is-fail { color: var(--pam-danger); }
+.model-rows { border-top: 1px solid var(--pam-line); }
+.model-rows article { padding-right: 0; padding-left: 0; }
+.model-guide ol { display: grid; gap: calc(8px * var(--density)); margin: 0; padding-left: 18px; color: var(--pam-content-secondary); font-size: 13px; list-style: decimal; }
+.model-guide pre { margin: 6px 0; padding: 8px 10px; overflow-x: auto; border: 1px solid var(--pam-line); border-radius: 8px; background: var(--pam-surface); }
+.model-guide code { color: var(--pam-text); font-family: var(--font-mono); font-size: 11.5px; }
+
 /* Control-center overview heatmap */
 .heatmap-panel { padding-bottom: 14px; }
 .heatmap-scroll { overflow-x: auto; padding: 6px 18px 12px; }

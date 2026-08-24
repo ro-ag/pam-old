@@ -77,6 +77,19 @@ pub(crate) struct BootstrapRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StartDaemonRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FencedRequest {
     #[serde(deserialize_with = "canonical_uuid")]
     project_handle: ProjectHandle,
@@ -273,9 +286,14 @@ pub(crate) async fn refresh_project(
 #[tauri::command]
 pub(crate) async fn start_daemon(
     state: State<'_, DesktopState>,
-    request: FencedRequest,
+    request: StartDaemonRequest,
 ) -> Result<Option<SnapshotDto>, DesktopErrorDto> {
-    state.core.start_daemon(request.into_fence()).await
+    let fence = CommandFence::new(
+        request.project_handle,
+        request.generation,
+        request.operation_id,
+    );
+    state.core.start_daemon(fence, request.model).await
 }
 
 #[tauri::command]

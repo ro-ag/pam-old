@@ -934,8 +934,31 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
             .await,
     );
     assert_daemon_replay_conflict(core.daemon_health(fence()).await);
-    assert_daemon_replay_conflict(core.start_daemon(fence()).await);
+    assert_daemon_replay_conflict(core.start_daemon(fence(), None).await);
     assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
+}
+
+#[tokio::test]
+async fn start_daemon_rejects_a_malformed_model_key_before_any_authority_io() {
+    let core = DesktopCore::new("/bounded/test");
+    for model in [
+        "qwen3-no-vendor",
+        "a//b",
+        "",
+        "vendor/",
+        "a b/c",
+        "--model=x/y",
+    ] {
+        let error = core
+            .start_daemon(daemon_fence(OperationId::new()), Some(model.to_owned()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            DesktopErrorKind::InvalidInput,
+            "model {model:?}"
+        );
+    }
 }
 
 #[tokio::test]

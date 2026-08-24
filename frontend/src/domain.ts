@@ -590,7 +590,7 @@ export interface PamBridge {
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
-  startDaemon(fence: CommandFence): Promise<SnapshotDto | null>;
+  startDaemon(fence: CommandFence, model?: string): Promise<SnapshotDto | null>;
   stopDaemon(fence: CommandFence): Promise<SnapshotDto | null>;
   registerGuiCaller(fence: CommandFence): Promise<SnapshotDto>;
   decideApproval(fence: CommandFence, approvalHandle: string, decision: ApprovalDecision): Promise<ApprovalDecisionResponseDto>;

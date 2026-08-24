@@ -139,8 +139,11 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       ),
     refreshProject: (fence) =>
       invokeCommand<SnapshotDto>("refresh_project", request(flatFence(fence))),
-    startDaemon: (fence) =>
-      invokeCommand<SnapshotDto | null>("start_daemon", request(flatFence(fence))),
+    startDaemon: (fence, model) =>
+      invokeCommand<SnapshotDto | null>("start_daemon", request({
+        ...flatFence(fence),
+        ...(model === undefined ? {} : { model }),
+      })),
     stopDaemon: (fence) =>
       invokeCommand<SnapshotDto | null>("stop_daemon", request(flatFence(fence))),
     registerGuiCaller: (fence) =>

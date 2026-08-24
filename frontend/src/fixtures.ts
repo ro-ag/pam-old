@@ -238,6 +238,8 @@ export const fixtureScenarios = [
   "skill-audit-failed",
   "skill-audit-load-error",
   "model-infer-blocked",
+  "model-none",
+  "model-on-deck",
   "connector-unconfigured",
   "connector-blocked",
 ] as const;
@@ -248,10 +250,10 @@ export function fixtureScenario(value: string | null | undefined): FixtureScenar
   return fixtureScenarios.find((scenario) => scenario === value) ?? "solved";
 }
 
-const loadedModel: ModelSummaryDto = { modelId: "qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 };
+const loadedModel: ModelSummaryDto = { modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 };
 const registeredModels: ModelSummaryDto[] = [
   loadedModel,
-  { modelId: "qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
+  { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
 ];
 
 const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
@@ -610,6 +612,11 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   const isDaemonFence = (fence: CommandFence) => fence.projectHandle === "daemon" && fence.generation === "daemon";
   let generation = "99999999-9999-4999-8999-999999999999";
   let daemonRunning = scenario !== "offline";
+  // The registered catalog and the loaded slot depend on the model scenario;
+  // startDaemon(model) moves a registered model into the loaded slot.
+  const modelCatalog = scenario === "model-none" ? [] : registeredModels;
+  let modelLoaded: ModelSummaryDto | null =
+    scenario === "model-none" || scenario === "model-on-deck" ? null : loadedModel;
   let savedSource = flowSource;
   const connectors: ConnectorSummaryDto[] = [
     scenario === "connector-unconfigured" || scenario === "connector-blocked"
@@ -727,7 +734,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           },
         };
       }
-      return clone({ status: "ok" as const, loaded: loadedModel, registered: registeredModels });
+      return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog });
     },
     async modelInfer(_fence, model, messages: ChatMessageDto[]): Promise<ModelInferDto> {
       if (scenario === "model-infer-blocked") {
@@ -864,8 +871,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     async refreshProject(fence) { return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario)); },
     // Under the daemon authority the lifecycle answers with no snapshot; a
     // project fence still receives a freshly fenced snapshot.
-    async startDaemon(fence) {
+    async startDaemon(fence, model) {
       daemonRunning = true;
+      if (model) modelLoaded = modelCatalog.find((entry) => entry.modelId === model) ?? null;
       if (isDaemonFence(fence)) return null;
       return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario));
     },
