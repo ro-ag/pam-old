@@ -28,8 +28,8 @@ use super::{
         failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
         gui_registration_current_for_test, manage_skill_library_without_io_for_test,
         model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        registration_contract_for_test, reserve_daemon_for_test, reserve_for_test,
-        switch_authority_for_test,
+        registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
+        reserve_for_test, switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -185,6 +185,34 @@ fn gui_registration_uses_only_the_bundled_helper_and_fixed_bounded_contract() {
     assert_eq!(current_dir.as_deref(), Some(root));
     assert!(kill_on_drop);
     assert_eq!(timeout, std::time::Duration::from_secs(15));
+}
+
+#[cfg(unix)]
+#[test]
+fn registration_failure_detail_surfaces_the_helper_reason_or_exit_status() {
+    use std::os::unix::process::ExitStatusExt;
+    let failed = std::process::ExitStatus::from_raw(2 << 8);
+
+    let with_reason = std::process::Output {
+        status: failed,
+        stdout: Vec::new(),
+        stderr: b"PAM's native credential store is unavailable.\nRecovery: pam caller register\n"
+            .to_vec(),
+    };
+    assert_eq!(
+        registration_failure_detail(&with_reason),
+        "PAM GUI caller registration failed: PAM's native credential store is unavailable."
+    );
+
+    let silent = std::process::Output {
+        status: failed,
+        stdout: Vec::new(),
+        stderr: b"  \n".to_vec(),
+    };
+    assert_eq!(
+        registration_failure_detail(&silent),
+        format!("PAM GUI caller registration failed with {failed}.")
+    );
 }
 
 #[tokio::test]
