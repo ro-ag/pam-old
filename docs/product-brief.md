@@ -22,7 +22,8 @@ human.
 
 The primary user is a professional developer using one or more coding agents on
 a company-managed Mac. Their work spans local repositories, GitHub or Jenkins,
-SonarQube, Jira, Confluence, internal certificates, and access policies. They
+SonarQube, Jira, Confluence, SharePoint, AWS, internal certificates, and
+access policies. They
 care about speed, but cannot trade away auditability, secret safety, or the
 ability to understand what ran.
 
@@ -81,9 +82,9 @@ The first usable slice proves the complete local loop on an M1-class Mac with
 - compact streamed feedback plus a durable final result;
 - policy prompts and secrets held in the operating-system credential store.
 
-The preview may use GitHub Actions as its first remote connector. Jira,
-Confluence, Jenkins, and SonarQube follow through the same capability boundary
-after the local loop is trustworthy.
+GitHub Actions shipped as the first remote connector. Jenkins, SonarQube,
+Jira Data Center, Confluence Cloud, SharePoint, and an allowlisted read-only
+AWS CLI passthrough now follow through the same capability boundary.
 
 ## Flows
 
