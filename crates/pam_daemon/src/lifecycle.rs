@@ -402,6 +402,7 @@ where
             .map(|override_backend| override_backend.0),
     );
     let mut server = ServerTransport::bind(&config.endpoint).await?;
+    connectors.warm(log.clone());
     let (loaded_model, model_worker) = start_model_service(&store, config.model.clone()).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
     let (scheduler_tx, scheduler_rx) = mpsc::channel::<()>(SCHEDULER_CAPACITY);

@@ -82,4 +82,3 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-24
 - cost: 10
 - status: watching
-

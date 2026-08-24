@@ -13,6 +13,10 @@ use pam_store::Store;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 const TEST_CREDENTIAL: &str = "daemon-scope-caller-credential";
+/// Connector exchanges touch the native keychain; the security server's
+/// first-access code-signature evaluation of a fresh debug binary can take
+/// several seconds, so keychain-backed exchanges get a generous deadline.
+const KEYCHAIN_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn test_runtime(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -156,13 +160,13 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
     )
     .await
     .unwrap();
-    assert!(matches!(
-        stats.result.body,
+    match &stats.result.body {
         ResultBody::Success {
             truth: OperationTruth::Observed,
             payload: ResultPayload::DaemonStats(_),
-        }
-    ));
+        } => {}
+        other => panic!("daemon stats read failed: {other:?}"),
+    }
 
     let callers = request_exchange(
         &endpoint,
@@ -212,7 +216,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             scope.clone(),
             IdempotencyKey::from("scope-connectors-key"),
         )),
-        Duration::from_secs(2),
+        KEYCHAIN_EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -332,7 +336,7 @@ async fn daemon_scope_grant_authorizes_connector_configure() {
     let configured = request_exchange(
         &endpoint,
         &configure("scope-configure", ProjectId::daemon_scope()),
-        Duration::from_secs(2),
+        KEYCHAIN_EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -350,7 +354,7 @@ async fn daemon_scope_grant_authorizes_connector_configure() {
     let denied = request_exchange(
         &endpoint,
         &configure("project-configure", ProjectId::from("project-elsewhere")),
-        Duration::from_secs(2),
+        KEYCHAIN_EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
