@@ -68,31 +68,30 @@ use pam_platform::{
 };
 use pam_policy::{CapabilityName, InvalidResourceName, ResourceName, redact_audit_detail};
 use pam_protocol::{
-    ActivityEventSummary, ActivityResult, ApprovalChallenge,
+    ActivityDaySummary, ActivityEventSummary, ActivityResult, ApprovalChallenge,
     ApprovalDecision as ProtocolApprovalDecision, ApprovalDecisionDisposition,
     ApprovalDecisionResult, BriefProvenance, BriefResult, CallerListResult, CallerSummary,
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ActivityDaySummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult,
-    DaemonLogEntry, DaemonStatsResult,
-    DaemonLogsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata, EvidenceRedaction,
-    EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
-    ProjectRequestState as ProtocolProjectRequestState,
+    ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
+    DaemonLogsResult, DaemonStatsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
+    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity,
+    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
+    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
+    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ReplayResult, RequestEnvelope,
     RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability,
     StatusResult, decode_request_envelope, decode_server_message_envelope, encode,
 };
 use pam_store::{
     AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
-    ApprovalDecision as StoreApprovalDecision,
-    ApprovalDecisionOutcome, AuditEventRecord, AuthorizationAudit, AuthorizationOutcome,
-    AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
-    CancelOutcome, ConnectorRecord, ConnectorTestStatus, EventRecord, ExpectedOperationKind,
-    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, LeasedRequest,
-    ProjectCurrent as StoreProjectCurrent, ProjectRequestSummary as StoreProjectRequestSummary,
-    Replay, RequestSnapshot, RequestState, Store, StoreError, TerminalState,
+    ApprovalDecision as StoreApprovalDecision, ApprovalDecisionOutcome, AuditEventRecord,
+    AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun,
+    CallerAuthentication, CallerRegistration, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
+    EventRecord, ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
+    LeasedRequest, ProjectCurrent as StoreProjectCurrent,
+    ProjectRequestSummary as StoreProjectRequestSummary, Replay, RequestSnapshot, RequestState,
+    Store, StoreError, TerminalState,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::{

@@ -11,6 +11,7 @@ import type {
   ConnectorTestDto,
   ConnectorsDto,
   DaemonLogsDto,
+  DaemonStatsDto,
   EvidenceDto,
   FlowComposeDto,
   FlowDefinitionJson,
@@ -102,6 +103,11 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       invokeCommand<DaemonLogsDto>("daemon_logs", request({
         ...flatFence(fence),
         limit: limit ?? null,
+      })),
+    daemonStats: (fence, days) =>
+      invokeCommand<DaemonStatsDto>("daemon_stats", request({
+        ...flatFence(fence),
+        limit: days ?? null,
       })),
     callerRegistry: (fence) =>
       invokeCommand<CallersDto>("caller_registry", request(flatFence(fence))),

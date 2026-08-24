@@ -66,7 +66,9 @@ describe("daemon observatory", () => {
 
     expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "payments-api" })).toBeInTheDocument();
-    expect(screen.getByText("Watch status")).toBeInTheDocument();
+    expect(screen.getAllByText("Watch status").length).toBeGreaterThan(0);
+    expect(screen.getByRole("region", { name: "Daemon overview" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "The last 26 weeks" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ready for the next agent" })).toBeInTheDocument();
   });
 
@@ -1188,7 +1190,7 @@ describe("global-first workspace", () => {
     render(<App bridge={fixtureBridge("global-only")} />);
 
     expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Daemon overview" })).toBeInTheDocument();
     expect(screen.getByText(/Open PAM from a Git repository/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "PAM needs a moment" })).not.toBeInTheDocument();
     expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
@@ -1237,7 +1239,7 @@ describe("global-first workspace", () => {
   it("shows the discovery hint in every project-shaped view with an empty catalog", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge("global-only")} />);
-    await screen.findByRole("heading", { name: "No projects discovered yet" });
+    await screen.findByText(/Open PAM from a Git repository/);
 
     for (const [button, heading] of [["Access", "Access"], ["Flows", "Flows"]] as const) {
       await user.click(screen.getByRole("button", { name: button }));

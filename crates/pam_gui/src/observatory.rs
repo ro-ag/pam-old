@@ -6,9 +6,8 @@ use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
-    FailureCode,
-    ModelGenerationResult, ModelMessage, ModelStatusResult, ProtocolContractError, RequestEnvelope,
-    ResultBody, ResultPayload,
+    FailureCode, ModelGenerationResult, ModelMessage, ModelStatusResult, ProtocolContractError,
+    RequestEnvelope, ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};

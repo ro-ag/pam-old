@@ -22,17 +22,16 @@ use sha2::{Digest as _, Sha256};
 
 use super::{
     AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
-    ApprovalDecision,
-    ApprovalDecisionOutcome, AuditPruneOutcome, AuthorizationAudit, AuthorizationOutcome,
-    AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication, CallerRegistration,
-    CallerRevocation, CancelOutcome, ConnectorTestStatus, ExpectedOperationKind,
-    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, FlowCheckpointDisposition,
-    FlowEffectAuthorization, FlowTerminalResult, GrantRevocation, MAX_AUDIT_ACTION_BYTES,
-    MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
-    MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES,
-    MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_PROJECT_CURRENT_QUEUED, MAX_SKILLS_AUDIT_REPORT_BYTES,
-    ProjectWorkload, PutGrant, RequestState, SaveFlowCheckpoint, Store, StoreError, TerminalState,
-    UpsertConnectorConfig,
+    ApprovalDecision, ApprovalDecisionOutcome, AuditPruneOutcome, AuthorizationAudit,
+    AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
+    CallerRegistration, CallerRevocation, CancelOutcome, ConnectorTestStatus,
+    ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
+    FlowCheckpointDisposition, FlowEffectAuthorization, FlowTerminalResult, GrantRevocation,
+    MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES,
+    MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
+    MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_PROJECT_CURRENT_QUEUED,
+    MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectWorkload, PutGrant, RequestState, SaveFlowCheckpoint,
+    Store, StoreError, TerminalState, UpsertConnectorConfig,
 };
 use crate::store::database_path;
 
@@ -6945,10 +6944,10 @@ async fn connector_config_rejects_invalid_identities_and_base_urls() {
 
 #[tokio::test]
 async fn activity_day_rollup_counts_events_and_survives_pruning() {
+    const DAY_MS: u64 = 86_400_000;
     let (_directory, path) = database_path("activity-days");
     let store = Store::open(&path).unwrap();
 
-    const DAY_MS: u64 = 86_400_000;
     for (event_id, occurred_at) in [
         ("day0-first", 10),
         ("day0-second", 20),
@@ -6968,7 +6967,13 @@ async fn activity_day_rollup_counts_events_and_survives_pruning() {
 
     let days = store.activity_days(0).await.unwrap();
     assert_eq!(days.len(), 2);
-    assert_eq!(days[0], ActivityDay { day_start_ms: 0, events: 2 });
+    assert_eq!(
+        days[0],
+        ActivityDay {
+            day_start_ms: 0,
+            events: 2
+        }
+    );
     assert_eq!(
         days[1],
         ActivityDay {

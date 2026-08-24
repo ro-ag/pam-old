@@ -16,12 +16,12 @@ use pam_daemon::registered_projects;
 use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, StepCondition};
 use pam_platform::{CallerKind, caller_id, discover_project};
 use pam_protocol::{
-    ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult, CallerSummary,
-    ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ActivityDaySummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
-    DaemonStatsResult, FailureCode, LogSeverity,
-    MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
-    ModelStatusResult, ModelSummary, ProjectRequestState, ProjectRequestSummary,
+    ActivityDaySummary, ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult,
+    CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
+    ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
+    DaemonStatsResult, FailureCode, LogSeverity, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason,
+    ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary,
+    ProjectRequestState, ProjectRequestSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;

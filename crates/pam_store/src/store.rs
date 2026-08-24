@@ -32,14 +32,13 @@ use uuid::Uuid;
 
 use crate::evidence::{self, EvidenceFiles};
 use crate::{
-    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AppendAuditEvent, ApprovalDecision,
-    ActivityDay, ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome,
-    AuthorizationAudit,
-    AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun, CallerAuthentication,
-    CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
-    EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention, ExpectedOperationKind,
-    FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome, FlowCheckpoint,
-    FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
+    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
+    ApprovalDecision, ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome,
+    AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun,
+    CallerAuthentication, CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord,
+    ConnectorTestStatus, EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention,
+    ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
+    FlowCheckpoint, FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
     FlowTerminalResult, GrantRevocation, Lease, LeasedRequest, MAX_AUDIT_ACTION_BYTES,
     MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
     MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
@@ -3363,8 +3362,8 @@ fn activity_days(connection: &Connection, since_ms: u64) -> Result<Vec<ActivityD
             params![since, i64::try_from(MAX_ACTIVITY_DAYS).expect("bound fits")],
             |row| {
                 Ok(ActivityDay {
-                    day_start_ms: row.get::<_, i64>(0)?.max(0) as u64,
-                    events: row.get::<_, i64>(1)?.max(0) as u64,
+                    day_start_ms: row.get::<_, i64>(0)?.max(0).cast_unsigned(),
+                    events: row.get::<_, i64>(1)?.max(0).cast_unsigned(),
                 })
             },
         )?

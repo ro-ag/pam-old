@@ -492,6 +492,15 @@ export type DaemonLogsDto =
   | { status: "ok"; entries: DaemonLogEntryDto[] }
   | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
 
+export interface ActivityDayDto {
+  dayStartMs: number;
+  events: number;
+}
+
+export type DaemonStatsDto =
+  | { status: "ok"; days: ActivityDayDto[] }
+  | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
+
 export interface ModelSummaryDto {
   modelId: string;
   sizeBytes: number;
@@ -572,6 +581,7 @@ export interface PamBridge {
   daemonHealth(fence: CommandFence): Promise<HealthDto>;
   daemonActivity(fence: CommandFence, limit?: number): Promise<ActivityDto>;
   daemonLogs(fence: CommandFence, limit?: number): Promise<DaemonLogsDto>;
+  daemonStats(fence: CommandFence, days?: number): Promise<DaemonStatsDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
   connectorRegistry(fence: CommandFence): Promise<ConnectorsDto>;
   connectorConfigure(fence: CommandFence, params: ConnectorConfigureParams): Promise<ConnectorConfigureDto>;
