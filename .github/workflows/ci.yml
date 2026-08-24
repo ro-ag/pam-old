@@ -8,7 +8,6 @@ on:
       - "docs/**"
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -33,7 +32,7 @@ jobs:
       rust_changed: ${{ steps.rust_changes.outputs.changed }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
 
@@ -119,7 +118,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Linux desktop dependencies
         run: |
@@ -132,7 +131,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -157,7 +156,7 @@ jobs:
         working-directory: frontend
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -214,7 +213,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Linux desktop dependencies
         if: ${{ matrix.family == 'linux' }}
@@ -236,7 +235,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: desktop-${{ matrix.target }}
 
@@ -416,7 +415,7 @@ jobs:
           fi
 
       - name: Upload preview packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ steps.package.outputs.path }}
@@ -424,18 +423,16 @@ jobs:
           retention-days: 7
 
   macos-package:
-    name: macOS arm64 signed package
+    name: macOS arm64 package
     needs: [rust, frontend]
-    if: >-
-      github.ref == 'refs/heads/main' ||
-      (github.event_name == 'pull_request' &&
-       github.event.action == 'labeled' &&
-       github.event.label.name == 'run-macos')
+    # Unsigned preview on main only; signing + notarization happen in the
+    # release workflow on tags.
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -450,7 +447,7 @@ jobs:
           target: aarch64-apple-darwin
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: desktop-aarch64-apple-darwin
 
@@ -458,58 +455,18 @@ jobs:
         working-directory: frontend
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Prepare Apple signing and notarization
-        shell: bash
+      - name: Build application
         env:
-          APPLE_API_KEY_ID_SECRET: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_MATERIAL: ${{ secrets.APPLE_API_KEY }}
-          APPLE_CERTIFICATE_BASE64_SECRET: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD_SECRET: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD_SECRET: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          keychain="$RUNNER_TEMP/pam-build.keychain-db"
-          certificate="$RUNNER_TEMP/pam-certificate.p12"
-          private_key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID_SECRET}.p8"
-          echo "PAM_BUILD_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-          printf '%s' "$APPLE_CERTIFICATE_BASE64_SECRET" | base64 --decode > "$certificate"
-          printf '%s' "$APPLE_API_KEY_MATERIAL" | base64 --decode > "$private_key"
-          security create-keychain -p "$KEYCHAIN_PASSWORD_SECRET" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD_SECRET" "$keychain"
-          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD_SECRET" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD_SECRET" "$keychain" >/dev/null
-          security list-keychains -d user -s "$keychain"
-          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ { print $2; exit }')"
-          [[ -n "$identity" ]]
-          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-          echo "APPLE_API_KEY_PATH=$private_key" >> "$GITHUB_ENV"
-
-      - name: Build signed and notarized application
-        env:
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: npm --prefix frontend run tauri -- build --target aarch64-apple-darwin --bundles app
 
-      - name: Build, sign, and notarize disk image
+      - name: Build disk image
         shell: bash
-        env:
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           set -euo pipefail
           app="target/aarch64-apple-darwin/release/bundle/macos/PAM.app"
           dmg_dir="target/aarch64-apple-darwin/release/bundle/dmg"
-          dmg="$(tools/package-macos-dmg.sh "$PWD/$app" "$PWD/$dmg_dir")"
-          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
-          xcrun notarytool submit "$dmg" \
-            --key "$APPLE_API_KEY_PATH" \
-            --key-id "$APPLE_API_KEY" \
-            --issuer "$APPLE_API_ISSUER" \
-            --wait --timeout 20m
-          xcrun stapler staple "$dmg"
-          xcrun stapler validate "$dmg"
+          tools/package-macos-dmg.sh "$PWD/$app" "$PWD/$dmg_dir"
 
       - name: Verify macOS package contract
         id: package
@@ -520,11 +477,6 @@ jobs:
           app="$bundle/macos/PAM.app"
           dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           [[ -n "$dmg" ]]
-          codesign --verify --deep --strict "$app"
-          codesign --verify --strict "$dmg"
-          xcrun stapler validate "$app"
-          xcrun stapler validate "$dmg"
-          spctl --assess --type execute "$app"
           # Single-binary product: the app bundle ships exactly one executable.
           mapfile -t bundle_binaries < <(find "$app/Contents/MacOS" -maxdepth 1 -type f -exec basename {} \; | sort)
           [[ "${bundle_binaries[*]}" == "pam" ]]
@@ -534,22 +486,13 @@ jobs:
           tar -C "$bundle" -czf "$PWD/$archive" "macos/PAM.app" "dmg/$(basename "$dmg")"
           echo "path=$archive" >> "$GITHUB_OUTPUT"
 
-      - name: Upload signed preview package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Upload preview package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: PAM-macos-arm64
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
           retention-days: 7
-
-      - name: Remove temporary signing material
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          if [[ -n "${PAM_BUILD_KEYCHAIN:-}" ]]; then
-            security delete-keychain "$PAM_BUILD_KEYCHAIN" || true
-          fi
-          rm -f "$RUNNER_TEMP/pam-certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
 
   prototype:
     name: Interactive prototype
@@ -562,7 +505,7 @@ jobs:
         working-directory: prototype
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7

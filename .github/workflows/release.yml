@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,9 +19,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      run_id: ${{ steps.ci.outputs.run_id }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate stable release tag
         shell: bash
@@ -53,10 +55,27 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Verify green CI run on the tag commit
+        id: ci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Peel annotated tags to the commit; $GITHUB_SHA is the tag object.
+          sha="$(git rev-list -n 1 "$GITHUB_REF")"
+          run_id="$(gh run list --workflow ci.yml --branch main --commit "$sha" \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No green CI run on $sha; refusing to release unverified packages."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
     needs: validate
-    timeout-minutes: 40
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -64,214 +83,40 @@ jobs:
           - name: Linux amd64 package
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
             family: linux
             arch: amd64
+            artifact: PAM-linux-amd64
           - name: Linux arm64 package
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            bundles: appimage,deb
             family: linux
             arch: arm64
+            artifact: PAM-linux-arm64
           - name: Windows amd64 package
             runner: windows-2025
             target: x86_64-pc-windows-msvc
-            bundles: nsis
             family: windows
             arch: amd64
+            artifact: PAM-windows-amd64
           - name: Windows arm64 package
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
-            bundles: nsis
             family: windows
             arch: arm64
+            artifact: PAM-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Install Linux desktop dependencies
-        if: ${{ matrix.family == 'linux' }}
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
-
-      - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-        with:
-          target: ${{ matrix.target }}
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          shared-key: desktop-${{ matrix.target }}
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci --prefer-offline --no-audit --no-fund
-
-      - name: Build desktop packages
-        run: npm --prefix frontend run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-
-      - name: Verify Linux package contract
-        if: ${{ matrix.family == 'linux' }}
+      # Packages were built and verified by the CI run on the tag commit;
+      # the release repackages those artifacts instead of rebuilding.
+      - name: Download packages from the main CI run
         shell: bash
         env:
-          TARGET: ${{ matrix.target }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.validate.outputs.run_id }}
+          ARTIFACT: ${{ matrix.artifact }}
         run: |
           set -euo pipefail
-          bundle="target/$TARGET/release/bundle"
-          binary="target/$TARGET/release/pam"
-          mapfile -t appimages < <(find "$bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print)
-          mapfile -t debs < <(find "$bundle/deb" -maxdepth 1 -type f -name '*.deb' -print)
-          (( ${#appimages[@]} == 1 ))
-          (( ${#debs[@]} == 1 ))
-          case "$TARGET" in
-            x86_64-unknown-linux-gnu)
-              expected_machine="Advanced Micro Devices X86-64"
-              expected_deb_arch="amd64"
-              ;;
-            aarch64-unknown-linux-gnu)
-              expected_machine="AArch64"
-              expected_deb_arch="arm64"
-              ;;
-            *)
-              echo "unsupported Linux verification target: $TARGET" >&2
-              exit 2
-              ;;
-          esac
-          for candidate in "$binary" "${appimages[0]}"; do
-            machine="$(readelf -h "$candidate" | awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2 }')"
-            [[ "$machine" == "$expected_machine" ]]
-          done
-          [[ "$(dpkg-deb --field "${debs[0]}" Architecture)" == "$expected_deb_arch" ]]
-
-          expected_version="$(cargo metadata --no-deps --format-version 1 | node -e '
-            let input = "";
-            process.stdin.on("data", chunk => input += chunk);
-            process.stdin.on("end", () => {
-              const metadata = JSON.parse(input);
-              process.stdout.write(metadata.packages.find(pkg => pkg.name === "pam_cli").version);
-            });
-          ')"
-          verify_helper_contract() {
-            local candidate="$1"
-            [[ "$("$candidate" --version)" == "pam $expected_version" ]]
-            "$candidate" --help > "$RUNNER_TEMP/pam-help.txt"
-            grep -Fxq "Local project continuity companion" "$RUNNER_TEMP/pam-help.txt"
-            grep -Eq '^Usage: pam( |$)' "$RUNNER_TEMP/pam-help.txt"
-          }
-          verify_helper_contract "$binary"
-
-          deb_root="$RUNNER_TEMP/pam-deb-payload"
-          appimage_root="$RUNNER_TEMP/pam-appimage-payload"
-          mkdir -p "$deb_root" "$appimage_root"
-          dpkg-deb --extract "${debs[0]}" "$deb_root"
-          (
-            cd "$appimage_root"
-            "$GITHUB_WORKSPACE/${appimages[0]}" --appimage-extract >/dev/null
-          )
-          verify_payload() {
-            local root="$1"
-            # Single-binary product: the payload ships exactly one executable.
-            mapfile -t binaries < <(find "$root/usr/bin" -maxdepth 1 -type f -printf '%f\n' | sort)
-            [[ "${binaries[*]}" == "pam" ]]
-            machine="$(readelf -h "$root/usr/bin/pam" | awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2 }')"
-            [[ "$machine" == "$expected_machine" ]]
-            verify_helper_contract "$root/usr/bin/pam"
-          }
-          verify_payload "$deb_root"
-          verify_payload "$appimage_root/squashfs-root"
-
-      - name: Verify Windows package contract
-        if: ${{ matrix.family == 'windows' }}
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $bundle = "target/$env:TARGET/release/bundle"
-          $binary = (Resolve-Path "target/$env:TARGET/release/pam.exe").Path
-          $installers = @(Get-ChildItem "$bundle/nsis" -File -Filter '*.exe')
-          if ($installers.Count -ne 1) { throw "expected exactly one NSIS installer" }
-
-          function Assert-PeMachine([string] $Path, [UInt16] $Expected) {
-            $bytes = [System.IO.File]::ReadAllBytes($Path)
-            if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
-              throw "$Path is not a PE executable"
-            }
-            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
-            if ($peOffset -lt 0 -or $peOffset + 6 -gt $bytes.Length) {
-              throw "$Path has an invalid PE header offset"
-            }
-            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne "PE`0`0") {
-              throw "$Path has no PE signature"
-            }
-            $actual = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-            if ($actual -ne $Expected) {
-              throw ("{0} PE machine 0x{1:x4} != 0x{2:x4}" -f $Path, $actual, $Expected)
-            }
-          }
-
-          function Get-ByteHash([byte[]] $Bytes) {
-            $sha256 = [Security.Cryptography.SHA256]::Create()
-            try {
-              [BitConverter]::ToString($sha256.ComputeHash($Bytes)).Replace('-', '')
-            } finally {
-              $sha256.Dispose()
-            }
-          }
-
-          function Assert-NsisDesktopContract([string] $OriginalPath, [string] $PackagedPath) {
-            $original = [IO.File]::ReadAllBytes($OriginalPath)
-            $packaged = [IO.File]::ReadAllBytes($PackagedPath)
-            # Tauri CLI 2.11.4 patches this one same-length marker for NSIS, then restores the build output.
-            $unknownMarker = '__TAURI_BUNDLE_TYPE_VAR_UNK'
-            $nsis = [Text.Encoding]::ASCII.GetBytes('__TAURI_BUNDLE_TYPE_VAR_NSS')
-            $originalText = [Text.Encoding]::ASCII.GetString($original)
-            $offset = $originalText.IndexOf($unknownMarker, [StringComparison]::Ordinal)
-            if ($offset -lt 0 -or $offset -ne $originalText.LastIndexOf($unknownMarker, [StringComparison]::Ordinal)) {
-              throw "unpatched PAM desktop must contain exactly one Tauri bundle marker"
-            }
-            [Array]::Copy($nsis, 0, $original, $offset, $nsis.Length)
-            if ((Get-ByteHash $original) -ne (Get-ByteHash $packaged)) {
-              throw "packaged PAM desktop differs beyond the expected Tauri NSIS marker patch"
-            }
-          }
-
-          $expectedMachine = switch ($env:TARGET) {
-            'x86_64-pc-windows-msvc' { [UInt16] 0x8664 }
-            'aarch64-pc-windows-msvc' { [UInt16] 0xaa64 }
-            default { throw "unsupported Windows verification target: $env:TARGET" }
-          }
-          # The single release binary uses the windowed subsystem, so CLI
-          # output capture is unreliable here; the execution contract is
-          # covered by the Linux and macOS package checks.
-          Assert-PeMachine $binary $expectedMachine
-
-          $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
-          if (-not $sevenZip) { $sevenZip = "$env:ProgramFiles/7-Zip/7z.exe" }
-          if (-not (Test-Path $sevenZip)) { throw "7-Zip is required to inspect the NSIS payload" }
-          $extract = Join-Path $env:RUNNER_TEMP 'pam-nsis'
-          New-Item -ItemType Directory -Force -Path $extract | Out-Null
-          & $sevenZip x '-y' "-o$extract" $installers[0].FullName | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "failed to extract NSIS installer" }
-
-          $pamExecutables = @(Get-ChildItem $extract -Recurse -File -Filter 'pam*.exe')
-          $names = @($pamExecutables.Name | Sort-Object)
-          if (($names -join ' ') -ne 'pam.exe') {
-            throw "unexpected NSIS PAM executable inventory: $($names -join ' ')"
-          }
-          Assert-PeMachine $pamExecutables[0].FullName $expectedMachine
-          Assert-NsisDesktopContract $binary $pamExecutables[0].FullName
+          gh run download "$RUN_ID" --name "$ARTIFACT" --dir downloaded
 
       - name: Assemble Linux release archive
         if: ${{ matrix.family == 'linux' }}
@@ -282,23 +127,22 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          bundle="target/$TARGET/release/bundle"
-          tar -C "$bundle" -czf "$PWD/pam_${VERSION}_linux_${ARCH}.tar.gz" .
+          mkdir -p bundle
+          tar -xzf "downloaded/PAM-${TARGET}-bundle.tar.gz" -C bundle
+          tar -C bundle -czf "$PWD/pam_${VERSION}_linux_${ARCH}.tar.gz" .
 
       - name: Assemble Windows release archive
         if: ${{ matrix.family == 'windows' }}
         shell: pwsh
         env:
-          TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
           $ErrorActionPreference = "Stop"
-          $bundle = "target/$env:TARGET/release/bundle"
-          Compress-Archive -Path "$bundle/*" -DestinationPath "pam_$($env:VERSION)_windows_$($env:ARCH).zip"
+          Compress-Archive -Path "downloaded/*" -DestinationPath "pam_$($env:VERSION)_windows_$($env:ARCH).zip"
 
       - name: Upload release package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pam-${{ matrix.family }}-${{ matrix.arch }}
           path: pam_*
@@ -311,29 +155,16 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-        with:
-          target: aarch64-apple-darwin
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          shared-key: desktop-aarch64-apple-darwin
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Download packages from the main CI run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.validate.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --name PAM-macos-arm64 --dir downloaded
+          mkdir -p bundle
+          tar -xzf downloaded/PAM-macos-arm64-bundle.tar.gz -C bundle
 
       - name: Prepare Apple signing and notarization
         shell: bash
@@ -362,23 +193,21 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "APPLE_API_KEY_PATH=$private_key" >> "$GITHUB_ENV"
 
-      - name: Build signed and notarized application
-        env:
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          MACOSX_DEPLOYMENT_TARGET: "12.0"
-        run: npm --prefix frontend run tauri -- build --target aarch64-apple-darwin --bundles app
+      - name: Sign application
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --force --timestamp --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/PAM.app"
 
-      - name: Build, sign, and notarize disk image
+      - name: Sign and notarize disk image
         shell: bash
         env:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           set -euo pipefail
-          app="target/aarch64-apple-darwin/release/bundle/macos/PAM.app"
-          dmg_dir="target/aarch64-apple-darwin/release/bundle/dmg"
-          dmg="$(tools/package-macos-dmg.sh "$PWD/$app" "$PWD/$dmg_dir")"
+          dmg="$(find bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          [[ -n "$dmg" ]]
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
           xcrun notarytool submit "$dmg" \
             --key "$APPLE_API_KEY_PATH" \
@@ -395,26 +224,18 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          bundle="target/aarch64-apple-darwin/release/bundle"
-          app="$bundle/macos/PAM.app"
-          dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          app="bundle/macos/PAM.app"
+          dmg="$(find bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           [[ -n "$dmg" ]]
           codesign --verify --deep --strict "$app"
           codesign --verify --strict "$dmg"
-          xcrun stapler validate "$app"
           xcrun stapler validate "$dmg"
-          spctl --assess --type execute "$app"
-          # Single-binary product: the app bundle ships exactly one executable.
-          mapfile -t bundle_binaries < <(find "$app/Contents/MacOS" -maxdepth 1 -type f -exec basename {} \; | sort)
-          [[ "${bundle_binaries[*]}" == "pam" ]]
-          [[ "$(lipo -archs "$app/Contents/MacOS/pam")" == arm64 ]]
-          [[ "$(otool -l "$app/Contents/MacOS/pam" | awk '/cmd LC_BUILD_VERSION/ { seen=1 } seen && /minos/ { print $2; exit }')" == 12.0 ]]
           release_dmg="PAM_${VERSION}_darwin_arm64.dmg"
           mv "$dmg" "$release_dmg"
           echo "path=$release_dmg" >> "$GITHUB_OUTPUT"
 
       - name: Upload release package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pam-darwin-arm64
           path: ${{ steps.package.outputs.path }}
@@ -439,10 +260,10 @@ jobs:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: pam-*
           path: dist
