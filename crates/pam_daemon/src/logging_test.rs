@@ -31,8 +31,8 @@ fn ring_keeps_only_the_newest_entries_in_order() {
 #[test]
 fn messages_are_truncated_at_a_char_boundary() {
     let log = DaemonLog::open(&temp_dir("truncate"));
-    let long = "é".repeat(2000);
-    log.warn(&long);
+    let oversized = "é".repeat(2000);
+    log.warn(&oversized);
     let recent = log.recent(1);
     let message = &recent[0].message;
     assert!(message.len() <= 1024);
@@ -58,9 +58,7 @@ fn file_appends_and_rotates_past_the_size_limit() {
 
 #[test]
 fn missing_directory_still_serves_the_ring() {
-    let log = DaemonLog::open(std::path::Path::new(
-        "/nonexistent-root-for-pam-tests/logs",
-    ));
+    let log = DaemonLog::open(std::path::Path::new("/nonexistent-root-for-pam-tests/logs"));
     log.info("survives without a file");
     assert_eq!(log.recent(10).len(), 1);
 }

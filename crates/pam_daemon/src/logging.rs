@@ -65,9 +65,13 @@ impl DaemonLog {
 
     pub(crate) fn with_max_file_bytes(directory: &Path, max_file_bytes: u64) -> Self {
         let path = directory.join("daemon.log");
-        let file = fs::create_dir_all(directory)
-            .ok()
-            .and_then(|()| OpenOptions::new().create(true).append(true).open(&path).ok());
+        let file = fs::create_dir_all(directory).ok().and_then(|()| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .ok()
+        });
         let file_bytes = file
             .as_ref()
             .and_then(|file| file.metadata().ok())

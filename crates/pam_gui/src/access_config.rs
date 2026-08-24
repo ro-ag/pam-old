@@ -60,10 +60,11 @@ pub(crate) async fn load_access_config(
     {
         Ok(exchange) => exchange,
         Err(error) => {
+            let (detail, recovery) = crate::control_center::exchange_failure_context(&error);
             return AccessConfigState::Unavailable {
                 code: None,
-                detail: error.to_string(),
-                recovery: error.recovery_action().map(str::to_owned),
+                detail,
+                recovery,
             };
         }
     };

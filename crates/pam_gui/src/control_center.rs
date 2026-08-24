@@ -218,12 +218,53 @@ fn health_from_status(status: StatusResult) -> HealthState {
 
 fn health_from_exchange_error(error: &ExchangeError) -> HealthState {
     if error.is_unavailable() {
-        HealthState::Offline
-    } else {
-        HealthState::Degraded {
+        return HealthState::Offline;
+    }
+    if !matches!(error, ExchangeError::DeadlineExceeded) {
+        return HealthState::Degraded {
             detail: error.to_string(),
             recovery: error.recovery_action().map(str::to_owned),
-        }
+        };
+    }
+    // A timeout is ambiguous: the local transport queues sends even when no
+    // daemon listens, so a dead daemon and a slow daemon look identical here.
+    // The ownership lock tells them apart.
+    health_from_timeout(
+        pam_platform::probe_daemon_runtime(&LocalEndpoint::default_for_user()),
+        error,
+    )
+}
+
+pub(crate) fn health_from_timeout(
+    runtime: Option<pam_platform::DaemonRuntimeState>,
+    error: &ExchangeError,
+) -> HealthState {
+    match runtime {
+        Some(pam_platform::DaemonRuntimeState::NotRunning) => HealthState::Offline,
+        Some(pam_platform::DaemonRuntimeState::Running { pid }) => HealthState::Degraded {
+            detail: pid.map_or_else(
+                || "PAM daemon is running but did not respond in time.".to_owned(),
+                |pid| format!("PAM daemon (pid {pid}) is running but did not respond in time."),
+            ),
+            recovery: Some("Check the daemon console for details, or restart PAM.".to_owned()),
+        },
+        None => HealthState::Degraded {
+            detail: error.to_string(),
+            recovery: error.recovery_action().map(str::to_owned),
+        },
+    }
+}
+
+/// Runtime-aware detail and recovery copy for a failed daemon exchange,
+/// shared by every surface that would otherwise show a bare timeout.
+pub(crate) fn exchange_failure_context(error: &ExchangeError) -> (String, Option<String>) {
+    match health_from_exchange_error(error) {
+        HealthState::Offline => (
+            "PAM daemon is not running.".to_owned(),
+            Some("Start PAM from the Control Center.".to_owned()),
+        ),
+        HealthState::Degraded { detail, recovery } => (detail, recovery),
+        HealthState::Healthy { .. } => (error.to_string(), None),
     }
 }
 

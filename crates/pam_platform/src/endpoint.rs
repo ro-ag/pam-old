@@ -86,6 +86,42 @@ pub(super) fn private_runtime_dir() -> Option<PathBuf> {
         .map(|project_dirs| project_dirs.data_local_dir().join("runtime"))
 }
 
+/// Observed liveness of the local daemon, derived from its ownership lock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DaemonRuntimeState {
+    /// The ownership lock is held: a daemon process is alive.
+    Running { pid: Option<u32> },
+    /// No process holds the ownership lock; stale socket or lock residue may
+    /// remain, which a `--recover` launch clears.
+    NotRunning,
+}
+
+/// Probes daemon liveness through the ownership lock without disturbing a
+/// running daemon. Returns `None` when the artifacts cannot be inspected.
+///
+/// The probe briefly takes the free lock to prove no daemon holds it, so a
+/// caller that is about to spawn a daemon must not probe concurrently: the
+/// spawned daemon could observe the probe's transient hold and abort as
+/// already running. The GUI serializes daemon commands, which satisfies this.
+#[must_use]
+pub fn probe_daemon_runtime(endpoint: &LocalEndpoint) -> Option<DaemonRuntimeState> {
+    let path = endpoint.ownership_path();
+    if !path.exists() {
+        return Some(DaemonRuntimeState::NotRunning);
+    }
+    let file = std::fs::File::open(path).ok()?;
+    match file.try_lock() {
+        Ok(()) => Some(DaemonRuntimeState::NotRunning),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let pid = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|content| content.trim().parse::<u32>().ok());
+            Some(DaemonRuntimeState::Running { pid })
+        }
+        Err(std::fs::TryLockError::Error(_)) => None,
+    }
+}
+
 /// Single-use file carrying the nonce that authorizes one daemon launch.
 pub const LAUNCH_GRANT_FILE: &str = "launch-grant";
 

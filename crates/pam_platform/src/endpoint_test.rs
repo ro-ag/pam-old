@@ -1,8 +1,12 @@
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use super::{
     LocalEndpoint,
-    endpoint::{LAUNCH_GRANT_FILE, consume_launch_grant, issue_launch_grant, private_runtime_dir},
+    endpoint::{
+        DaemonRuntimeState, LAUNCH_GRANT_FILE, consume_launch_grant, issue_launch_grant,
+        private_runtime_dir, probe_daemon_runtime,
+    },
 };
 
 #[test]
@@ -80,6 +84,55 @@ fn launch_grant_rejects_missing_mismatched_and_replayed_presentations() {
     );
     assert!(consume_launch_grant(&dir, Some(&nonce)));
     assert!(!consume_launch_grant(&dir, Some(&nonce)), "no replay");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn probe_tracks_the_ownership_lock_lifecycle() {
+    let dir = std::env::temp_dir().join(format!(
+        "pam-probe-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let endpoint = LocalEndpoint::ipc(dir.clone());
+
+    // No artifacts at all: nothing runs.
+    assert_eq!(
+        probe_daemon_runtime(&endpoint),
+        Some(DaemonRuntimeState::NotRunning)
+    );
+
+    // A held exclusive lock with a pid is a live daemon.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(endpoint.ownership_path())
+        .unwrap();
+    writeln!(&lock, "4242").unwrap();
+    lock.try_lock().unwrap();
+    assert_eq!(
+        probe_daemon_runtime(&endpoint),
+        Some(DaemonRuntimeState::Running { pid: Some(4242) })
+    );
+
+    // Releasing the lock leaves only residue: not running again. The kernel
+    // may briefly report the flock as held after close, so poll bounded.
+    drop(lock);
+    let mut released = probe_daemon_runtime(&endpoint);
+    for _ in 0..50 {
+        if released == Some(DaemonRuntimeState::NotRunning) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        released = probe_daemon_runtime(&endpoint);
+    }
+    assert_eq!(released, Some(DaemonRuntimeState::NotRunning));
 
     std::fs::remove_dir_all(dir).unwrap();
 }

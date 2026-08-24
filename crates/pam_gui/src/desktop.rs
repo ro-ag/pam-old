@@ -1183,7 +1183,9 @@ impl DesktopCore {
             .current_dir(&spawn_root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // A daemon that dies at startup must leave its reason somewhere:
+            // stderr lands next to the daemon's own log file.
+            .stderr(daemon_stderr_capture());
         #[cfg(unix)]
         command.process_group(0);
         let mut child = command.spawn().map_err(|error| {
@@ -2015,6 +2017,23 @@ fn default_daemon_executable() -> PathBuf {
     // Single-binary product: the daemon is this same executable in
     // `pam daemon` mode.
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from(executable_name("pam")))
+}
+
+/// Best-effort append capture for the spawned daemon's stderr, next to the
+/// daemon's own rotating log. Falls back to discarding when unavailable.
+fn daemon_stderr_capture() -> Stdio {
+    let Ok(data_dir) = pam_platform::user_data_dir() else {
+        return Stdio::null();
+    };
+    let logs = data_dir.join("logs");
+    if std::fs::create_dir_all(&logs).is_err() {
+        return Stdio::null();
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join("daemon-stderr.log"))
+        .map_or_else(|_| Stdio::null(), Stdio::from)
 }
 
 fn gui_registration_command(executable: &Path, root: &Path) -> tokio::process::Command {

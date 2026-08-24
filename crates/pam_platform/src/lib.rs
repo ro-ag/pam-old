@@ -19,7 +19,8 @@ mod secrets_test;
 mod transport_test;
 
 pub use endpoint::{
-    LAUNCH_GRANT_ENV, LAUNCH_GRANT_FILE, LocalEndpoint, consume_launch_grant, issue_launch_grant,
+    DaemonRuntimeState, LAUNCH_GRANT_ENV, LAUNCH_GRANT_FILE, LocalEndpoint, consume_launch_grant,
+    issue_launch_grant, probe_daemon_runtime,
 };
 pub use error::{TransportError, TransportErrorKind};
 pub use identity::{

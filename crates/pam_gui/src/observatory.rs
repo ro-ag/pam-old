@@ -292,10 +292,8 @@ async fn load<T>(
         match request_exchange(&LocalEndpoint::default_for_user(), &request, timeout).await {
             Ok(exchange) => exchange,
             Err(error) => {
-                return unavailable(
-                    error.to_string(),
-                    error.recovery_action().map(str::to_owned),
-                );
+                let (detail, recovery) = crate::control_center::exchange_failure_context(&error);
+                return unavailable(detail, recovery);
             }
         };
     if !exchange.events.is_empty() {

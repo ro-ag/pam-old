@@ -11,6 +11,8 @@ use pam_protocol::{
 };
 use uuid::Uuid;
 
+use crate::control_center::exchange_failure_context;
+
 const CURRENT_TIMEOUT: Duration = Duration::from_secs(2);
 const EVIDENCE_PREVIEW_BYTES: u64 = 4 * 1024;
 
@@ -187,10 +189,8 @@ pub(crate) async fn decide_current_approval(
     {
         Ok(exchange) => exchange,
         Err(error) => {
-            return Err(approval_decision_failure(
-                error.to_string(),
-                error.recovery_action().map(str::to_owned),
-            ));
+            let (detail, recovery) = exchange_failure_context(&error);
+            return Err(approval_decision_failure(detail, recovery));
         }
     };
     if !exchange.events.is_empty() {
@@ -369,10 +369,8 @@ async fn load_current_request(request: RequestEnvelope) -> CurrentState {
     {
         Ok(exchange) => exchange,
         Err(error) => {
-            return degraded(
-                error.to_string(),
-                error.recovery_action().map(str::to_owned),
-            );
+            let (detail, recovery) = exchange_failure_context(&error);
+            return degraded(detail, recovery);
         }
     };
     if !exchange.events.is_empty() {
@@ -459,7 +457,7 @@ async fn load_run(summary: ProjectRequestSummary, base: &RequestEnvelope) -> Run
                 Some("PAM returned an unexpected replay response.".to_owned()),
             ),
         },
-        Err(error) => (Vec::new(), Some(error.to_string())),
+        Err(error) => (Vec::new(), Some(exchange_failure_context(&error).0)),
     };
 
     let mut outcome = None;
@@ -494,7 +492,7 @@ async fn load_run(summary: ProjectRequestSummary, base: &RequestEnvelope) -> Run
                     detail_error = Some("PAM returned an unexpected flow result.".to_owned());
                 }
             },
-            Err(error) => detail_error = Some(error.to_string()),
+            Err(error) => detail_error = Some(exchange_failure_context(&error).0),
         }
     }
     RunView {
