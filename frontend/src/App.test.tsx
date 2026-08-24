@@ -49,6 +49,8 @@ describe("daemon observatory", () => {
       .toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Console", "Connections"]);
     // Project context lives in the view headers now: no sidebar project menu.
     const sidebar = screen.getByRole("complementary", { name: "Daemon navigation" });
+    // The sidebar brand carries the packaged app version, p-track style.
+    expect(within(sidebar).getByText(/^v\d+\.\d+\.\d+$/)).toBeInTheDocument();
     expect(within(sidebar).queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "payments-api" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Resize project sidebar" })).toHaveAttribute("aria-valuenow", "248");

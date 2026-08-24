@@ -38,6 +38,15 @@ import {
 import type { DaemonView, ProjectView } from "../selectors";
 import type { PamDensity, PamTheme, PamThemeMode } from "../theme";
 
+// Mirrors p-track's version label: bare versions gain a "v" prefix and
+// anything unset stays a quiet "dev".
+export function appVersionLabel(value: unknown): string {
+  if (typeof value !== "string") return "dev";
+  const version = value.trim();
+  if (!version || version.toLowerCase() === "dev") return "dev";
+  return version.toLowerCase().startsWith("v") ? version : `v${version}`;
+}
+
 export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof Pulse }> = [
   { id: "control-center", label: "Control Center", icon: SquaresFour },
   { id: "access", label: "Access", icon: LockSimple },
@@ -281,7 +290,14 @@ export function Sidebar({
     <aside ref={containerRef} className={`sidebar ${collapsed ? "is-collapsed" : ""}`} aria-label="Daemon navigation" onKeyDownCapture={trapTabFocus}>
       <div className="brand" aria-label="PAM" data-tauri-drag-region>
         <img src="/assets/pam-mark.png" alt="" />
-        {!collapsed && <span>PAM</span>}
+        {!collapsed && (
+          <div className="brand-identity">
+            <span>PAM</span>
+            <small className="app-version">
+              {appVersionLabel(typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__)}
+            </small>
+          </div>
+        )}
       </div>
       <nav className="primary-nav" aria-label="Primary">
         {navItems.map(({ id, label, icon: Icon }) => (
