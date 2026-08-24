@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/public/assets/pam-mark.svg" width="180" alt="PAM mark: a lifeguard tower against a coral sun">
+</p>
+
 # PAM
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -54,6 +58,27 @@ PAM should help an agent answer:
   `~/llm/<vendor>/<model-name>.<extension>` unless the user chooses another.
 - **Companion continuity:** PAM can cooperate with tools such as `ptrack`
   through supported interfaces instead of taking ownership of their storage.
+- **Connectors ship dormant:** corporate connectors are built in but inert
+  until the user enables each one, stores its credential in the native
+  credential store, and runs a connection test from the GUI.
+- **Skills are global-first:** the skill inventory is managed once per machine,
+  with per-project assignment on demand.
+
+## Connectors
+
+All connector operations are read-only, policy-gated, and audited; the GUI
+Connectors panel lists whatever the daemon registers, so new connectors appear
+without frontend changes.
+
+| Connector | Surface | Credential |
+| --- | --- | --- |
+| GitHub Actions | workflow runs and logs | token |
+| Jenkins | jobs, builds, console logs | `user:api-token` |
+| SonarQube | quality gate, issues | token |
+| Jira Data Center | projects, issues (JQL) | personal access token |
+| Confluence Cloud | pages (CQL) | `email:api-token` |
+| SharePoint (Microsoft Graph) | documents, lists | bearer token, sovereign-cloud base URL |
+| AWS CLI passthrough | curated allowlist of read-only `aws` commands | none stored — the local CLI resolves the user's own `~/.aws` chain; an optional stored profile name is passed as `--profile` |
 
 ## Current status
 
@@ -83,8 +108,10 @@ explicit, bounded, and crash-recoverable. Model registration verifies exact
 user-owned bytes and license consent; model loading is disabled unless the
 daemon receives `--model VENDOR/NAME`, then fails closed on the 20 GB profile,
 fresh memory pressure, swap trend, Metal working set, and OS/PAM reserves.
-Flow authoring, connectors, service-manager integration, peer-credential
-transport hardening, and screen-reader semantics remain later roadmap slices. PAC
+The connector platform is implemented with seven read-only connectors (see
+[Connectors](#connectors)). Flow authoring, service-manager integration,
+peer-credential transport hardening, and screen-reader semantics remain later
+roadmap slices. PAC
 evaluation and live managed enterprise CA/proxy behavior are not claimed; no
 managed-environment interviews or workflow observations have been conducted.
 
