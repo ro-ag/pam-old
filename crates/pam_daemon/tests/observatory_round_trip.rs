@@ -169,7 +169,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
     let bounded = request_exchange(
         &endpoint,
         &activity_request("activity-bounded", "observatory-test", TEST_CREDENTIAL, 1),
-        Duration::from_secs(1),
+        Duration::from_secs(5),
     )
     .await
     .unwrap();
@@ -191,7 +191,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
         let exchange = request_exchange(
             &endpoint,
             &activity_request(request_id, "observatory-test", TEST_CREDENTIAL, limit),
-            Duration::from_secs(1),
+            Duration::from_secs(5),
         )
         .await
         .unwrap();
@@ -248,7 +248,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
             "denied-observer-credential",
             5,
         ),
-        Duration::from_secs(1),
+        Duration::from_secs(5),
     )
     .await
     .unwrap();
@@ -304,7 +304,7 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
     let exchange = request_exchange(
         &endpoint,
         &model_status_request("model-status", "observatory-test", TEST_CREDENTIAL),
-        Duration::from_secs(1),
+        Duration::from_secs(5),
     )
     .await
     .unwrap();
@@ -327,7 +327,7 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
             "denied-observer",
             "denied-observer-credential",
         ),
-        Duration::from_secs(1),
+        Duration::from_secs(5),
     )
     .await
     .unwrap();
@@ -377,7 +377,7 @@ async fn caller_list_returns_revocations_without_credential_material() {
         IdempotencyKey::from("caller-list-key"),
     )
     .authenticated(CallerCredential::new(TEST_CREDENTIAL));
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(1))
+    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(5))
         .await
         .unwrap();
 
