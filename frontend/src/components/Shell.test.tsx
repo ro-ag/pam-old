@@ -5,7 +5,7 @@ import { createRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProjectView } from "../selectors";
-import { ProjectMenu, ResizeSeparator, Toolbar } from "./Shell";
+import { ProjectMenu, ResizeSeparator, Toolbar, appVersionLabel } from "./Shell";
 
 const projects: ProjectView[] = [
   { handle: "payments", name: "payments-api", rootLabel: "/work/payments-api", branch: "main", health: "ready", queuedCount: 0 },
@@ -331,5 +331,18 @@ describe("ResizeSeparator", () => {
     expect(onResizeCommit).toHaveBeenCalledWith(280);
     expect(capture.hasPointerCapture).toHaveBeenCalledWith(9);
     expect(capture.releasePointerCapture).not.toHaveBeenCalled();
+  });
+});
+
+describe("appVersionLabel", () => {
+  it("prefixes bare versions and passes prefixed ones through", () => {
+    expect(appVersionLabel("0.1.2")).toBe("v0.1.2");
+    expect(appVersionLabel("v0.1.2")).toBe("v0.1.2");
+  });
+
+  it("stays a quiet dev for unset or placeholder values", () => {
+    expect(appVersionLabel(undefined)).toBe("dev");
+    expect(appVersionLabel("  ")).toBe("dev");
+    expect(appVersionLabel("dev")).toBe("dev");
   });
 });

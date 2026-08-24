@@ -151,12 +151,14 @@ impl ConnectorRuntime {
         }
     }
 
-    /// Warms the native credential store in the background.
-    ///
-    /// The security server evaluates this process's code signature on its
-    /// first keychain access, which can take seconds; paying that cost at
-    /// startup keeps the first connector request inside its deadline.
+    /// Warms the native credential store in the background on macOS, where
+    /// the security server evaluates this process's code signature on its
+    /// first keychain access — often seconds. Other platforms skip the probe:
+    /// a headless Secret Service lookup can block on session-bus discovery.
     pub(crate) fn warm(&self, log: crate::logging::DaemonLog) {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
         let runtime = self.clone();
         tokio::spawn(async move {
             let started = std::time::Instant::now();
