@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -181,7 +182,10 @@ jobs:
   desktop-packages:
     name: ${{ matrix.name }}
     needs: [rust, frontend]
-    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -428,6 +432,7 @@ jobs:
     needs: [rust, frontend]
     if: >-
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'pull_request' &&
        github.event.action == 'labeled' &&
        github.event.label.name == 'run-macos')
@@ -550,6 +555,61 @@ jobs:
             security delete-keychain "$PAM_BUILD_KEYCHAIN" || true
           fi
           rm -f "$RUNNER_TEMP/pam-certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
+
+  release:
+    name: Publish release
+    needs: [desktop-packages, macos-package]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+
+      - name: Assemble release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          for dir in dist/*/; do
+            name="$(basename "$dir")"
+            entries=("$dir"*)
+            if [[ ${#entries[@]} -eq 1 && -f "${entries[0]}" ]]; then
+              cp "${entries[0]}" "release-files/$name-${entries[0]##*/}"
+            else
+              (cd "$dir" && zip -qr "$GITHUB_WORKSPACE/release-files/$name.zip" .)
+            fi
+          done
+          ls -l release-files
+
+      - name: Extract release notes from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "PAM $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            release-files/*
 
   prototype:
     name: Interactive prototype

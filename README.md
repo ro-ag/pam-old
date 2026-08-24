@@ -243,8 +243,9 @@ key into an ephemeral runner keychain, signs with the hardened runtime,
 notarizes and staples the app and DMG, validates Gatekeeper, then destroys the
 temporary signing material. Successful runs retain short-lived CI artifacts
 for seven days; because this repository is public, those artifacts are public
-to repository readers. They are previews, not a tagged GitHub Release, and no
-package registry is published.
+to repository readers. Pushing a `v*` tag runs the same package matrix and
+publishes the artifacts as a tagged GitHub Release with notes taken from
+`CHANGELOG.md`; no package registry is published.
 
 Plan 13 UI acceptance is intentionally separate from this distribution matrix:
 it records current native-renderer evidence on the available macOS host and
