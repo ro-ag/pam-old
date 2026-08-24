@@ -457,6 +457,11 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             activity.truncated,
             truth_label(truth)
         ),
+        ResultPayload::DaemonLogs(logs) => format!(
+            "entries={} truth={}\n",
+            logs.entries.len(),
+            truth_label(truth)
+        ),
         ResultPayload::CallerList(list) => format!(
             "callers={} truth={}\n",
             list.callers.len(),

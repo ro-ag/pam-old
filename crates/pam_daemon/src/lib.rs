@@ -4,6 +4,7 @@ mod connectors;
 mod error;
 mod flow;
 mod lifecycle;
+mod logging;
 #[cfg(target_os = "macos")]
 mod macos_admission;
 mod model_service;
@@ -18,6 +19,8 @@ mod connectors_test;
 mod flow_test;
 #[cfg(test)]
 mod lifecycle_test;
+#[cfg(test)]
+mod logging_test;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_admission_test;
 #[cfg(test)]

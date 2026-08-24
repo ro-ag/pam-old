@@ -149,6 +149,34 @@ impl RequestEnvelope {
         }
     }
 
+    /// Creates an authenticated daemon diagnostic log request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The daemon clamps `limit` to its bounded maximum; zero
+    /// requests the daemon default. Only the daemon's bounded in-memory ring
+    /// is served; log files never cross this contract.
+    #[must_use]
+    pub fn daemon_logs(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        limit: u32,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_id,
+            capability: Capability::DaemonLogs,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::DaemonLogs { limit },
+        }
+    }
+
     /// Creates an authenticated caller registry listing request.
     ///
     /// Attach the caller credential with [`Self::authenticated`] before sending
@@ -852,6 +880,7 @@ pub enum Capability {
     DaemonStatus,
     DaemonStop,
     DaemonActivity,
+    DaemonLogs,
     CallerList,
     ProjectCurrent,
     ApprovalDecide,
@@ -878,6 +907,7 @@ impl Capability {
             Self::DaemonStatus => "daemon.status",
             Self::DaemonStop => "daemon.stop",
             Self::DaemonActivity => "daemon.activity",
+            Self::DaemonLogs => "daemon.logs",
             Self::CallerList => "caller.list",
             Self::ProjectCurrent => "project.current",
             Self::ApprovalDecide => "approval.decide",
@@ -1035,6 +1065,9 @@ pub enum RequestPayload {
     Status,
     Stop,
     DaemonActivity {
+        limit: u32,
+    },
+    DaemonLogs {
         limit: u32,
     },
     CallerList,
@@ -1211,6 +1244,7 @@ pub enum ResultPayload {
     Status(StatusResult),
     DaemonLifecycle(DaemonLifecycleResult),
     DaemonActivity(ActivityResult),
+    DaemonLogs(DaemonLogsResult),
     CallerList(CallerListResult),
     ProjectCurrent(ProjectCurrentResult),
     ApprovalDecision(ApprovalDecisionResult),
@@ -1913,6 +1947,32 @@ pub struct DaemonLifecycleResult {
 pub struct ActivityResult {
     pub events: Vec<ActivityEventSummary>,
     pub truncated: bool,
+}
+
+/// Bounded oldest-first slice of the daemon's in-memory diagnostic log.
+///
+/// Entries live only in the daemon's bounded ring buffer; secrets never enter
+/// the log, so nothing here needs redaction beyond the daemon's own bounds.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonLogsResult {
+    pub entries: Vec<DaemonLogEntry>,
+}
+
+/// One bounded diagnostic log line from the daemon.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonLogEntry {
+    pub timestamp_ms: u64,
+    pub severity: LogSeverity,
+    pub message: String,
+}
+
+/// Severity of one daemon diagnostic log line.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogSeverity {
+    Info,
+    Warn,
+    Error,
 }
 
 /// One bounded audit ledger entry safe to expose in an activity feed.

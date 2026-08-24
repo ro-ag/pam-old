@@ -73,9 +73,10 @@ use pam_protocol::{
     ApprovalDecisionResult, BriefProvenance, BriefResult, CallerListResult, CallerSummary,
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
-    ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, Event, EventEnvelope,
-    EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, ExpectedTargetKind,
-    Failure, FailureCode, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
+    ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
+    DaemonLogsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata, EvidenceRedaction,
+    EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity, ModelFinishReason,
+    ModelGenerationResult, ModelMessage, ModelRole,
     ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth,
     PROTOCOL_VERSION, PacState, ProjectCurrentResult,
     ProjectRequestState as ProtocolProjectRequestState,
@@ -99,6 +100,8 @@ use tokio::{
 };
 
 use crate::DaemonError;
+use crate::logging::{DaemonLog, LogLevel};
+
 use crate::connectors::{
     AWS, CONFLUENCE, ConnectorRuntime, GITHUB_DEFAULT_API_BASE, JENKINS, JIRA, SHAREPOINT,
     SONARQUBE, built_in_connector_ids, is_built_in,
@@ -115,6 +118,9 @@ use crate::ptrack::PtrackBriefProvider;
 
 const RESPONSE_CAPACITY: usize = 64;
 const SCHEDULER_CAPACITY: usize = 64;
+/// Receive failures tolerated back to back before the listener is declared
+/// dead; a lone misbehaving client resets on the next healthy request.
+const MAX_CONSECUTIVE_RECEIVE_FAILURES: u32 = 5;
 pub(super) const FLOW_PREFLIGHT_CAPACITY: usize = 4;
 const LEASE_DURATION: Duration = Duration::from_secs(3);
 const LEASE_HEARTBEAT: Duration = Duration::from_secs(1);
@@ -357,6 +363,10 @@ where
         Some(path) => path.clone(),
         None => user_data_dir()?.join("state.sqlite3"),
     };
+    let log_dir = state_path
+        .parent()
+        .map_or_else(|| PathBuf::from("logs"), |parent| parent.join("logs"));
+    let log = DaemonLog::open(&log_dir);
     let store = Store::open(state_path)?;
     store.recover_all_leases(now_ms()).await?;
     #[cfg(test)]
@@ -401,20 +411,26 @@ where
         outbound_tx.clone(),
         processing_delay,
         connectors.clone(),
+        log.clone(),
     ));
     let mut subscriptions = HashMap::<RequestId, Vec<Subscription>>::new();
 
-    if let Some(model) = &loaded_model {
-        println!(
-            "PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {}).",
-            model.key
-        );
-    } else {
-        println!("PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}).");
-    }
+    let ready_message = loaded_model.as_ref().map_or_else(
+        || format!("PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION})."),
+        |model| {
+            format!(
+                "PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {}).",
+                model.key
+            )
+        },
+    );
+    println!("{ready_message}");
+    log.info(ready_message);
 
     let _ = scheduler_tx.try_send(());
     tokio::pin!(shutdown);
+    let mut scheduler_joined = false;
+    let mut consecutive_receive_failures = 0u32;
     let result = loop {
         let action = tokio::select! {
             () = &mut shutdown => ServeAction::Shutdown,
@@ -423,7 +439,10 @@ where
             completed = handlers.join_next(), if !handlers.is_empty() => {
                 ServeAction::HandlerCompleted(completed)
             }
-            completed = &mut scheduler => ServeAction::SchedulerCompleted(completed),
+            completed = &mut scheduler => {
+                scheduler_joined = true;
+                ServeAction::SchedulerCompleted(completed)
+            }
         };
 
         match action {
@@ -431,6 +450,7 @@ where
             | ServeAction::Outbound(None)
             | ServeAction::SchedulerCompleted(Ok(Ok(()))) => break Ok(()),
             ServeAction::Incoming(Ok(incoming)) => {
+                consecutive_receive_failures = 0;
                 let request_store = store.clone();
                 let request_outbound = outbound_tx.clone();
                 let request_scheduler = scheduler_tx.clone();
@@ -438,6 +458,7 @@ where
                 let request_model = loaded_model.clone();
                 let request_flow_preflight_admission = Arc::clone(&flow_preflight_admission);
                 let request_connectors = connectors.clone();
+                let request_log = log.clone();
                 handlers.spawn(async move {
                     handle_incoming(
                         incoming,
@@ -452,6 +473,7 @@ where
                         flow_preflight_delay,
                         durable_status,
                         request_connectors,
+                        request_log,
                     )
                     .await
                 });
@@ -460,30 +482,61 @@ where
                 if matches!(
                     error.kind(),
                     TransportErrorKind::InvalidMessage | TransportErrorKind::FrameTooLarge
-                ) => {}
-            ServeAction::Incoming(Err(error)) => break Err(error.into()),
+                ) =>
+            {
+                log.warn(format!("rejected malformed client frame: {error}"));
+            }
+            ServeAction::Incoming(Err(error)) => {
+                // A single misbehaving client must not stop the daemon; only a
+                // persistently failing listener is fatal.
+                consecutive_receive_failures += 1;
+                log.error(format!(
+                    "transport receive failed ({consecutive_receive_failures} in a row): {error}"
+                ));
+                if consecutive_receive_failures >= MAX_CONSECUTIVE_RECEIVE_FAILURES {
+                    break Err(error.into());
+                }
+            }
             ServeAction::Outbound(Some(outbound)) => {
+                let stopping = matches!(&outbound, Outbound::Stop { .. });
                 match deliver_outbound(&mut server, &mut subscriptions, outbound).await {
                     Ok(false) => {}
                     Ok(true) => break Ok(()),
-                    Err(error) => break Err(error),
+                    Err(error) if stopping => break Err(error),
+                    Err(error) => {
+                        log.error(format!("dropped undeliverable response: {error}"));
+                    }
                 }
             }
-            ServeAction::HandlerCompleted(Some(Err(error)))
-            | ServeAction::SchedulerCompleted(Err(error)) => {
+            ServeAction::HandlerCompleted(Some(Err(error))) => {
+                if !error.is_cancelled() {
+                    log.error(format!("request handler panicked: {error}"));
+                }
+            }
+            ServeAction::SchedulerCompleted(Err(error)) => {
                 break Err(DaemonError::Handler(error));
             }
-            ServeAction::HandlerCompleted(Some(Ok(Err(error))))
-            | ServeAction::SchedulerCompleted(Ok(Err(error))) => break Err(error),
+            ServeAction::HandlerCompleted(Some(Ok(Err(error)))) => {
+                log.error(format!("request handler failed: {error}"));
+            }
+            ServeAction::SchedulerCompleted(Ok(Err(error))) => break Err(error),
             ServeAction::HandlerCompleted(Some(Ok(Ok(()))) | None) => {}
         }
     };
+    match &result {
+        Ok(()) => log.info("PAM daemon stopping (orderly shutdown)."),
+        Err(error) => log.error(format!("PAM daemon exiting on fatal error: {error}")),
+    }
 
     handlers.abort_all();
     while handlers.join_next().await.is_some() {}
     drop(scheduler_tx);
-    scheduler.abort();
-    let _ = scheduler.await;
+    // The scheduler handle was consumed by `&mut scheduler` in the select
+    // loop when it completed there; polling it again would panic.
+    if !scheduler_joined {
+        scheduler.abort();
+        let _ = scheduler.await;
+    }
     if let Some(worker) = model_worker {
         worker.shutdown().await;
     }
@@ -713,6 +766,7 @@ async fn handle_incoming(
     flow_preflight_delay: Duration,
     durable_status: bool,
     connectors: ConnectorRuntime,
+    log: DaemonLog,
 ) -> Result<(), DaemonError> {
     let Ok(request) = decode_request_envelope(incoming.payload()) else {
         return Ok(());
@@ -952,6 +1006,10 @@ async fn handle_incoming(
         (Capability::DaemonActivity, RequestPayload::DaemonActivity { limit }) => {
             handle_daemon_activity(&request, *limit, incoming, &store, &outbound).await
         }
+        (Capability::DaemonLogs, RequestPayload::DaemonLogs { limit }) => {
+            handle_daemon_logs(&request, *limit, incoming, &log, &outbound).await;
+            Ok(())
+        }
         (Capability::CallerList, RequestPayload::CallerList) => {
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
@@ -1070,6 +1128,7 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
         Capability::DaemonStatus
             | Capability::DaemonStop
             | Capability::DaemonActivity
+            | Capability::DaemonLogs
             | Capability::CallerList
             | Capability::ModelStatus
             | Capability::ModelInfer
@@ -1228,6 +1287,7 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
                 Capability::DaemonActivity,
                 RequestPayload::DaemonActivity { .. }
             )
+            | (Capability::DaemonLogs, RequestPayload::DaemonLogs { .. })
             | (Capability::CallerList, RequestPayload::CallerList)
             | (Capability::ProjectCurrent, RequestPayload::ProjectCurrent)
             | (
@@ -1406,6 +1466,7 @@ pub(super) fn policy_resource(
         RequestPayload::Status
         | RequestPayload::Stop
         | RequestPayload::DaemonActivity { .. }
+        | RequestPayload::DaemonLogs { .. }
         | RequestPayload::CallerList
         | RequestPayload::ModelStatus => "daemon".to_owned(),
         RequestPayload::ProjectCurrent => "project".to_owned(),
@@ -1620,6 +1681,7 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         Capability::ApprovalDecide
         | Capability::DaemonStop
         | Capability::DaemonActivity
+        | Capability::DaemonLogs
         | Capability::CallerList
         | Capability::ModelStatus
         | Capability::ConnectorList
@@ -2267,6 +2329,8 @@ const fn protocol_project_request_state(state: RequestState) -> ProtocolProjectR
 
 const DEFAULT_ACTIVITY_LIMIT: u32 = 50;
 const MAX_ACTIVITY_LIMIT: u32 = 100;
+const DEFAULT_LOGS_LIMIT: usize = 200;
+const MAX_LOGS_LIMIT: u32 = 512;
 
 /// Clamps a requested activity feed limit to 1..=100; zero selects the default.
 pub(super) const fn clamp_activity_limit(limit: u32) -> u32 {
@@ -2277,6 +2341,50 @@ pub(super) const fn clamp_activity_limit(limit: u32) -> u32 {
     } else {
         limit
     }
+}
+
+/// Clamps a requested log slice to 1..=512; zero selects the default.
+const fn clamp_logs_limit(limit: u32) -> usize {
+    if limit == 0 {
+        DEFAULT_LOGS_LIMIT
+    } else if limit > MAX_LOGS_LIMIT {
+        MAX_LOGS_LIMIT as usize
+    } else {
+        limit as usize
+    }
+}
+
+async fn handle_daemon_logs(
+    request: &RequestEnvelope,
+    limit: u32,
+    incoming: IncomingRequest,
+    log: &DaemonLog,
+    outbound: &mpsc::Sender<Outbound>,
+) {
+    let entries = log
+        .recent(clamp_logs_limit(limit))
+        .into_iter()
+        .map(|entry| DaemonLogEntry {
+            timestamp_ms: entry.timestamp_ms,
+            severity: match entry.level {
+                LogLevel::Info => LogSeverity::Info,
+                LogLevel::Warn => LogSeverity::Warn,
+                LogLevel::Error => LogSeverity::Error,
+            },
+            message: entry.message,
+        })
+        .collect();
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Observed,
+            ResultPayload::DaemonLogs(DaemonLogsResult { entries }),
+        ))],
+        None,
+    )
+    .await;
 }
 
 async fn handle_daemon_activity(
@@ -3856,6 +3964,7 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         RequestPayload::Status
         | RequestPayload::Stop
         | RequestPayload::DaemonActivity { .. }
+        | RequestPayload::DaemonLogs { .. }
         | RequestPayload::CallerList
         | RequestPayload::ProjectCurrent
         | RequestPayload::ApprovalDecide { .. }
@@ -3995,52 +4104,26 @@ async fn run_scheduler(
     outbound: mpsc::Sender<Outbound>,
     processing_delay: Duration,
     connectors: ConnectorRuntime,
+    log: DaemonLog,
 ) -> Result<(), DaemonError> {
     let mut workers = JoinSet::new();
     let mut recovery = tokio::time::interval(RECOVERY_INTERVAL);
     recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let owner = format!("daemon-{}", std::process::id());
     loop {
-        for request_id in store.recover_expired_requests(now_ms()).await? {
-            let snapshot = store.snapshot(request_id.clone()).await?;
-            let replay = store.replay(request_id.clone(), 0).await?;
-            let terminal = replay.result.is_some();
-            let messages = replay_messages(&snapshot.project_id, &request_id, replay)?;
-            let _ = outbound
-                .send(Outbound::Persisted {
-                    request_id,
-                    messages,
-                    terminal,
-                })
-                .await;
-        }
-        loop {
-            let leased = match store
-                .claim(&owner, now_ms(), duration_ms(LEASE_DURATION))
-                .await
-            {
-                Ok(Some(leased)) => leased,
-                Ok(None) => break,
-                Err(StoreError::CorruptFlowAuthorization(request_id)) => {
-                    quarantine_corrupt_flow_authorization(&store, &outbound, request_id).await?;
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            };
-            let worker_store = store.clone();
-            let worker_outbound = outbound.clone();
-            let worker_connectors = connectors.clone();
-            workers.spawn(async move {
-                process_leased(
-                    leased,
-                    worker_store,
-                    worker_outbound,
-                    processing_delay,
-                    LEASE_DURATION,
-                    worker_connectors,
-                )
-                .await
-            });
+        // The scheduler must outlive individual failures: a bad pass or a
+        // failed run is logged and retried on the next tick, never fatal.
+        if let Err(error) = scheduler_pass(
+            &store,
+            &outbound,
+            &owner,
+            processing_delay,
+            &connectors,
+            &mut workers,
+        )
+        .await
+        {
+            log.error(format!("scheduler pass failed: {error}"));
         }
 
         if wakeups.is_closed() && workers.is_empty() {
@@ -4056,12 +4139,70 @@ async fn run_scheduler(
             }
             completed = workers.join_next(), if !workers.is_empty() => {
                 match completed {
-                    Some(Ok(result)) => result?,
-                    Some(Err(error)) => return Err(DaemonError::Handler(error)),
-                    None => {}
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(error))) => {
+                        log.error(format!("queued operation failed: {error}"));
+                    }
+                    Some(Err(error)) => {
+                        if !error.is_cancelled() {
+                            log.error(format!("queued operation panicked: {error}"));
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+/// One recovery-and-claim sweep. Errors abort only this pass.
+async fn scheduler_pass(
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    owner: &str,
+    processing_delay: Duration,
+    connectors: &ConnectorRuntime,
+    workers: &mut JoinSet<Result<(), DaemonError>>,
+) -> Result<(), DaemonError> {
+    for request_id in store.recover_expired_requests(now_ms()).await? {
+        let snapshot = store.snapshot(request_id.clone()).await?;
+        let replay = store.replay(request_id.clone(), 0).await?;
+        let terminal = replay.result.is_some();
+        let messages = replay_messages(&snapshot.project_id, &request_id, replay)?;
+        let _ = outbound
+            .send(Outbound::Persisted {
+                request_id,
+                messages,
+                terminal,
+            })
+            .await;
+    }
+    loop {
+        let leased = match store
+            .claim(owner, now_ms(), duration_ms(LEASE_DURATION))
+            .await
+        {
+            Ok(Some(leased)) => leased,
+            Ok(None) => break Ok(()),
+            Err(StoreError::CorruptFlowAuthorization(request_id)) => {
+                quarantine_corrupt_flow_authorization(store, outbound, request_id).await?;
+                continue;
+            }
+            Err(error) => break Err(error.into()),
+        };
+        let worker_store = store.clone();
+        let worker_outbound = outbound.clone();
+        let worker_connectors = connectors.clone();
+        workers.spawn(async move {
+            process_leased(
+                leased,
+                worker_store,
+                worker_outbound,
+                processing_delay,
+                LEASE_DURATION,
+                worker_connectors,
+            )
+            .await
+        });
     }
 }
 
