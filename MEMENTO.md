@@ -60,10 +60,10 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - kind: project-way
 - scope: project
 - rule: PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note
-- fix: When closing a backend feature task, check: is it reachable from the GUI in <=2 clicks? If not, add a GUI-surface task in the same plan before marking done
-- hits: 2026-08-22, 2026-08-24
-- cost: 30
-- status: watching
+- fix: Control Center: no project selector on main page (projects = per-caller daemon request counts only); model setup fully UI-driven incl. daemon restart — never render CLI commands as setup instructions in the GUI
+- hits: 2026-08-22, 2026-08-24, 2026-08-24
+- cost: 50
+- status: enforced -> /Users/rodox/dev/rs/pam/AGENTS.md
 
 ## junk-removal-grep-references
 - kind: habit

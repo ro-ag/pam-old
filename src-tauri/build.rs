@@ -15,6 +15,7 @@ const COMMANDS: &[&str] = &[
     "caller_registry",
     "model_status",
     "model_infer",
+    "model_import",
     "flow_graph",
     "flow_compose",
     "load_skill_inventory",

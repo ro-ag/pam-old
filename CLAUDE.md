@@ -61,3 +61,9 @@ Standing rules for any agent working in this project (from ~/dev/ai):
   make expensive jobs `needs:` the cheap Linux checks first.
 - **No repo or no remote → stop and ask** before making changes.
 <!-- ptrack:end -->
+
+## Memento-enforced
+
+Rules promoted from the memento ledger. Details/fix: `memento show <slug>`.
+- PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note (memento: pam-features-coded-but-not-surfaced)
+

@@ -5,6 +5,7 @@ mod control_center;
 mod current;
 mod desktop;
 mod flow_editor;
+mod model_import;
 mod observatory;
 mod skill_audit;
 mod skill_inventory;
@@ -20,6 +21,8 @@ mod current_test;
 mod desktop_test;
 #[cfg(test)]
 mod flow_editor_test;
+#[cfg(test)]
+mod model_import_test;
 #[cfg(test)]
 mod observatory_test;
 #[cfg(test)]
@@ -40,8 +43,8 @@ pub use desktop::{
     FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
     FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
     FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelUsageDto,
-    OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
+    ModelImportDto, ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto,
+    ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
     RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
     TimelineKindDto,
 };
@@ -49,6 +52,8 @@ pub use desktop::{
 // Re-exported so the desktop shell can accept the debug-redacted credential
 // action without depending on pam_protocol directly.
 pub use pam_protocol::{ConnectorCredentialAction, ConnectorSecret};
+
+pub use model_import::ModelImportParams;
 
 pub use skill_inventory::{
     CursorGlobalRulesStatusDto, SkillArtifactDto, SkillInventoryDataDto, SkillInventoryDriftDto,

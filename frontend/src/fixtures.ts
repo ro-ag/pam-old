@@ -22,6 +22,7 @@ import type {
   FlowWorkspaceDataDto,
   ChatMessageDto,
   HealthDto,
+  ModelImportDto,
   ModelInferDto,
   ModelStatusDto,
   ModelSummaryDto,
@@ -773,6 +774,33 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           emittedOutputTokens: outputTokens,
         },
       };
+    },
+    async modelImport(_fence, params): Promise<ModelImportDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so the model registry is not accepting imports.",
+            recovery: "Start PAM, then import the model again.",
+          },
+        };
+      }
+      if (!params.path.startsWith("/") || !params.path.endsWith(".gguf")) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "model_invalid",
+            detail: "The model path must be an absolute path to a GGUF file.",
+            recovery: "Pick the downloaded .gguf file and try again.",
+          },
+        };
+      }
+      const imported: ModelSummaryDto = { modelId: params.model, sizeBytes: 4_600_000_000 };
+      modelCatalog.push(imported);
+      return clone({ status: "ok" as const, model: imported });
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {

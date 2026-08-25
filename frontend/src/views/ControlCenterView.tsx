@@ -1,12 +1,18 @@
-import { Brain, CalendarBlank, Check, Copy, Lightning, Power, Pulse, Queue } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Brain, CalendarBlank, Check, Lightning, Power, Pulse, Queue, UserCircle } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
-import { ProjectPicker } from "../components/Shell";
-import type { ActivityDayDto, DaemonStatsDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
+import type {
+  ActivityEventDto,
+  ActivityDayDto,
+  CallerDto,
+  DaemonStatsDto,
+  ModelImportParams,
+  ModelStatusDto,
+  PamBridge,
+} from "../domain";
 import type { DaemonView } from "../selectors";
 import { presentError } from "../state";
 import { formatModelSize } from "./ActivityView";
-import { CurrentView, type CurrentViewProps } from "./ProjectViews";
 
 const DAY_MS = 86_400_000;
 export const HEATMAP_WEEKS = 26;
@@ -247,10 +253,148 @@ type VerifyState =
   | { state: "pass"; ms: number; tokens: number }
   | { state: "fail"; detail: string };
 
-const MODEL_IMPORT_COMMAND =
-  "pam model import <vendor>/<name> --path /absolute/path/model.gguf "
-  + "--digest sha256:<hex> --size-bytes <bytes> --license-id <spdx-id> "
-  + "--license-url <url> --license-notice-digest sha256:<hex> --accept-license";
+type ImportState =
+  | { state: "idle" }
+  | { state: "running" }
+  | { state: "fail"; detail: string };
+
+// The whole import happens here: pick or drop the GGUF, accept its license,
+// and PAM verifies, hashes, and registers it — no terminal round-trip.
+function ModelImportForm({
+  bridge,
+  onImported,
+}: {
+  bridge: PamBridge;
+  onImported: () => void;
+}) {
+  const [form, setForm] = useState({
+    model: "",
+    path: "",
+    licenseId: "",
+    licenseUrl: "",
+    licenseNoticeText: "",
+  });
+  const [accepted, setAccepted] = useState(false);
+  const [importState, setImportState] = useState<ImportState>({ state: "idle" });
+  const busy = importState.state === "running";
+  const set = (field: keyof typeof form) => (value: string) =>
+    setForm((current) => ({ ...current, [field]: value }));
+
+  // Dropping a GGUF from the file manager fills the path; native shell only.
+  useEffect(() => {
+    if (bridge.mode !== "native") return;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void import("@tauri-apps/api/webview")
+      .then(async ({ getCurrentWebview }) => {
+        const stop = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type !== "drop") return;
+          const dropped = event.payload.paths.find((path) => path.toLowerCase().endsWith(".gguf"));
+          if (dropped) setForm((current) => ({ ...current, path: dropped }));
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Drag and drop is an enhancement; the path field always works.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [bridge]);
+
+  const ready =
+    accepted && Object.values(form).every((value) => value.trim().length > 0);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!ready || busy) return;
+    setImportState({ state: "running" });
+    const params: ModelImportParams = {
+      model: form.model.trim(),
+      path: form.path.trim(),
+      licenseId: form.licenseId.trim(),
+      licenseUrl: form.licenseUrl.trim(),
+      licenseNoticeText: form.licenseNoticeText,
+    };
+    try {
+      const response = await bridge.modelImport(withDaemonOperation(), params);
+      if (response.status === "ok") {
+        setImportState({ state: "idle" });
+        onImported();
+      } else {
+        setImportState({
+          state: "fail",
+          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+        });
+      }
+    } catch (error) {
+      setImportState({ state: "fail", detail: presentError(error) });
+    }
+  };
+
+  const field = (
+    label: string,
+    key: keyof typeof form,
+    placeholder: string,
+    type: "text" | "url" = "text",
+  ) => (
+    <label>
+      {label}
+      <input
+        type={type}
+        name={`model-import-${key}`}
+        placeholder={placeholder}
+        value={form[key]}
+        disabled={busy}
+        onChange={(event) => set(key)(event.target.value)}
+      />
+    </label>
+  );
+
+  return (
+    <form className="model-runtime model-import" onSubmit={(event) => void submit(event)}>
+      <p className="model-note">
+        No local model is registered yet. Drop a downloaded GGUF here, or point PAM at it — PAM
+        verifies and registers it, then starts with it, all from this screen.
+      </p>
+      {field("GGUF file path", "path", "/absolute/path/to/model.gguf")}
+      {field("Model identity", "model", "vendor/name, e.g. qwen/qwen3-4b-instruct-q4")}
+      {field("License identifier", "licenseId", "SPDX id, e.g. Apache-2.0")}
+      {field("License URL", "licenseUrl", "https://…", "url")}
+      <label>
+        License notice
+        <textarea
+          name="model-import-notice"
+          placeholder="Paste the exact license notice text you are accepting."
+          rows={3}
+          value={form.licenseNoticeText}
+          disabled={busy}
+          onChange={(event) => set("licenseNoticeText")(event.target.value)}
+        />
+      </label>
+      <label className="model-import-consent">
+        <input
+          type="checkbox"
+          checked={accepted}
+          disabled={busy}
+          onChange={(event) => setAccepted(event.target.checked)}
+        />
+        I accept this model's license exactly as stated above.
+      </label>
+      <div className="model-actions">
+        <button type="submit" className="button button--primary button--small" disabled={!ready || busy}>
+          {busy ? "Verifying and registering…" : "Import model"}
+        </button>
+        {busy && <small>PAM reads and hashes the whole file; large models take a moment.</small>}
+      </div>
+      {importState.state === "fail" && (
+        <p className="model-verify is-fail" role="alert">{importState.detail}</p>
+      )}
+    </form>
+  );
+}
 
 export interface ModelPanelProps {
   bridge: PamBridge;
@@ -260,6 +404,7 @@ export interface ModelPanelProps {
   modelBusy: boolean;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartWithModel: (modelId: string) => void;
+  onModelImported: () => void;
 }
 
 // The local model runtime, one panel on the launch view: state, identity,
@@ -271,9 +416,9 @@ export function ModelPanel({
   modelBusy,
   onOpenModelChat,
   onStartWithModel,
+  onModelImported,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
-  const [copied, setCopied] = useState(false);
   const offline = daemon.state === "stopped";
   const loaded = modelStatus?.status === "ok" ? modelStatus.loaded : null;
   const registered = modelStatus?.status === "ok" ? modelStatus.registered : [];
@@ -300,15 +445,6 @@ export function ModelPanel({
       }
     } catch (error) {
       setVerify({ state: "fail", detail: presentError(error) });
-    }
-  };
-
-  const copyImportCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(MODEL_IMPORT_COMMAND);
-      setCopied(true);
-    } catch {
-      // Clipboard access is optional; the command stays selectable on screen.
     }
   };
 
@@ -398,19 +534,151 @@ export function ModelPanel({
           <div className="access-list model-rows">{registered.map(restartRow)}</div>
         </div>
       ) : (
-        <div className="model-runtime model-guide">
-          <p className="model-note">No local model is registered yet. Three steps bring one on watch:</p>
-          <ol>
-            <li>Download a GGUF build of the model you want to run locally.</li>
-            <li>
-              Register it with the daemon:
-              <pre><code>{MODEL_IMPORT_COMMAND}</code></pre>
-              <button type="button" className="button button--secondary button--small" onClick={() => void copyImportCommand()}>
-                {copied ? <Check size={17} /> : <Copy size={17} />} {copied ? "Copied" : "Copy command"}
-              </button>
-            </li>
-            <li>Return here and start PAM with the registered model.</li>
-          </ol>
+        <ModelImportForm bridge={bridge} onImported={onModelImported} />
+      )}
+    </section>
+  );
+}
+
+export interface CallerRequestRow {
+  callerId: string;
+  requests: number;
+  revoked: boolean;
+}
+
+// The whole project story on this screen: recent daemon requests, grouped by
+// caller. Registered-but-quiet callers stay visible with a zero count.
+export function aggregateCallerRequests(
+  callers: CallerDto[],
+  events: ActivityEventDto[],
+): CallerRequestRow[] {
+  const rows = new Map<string, CallerRequestRow>();
+  for (const caller of callers) {
+    rows.set(caller.callerId, {
+      callerId: caller.callerId,
+      requests: 0,
+      revoked: caller.revokedAtMs !== null,
+    });
+  }
+  for (const event of events) {
+    const row = rows.get(event.callerId) ?? { callerId: event.callerId, requests: 0, revoked: false };
+    row.requests += 1;
+    rows.set(event.callerId, row);
+  }
+  return [...rows.values()].sort(
+    (left, right) => right.requests - left.requests || left.callerId.localeCompare(right.callerId),
+  );
+}
+
+interface CallerRequestsPanelProps {
+  bridge: PamBridge;
+  daemon: DaemonView;
+  /** True when the desktop's own GUI caller still needs registration. */
+  registrationNeeded: boolean;
+  registrationBusy: boolean;
+  onRegisterCaller: () => void;
+}
+
+function CallerRequestsPanel({
+  bridge,
+  daemon,
+  registrationNeeded,
+  registrationBusy,
+  onRegisterCaller,
+}: CallerRequestsPanelProps) {
+  const [rows, setRows] = useState<CallerRequestRow[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+  const offline = daemon.state === "stopped";
+
+  const load = useCallback(async () => {
+    const sequence = ++requestSequence.current;
+    setLoadError(null);
+    try {
+      // Both slices are daemon-global: always the daemon authority.
+      const [callers, activity] = await Promise.all([
+        bridge.callerRegistry(withDaemonOperation()),
+        bridge.daemonActivity(withDaemonOperation()),
+      ]);
+      if (sequence !== requestSequence.current) return;
+      if (callers.status !== "ok") {
+        setLoadError([callers.failure.detail, callers.failure.recovery].filter(Boolean).join(" "));
+        return;
+      }
+      if (activity.status !== "ok") {
+        setLoadError([activity.failure.detail, activity.failure.recovery].filter(Boolean).join(" "));
+        return;
+      }
+      setRows(aggregateCallerRequests(callers.callers, activity.events));
+      setTruncated(activity.truncated);
+    } catch (error) {
+      if (sequence === requestSequence.current) setLoadError(presentError(error));
+    }
+  }, [bridge]);
+
+  useEffect(() => {
+    if (offline) {
+      setRows(null);
+      setLoadError(null);
+      return;
+    }
+    void load();
+    return () => {
+      requestSequence.current += 1;
+    };
+  }, [load, offline]);
+
+  return (
+    <section className="panel" aria-labelledby="caller-requests-heading">
+      <div className="panel-title">
+        <div>
+          <span className="eyebrow">Daemon requests</span>
+          <h2 id="caller-requests-heading">Requests per caller</h2>
+        </div>
+        {truncated && <small>recent window</small>}
+      </div>
+      {registrationNeeded && !offline && (
+        <div className="access-list">
+          <article>
+            <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
+            <div>
+              <strong>This desktop</strong>
+              <p>PAM has not registered this GUI as a caller yet.</p>
+            </div>
+            <button
+              type="button"
+              className="button button--primary button--small"
+              disabled={registrationBusy}
+              onClick={onRegisterCaller}
+            >
+              {registrationBusy ? "Registering…" : "Register GUI caller"}
+            </button>
+          </article>
+        </div>
+      )}
+      {offline ? (
+        <p className="panel-empty">PAM is paused, so no requests are being served.</p>
+      ) : loadError ? (
+        <p className="panel-empty" role="alert">{loadError}</p>
+      ) : !rows ? (
+        <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the recent requests…</p>
+      ) : rows.length === 0 ? (
+        <p className="panel-empty">No caller has talked to the daemon yet.</p>
+      ) : (
+        <div className="access-list">
+          {rows.map((row) => (
+            <article key={row.callerId}>
+              <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
+              <div>
+                <strong>{row.callerId}</strong>
+                <p>{row.requests.toLocaleString()} request{row.requests === 1 ? "" : "s"} recently</p>
+              </div>
+              <span className={`state-pill state-pill--${row.revoked ? "attention" : "observed"}`}>
+                {row.revoked ? "revoked" : "active"}
+              </span>
+            </article>
+          ))}
         </div>
       )}
     </section>
@@ -420,28 +688,27 @@ export function ModelPanel({
 export interface ControlCenterViewProps {
   bridge: PamBridge;
   daemon: DaemonView;
-  projects: ProjectSummaryDto[];
-  onSelectProject: (project: ProjectSummaryDto) => void;
-  contextBar?: ReactNode;
   modelStatus: ModelStatusDto | null;
   modelBusy: boolean;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartWithModel: (modelId: string) => void;
-  /** Present while a project is active; the project keeps a calm, second row. */
-  project: CurrentViewProps | null;
+  onModelImported: () => void;
+  registrationNeeded?: boolean;
+  registrationBusy?: boolean;
+  onRegisterCaller?: () => void;
 }
 
 export function ControlCenterView({
   bridge,
   daemon,
-  projects,
-  onSelectProject,
-  contextBar,
   modelStatus,
   modelBusy,
   onOpenModelChat,
   onStartWithModel,
-  project,
+  onModelImported,
+  registrationNeeded = false,
+  registrationBusy = false,
+  onRegisterCaller = () => {},
 }: ControlCenterViewProps) {
   return (
     <main className="canvas" id="main-content">
@@ -450,7 +717,6 @@ export function ControlCenterView({
           <h1>Control center</h1>
           <p>Everything PAM watches, at a glance.</p>
         </div>
-        {contextBar}
       </header>
       <OverviewPanel bridge={bridge} daemon={daemon} />
       <ModelPanel
@@ -460,29 +726,15 @@ export function ControlCenterView({
         modelBusy={modelBusy}
         onOpenModelChat={onOpenModelChat}
         onStartWithModel={onStartWithModel}
+        onModelImported={onModelImported}
       />
-      {project ? (
-        <section className="project-detail" aria-label="Active project">
-          <CurrentView {...project} />
-        </section>
-      ) : (
-        <section className="panel project-detail" aria-label="Projects">
-          <div className="panel-title">
-            <div>
-              <span className="eyebrow">Projects</span>
-              <h2>Bring a queue into view</h2>
-            </div>
-          </div>
-          {projects.length === 0 ? (
-            <p className="panel-empty">
-              Open PAM from a Git repository and it will settle in here on its own. The daemon keeps
-              watch either way.
-            </p>
-          ) : (
-            <ProjectPicker projects={projects} onSelect={onSelectProject} />
-          )}
-        </section>
-      )}
+      <CallerRequestsPanel
+        bridge={bridge}
+        daemon={daemon}
+        registrationNeeded={registrationNeeded}
+        registrationBusy={registrationBusy}
+        onRegisterCaller={onRegisterCaller}
+      />
     </main>
   );
 }

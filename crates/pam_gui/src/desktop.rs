@@ -43,6 +43,7 @@ use crate::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
+    model_import::{ModelImportParams, run_model_import},
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
@@ -740,6 +741,18 @@ pub struct ModelUsageDto {
     pub input_tokens: u32,
     pub sampled_output_tokens: u32,
     pub emitted_output_tokens: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelImportDto {
+    Ok { model: ModelSummaryDto },
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1651,6 +1664,44 @@ impl DesktopCore {
             Err(state) => state,
         };
         let data = model_infer_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Imports a user-owned GGUF entirely from the GUI: PAM hashes the file
+    /// and the accepted license notice itself, verifies the artifact through
+    /// the shared import path, and registers it durably.
+    ///
+    /// This is a local administrative operation on the user's own store, like
+    /// the skill library actions; import failures are returned as bounded
+    /// unavailable data, never raw internals.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_import(
+        &self,
+        fence: CommandFence,
+        params: ModelImportParams,
+    ) -> DesktopResult<ModelImportDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = match run_model_import(params).await {
+            Ok(registered) => ModelImportDto::Ok {
+                model: ModelSummaryDto {
+                    model_id: bounded_detail(registered.key.id()),
+                    size_bytes: registered.size_bytes,
+                },
+            },
+            Err(failure) => ModelImportDto::Unavailable {
+                failure: unavailable_failure(
+                    Some("model_import_failed".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                ),
+            },
+        };
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)

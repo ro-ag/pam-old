@@ -7,13 +7,14 @@ import { selectControlCenter, selectDaemonView } from "../selectors";
 import {
   ControlCenterView,
   HEATMAP_WEEKS,
+  aggregateCallerRequests,
   buildHeatmapWeeks,
   computeStreaks,
 } from "./ControlCenterView";
 
 const DAY_MS = 86_400_000;
 
-async function controlCenterProps(scenario: FixtureScenario = "solved", withProject = true) {
+async function controlCenterProps(scenario: FixtureScenario = "solved") {
   const bridge = fixtureBridge(scenario);
   const { snapshot, catalog } = await bridge.bootstrap();
   const control = snapshot ? selectControlCenter(snapshot.data, catalog, true) : null;
@@ -22,67 +23,69 @@ async function controlCenterProps(scenario: FixtureScenario = "solved", withProj
     daemon: control
       ? control.daemon
       : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
-    projects: catalog.projects,
-    onSelectProject: vi.fn(),
     modelStatus: await bridge.modelStatus(withDaemonOperation()),
     modelBusy: false,
     onOpenModelChat: vi.fn(),
     onStartWithModel: vi.fn(),
-    project:
-      withProject && control
-        ? {
-            data: control,
-            onCopy: vi.fn(),
-            onEvidence: vi.fn(),
-            onContinue: vi.fn(),
-            onOpenQueue: vi.fn(),
-            onOpenApproval: vi.fn(),
-            onRecoverDaemon: vi.fn(),
-            onRefresh: vi.fn(),
-            onRegisterCaller: vi.fn(),
-            registrationBusy: false,
-          }
-        : null,
+    onModelImported: vi.fn(),
   };
 }
 
 describe("ControlCenterView", () => {
-  it("leads with the daemon overview and keeps the project in a second row", async () => {
+  it("leads with the daemon overview and never offers project selection", async () => {
     const props = await controlCenterProps();
     render(<ControlCenterView {...props} />);
 
     expect(screen.getByRole("heading", { name: "Control center" })).toBeInTheDocument();
     const overview = screen.getByRole("region", { name: "Daemon overview" });
-    // The sidebar switcher already lists projects; the overview does not repeat the count.
-    expect(within(overview).queryByText("Projects")).not.toBeInTheDocument();
     expect(within(overview).getByText("Watch status")).toBeInTheDocument();
     expect(within(overview).getByText("Active days")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: /Daily daemon activity/ })).toBeInTheDocument();
 
-    // The active project keeps its content, demoted below the overview.
-    expect(screen.getByRole("region", { name: "Active project" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Ready for the next agent" })).toBeInTheDocument();
+    // Projects reduce to per-caller requests: no picker, no switcher, no
+    // project row on this screen.
+    expect(screen.queryByRole("region", { name: "Projects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Active project" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Bring a queue into view")).not.toBeInTheDocument();
 
     // One watch-status source of truth per screen: the daemon overview row.
     expect(screen.getAllByText("Watch status")).toHaveLength(1);
   });
 
-  it("offers a compact project picker when no project is active", async () => {
-    const props = await controlCenterProps("global-only", false);
+  it("shows recent daemon requests grouped by caller", async () => {
+    const props = await controlCenterProps();
     render(<ControlCenterView {...props} />);
 
-    expect(screen.getByRole("region", { name: "Daemon overview" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Projects" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Active project" })).not.toBeInTheDocument();
+    const panel = await screen.findByRole("region", { name: "Requests per caller" });
+    expect(await within(panel).findByText("gui:pam-desktop")).toBeInTheDocument();
+    expect(within(panel).getByText("cli:release-agent")).toBeInTheDocument();
+    // Two fixture events each.
+    expect(within(panel).getAllByText("2 requests recently")).toHaveLength(2);
+    // The revoked caller stays visible with a zero count.
+    expect(within(panel).getByText("cli:retired-agent")).toBeInTheDocument();
+    expect(within(panel).getByText("0 requests recently")).toBeInTheDocument();
+    expect(within(panel).getByText("revoked")).toBeInTheDocument();
+  });
+
+  it("offers GUI caller registration inside the caller panel when needed", async () => {
+    const props = await controlCenterProps();
+    const onRegisterCaller = vi.fn();
+    render(
+      <ControlCenterView {...props} registrationNeeded registrationBusy={false} onRegisterCaller={onRegisterCaller} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Register GUI caller" }));
+    expect(onRegisterCaller).toHaveBeenCalled();
   });
 
   it("keeps the overview calm while PAM is paused", async () => {
-    const props = await controlCenterProps("offline", false);
+    const props = await controlCenterProps("offline");
     render(<ControlCenterView {...props} />);
 
     expect(
       screen.getByText("The activity picture returns when PAM is back on watch."),
     ).toBeInTheDocument();
+    expect(screen.getByText("PAM is paused, so no requests are being served.")).toBeInTheDocument();
   });
 });
 
@@ -136,23 +139,84 @@ describe("model runtime panel", () => {
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
   });
 
-  it("walks through the import steps when no model is registered", async () => {
+  it("imports a model entirely from the panel when none is registered", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(within(panel).getByText("none")).toBeInTheDocument();
-    expect(within(panel).getByText(/pam model import/)).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: /Copy command/ })).toBeInTheDocument();
+    // The setup is UI-owned: no terminal command is ever shown.
+    expect(within(panel).queryByText(/pam model import/)).not.toBeInTheDocument();
+
+    const importButton = within(panel).getByRole("button", { name: "Import model" });
+    expect(importButton).toBeDisabled();
+
+    await userEvent.type(
+      within(panel).getByLabelText("GGUF file path"),
+      "/models/qwen3-4b-instruct-q4.gguf",
+    );
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
+    await userEvent.type(within(panel).getByLabelText("License identifier"), "Apache-2.0");
+    await userEvent.type(
+      within(panel).getByLabelText("License URL"),
+      "https://example.com/license",
+    );
+    await userEvent.type(within(panel).getByLabelText("License notice"), "Apache License 2.0");
+    expect(importButton).toBeDisabled();
+    await userEvent.click(
+      within(panel).getByLabelText(/I accept this model's license/),
+    );
+
+    await userEvent.click(importButton);
+    expect(props.onModelImported).toHaveBeenCalled();
+  });
+
+  it("surfaces a bounded import failure inside the panel", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "not-a-path");
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
+    await userEvent.type(within(panel).getByLabelText("License identifier"), "Apache-2.0");
+    await userEvent.type(within(panel).getByLabelText("License URL"), "https://example.com/license");
+    await userEvent.type(within(panel).getByLabelText("License notice"), "Apache License 2.0");
+    await userEvent.click(within(panel).getByLabelText(/I accept this model's license/));
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Import model" }));
+    expect(
+      await within(panel).findByText(/must be an absolute path to a GGUF file/),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).not.toHaveBeenCalled();
   });
 
   it("marks the runtime unreachable while PAM is paused", async () => {
-    const props = await controlCenterProps("offline", false);
+    const props = await controlCenterProps("offline");
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(within(panel).getByText("unreachable")).toBeInTheDocument();
     expect(within(panel).getByText(/local model runtime is not reachable/)).toBeInTheDocument();
+  });
+});
+
+describe("caller request aggregation", () => {
+  it("counts events per caller and keeps quiet registered callers", () => {
+    const rows = aggregateCallerRequests(
+      [
+        { callerId: "gui:desktop", registeredAtMs: 1, revokedAtMs: null },
+        { callerId: "cli:quiet", registeredAtMs: 2, revokedAtMs: 3 },
+      ],
+      [
+        { sequence: 2, projectId: null, callerId: "gui:desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 5 },
+        { sequence: 1, projectId: null, callerId: "cli:unregistered", action: "flow.save", decision: "allowed", outcome: "served", occurredAtMs: 4 },
+      ],
+    );
+    expect(rows).toEqual([
+      { callerId: "cli:unregistered", requests: 1, revoked: false },
+      { callerId: "gui:desktop", requests: 1, revoked: false },
+      { callerId: "cli:quiet", requests: 0, revoked: true },
+    ]);
   });
 });
 

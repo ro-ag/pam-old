@@ -1616,9 +1616,12 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .model-verify.is-fail { color: var(--pam-danger); }
 .model-rows { border-top: 1px solid var(--pam-line); }
 .model-rows article { padding-right: 0; padding-left: 0; }
-.model-guide ol { display: grid; gap: calc(8px * var(--density)); margin: 0; padding-left: 18px; color: var(--pam-content-secondary); font-size: 13px; list-style: decimal; }
-.model-guide pre { margin: 6px 0; padding: 8px 10px; overflow-x: auto; border: 1px solid var(--pam-line); border-radius: 8px; background: var(--pam-surface); }
-.model-guide code { color: var(--pam-text); font-family: var(--font-mono); font-size: 11.5px; }
+.model-import label { display: grid; gap: calc(4px * var(--density)); color: var(--pam-muted); font-size: 11px; }
+.model-import input[type="text"], .model-import input[type="url"], .model-import textarea { min-height: max(28px, calc(32px * var(--density))); padding: 5px 7px; border: 1px solid var(--pam-line); border-radius: 5px; color: var(--pam-text); background: var(--pam-surface-raised); font-size: 11px; }
+.model-import textarea { min-height: 0; resize: vertical; font-family: inherit; }
+.model-import label.model-import-consent { display: flex; align-items: center; gap: 8px; color: var(--pam-content-secondary); font-size: 12px; }
+.model-import .model-actions { align-items: center; }
+.model-import .model-actions small { color: var(--pam-muted); font-size: 11px; }
 
 /* Control-center overview heatmap */
 .heatmap-panel { padding-bottom: 14px; }

@@ -21,6 +21,7 @@
     "allow-caller-registry",
     "allow-model-status",
     "allow-model-infer",
+    "allow-model-import",
     "allow-flow-graph",
     "allow-flow-compose",
     "allow-load-skill-inventory",

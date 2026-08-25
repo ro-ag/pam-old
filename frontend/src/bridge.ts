@@ -22,6 +22,8 @@ import type {
   FlowWorkspaceDto,
   ChatMessageDto,
   HealthDto,
+  ModelImportDto,
+  ModelImportParams,
   ModelInferDto,
   ModelStatusDto,
   PamBridge,
@@ -131,6 +133,15 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         model,
         messages,
         ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      })),
+    modelImport: (fence, params: ModelImportParams) =>
+      invokeCommand<ModelImportDto>("model_import", request({
+        ...flatFence(fence),
+        model: params.model,
+        path: params.path,
+        licenseId: params.licenseId,
+        licenseUrl: params.licenseUrl,
+        licenseNoticeText: params.licenseNoticeText,
       })),
     activateProject: (projectHandle, operationId) =>
       invokeCommand<SnapshotDto>(
