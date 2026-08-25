@@ -8,7 +8,6 @@
 use std::{
     future::Future,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -383,7 +382,7 @@ impl<R: DownloadResponse> DownloadResponse for CountingResponse<R> {
 #[cfg(target_os = "macos")]
 pub(crate) fn host_memory_total_bytes() -> Result<u64, ModelDownloadFailure> {
     let recovery = "Retry the host memory probe.";
-    let output = Command::new("sysctl")
+    let output = std::process::Command::new("sysctl")
         .args(["-n", "hw.memsize"])
         .output()
         .map_err(|error| {
