@@ -4,6 +4,43 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-25
+
+### Added
+
+- Fully GUI-owned local model import: the Control Center's empty model state
+  is now an import form. Drop or point PAM at a downloaded GGUF, name it
+  `vendor/name`, provide the license identifier, URL, and exact notice text,
+  and accept — PAM computes the file digest, size, and notice digest itself,
+  verifies the artifact through the shared import path, and registers it
+  durably (new `model_import` desktop command). The existing
+  restart-with-model action carries it into memory, so the whole setup
+  happens without a terminal.
+- Requests-per-caller panel on the Control Center: recent daemon requests
+  aggregated per registered caller with active/revoked state — the complete
+  project story on the main page. GUI caller registration recovery lives in
+  this panel.
+- Latest-run evidence panel on the Activity page: the retained evidence
+  handles of the active project's latest terminal result open the bounded
+  evidence drawer from the same page as the daemon feed.
+
+### Changed
+
+- The Control Center no longer offers project selection: the header project
+  switcher and the project picker are gone from the main page. Project
+  switching remains in the Access, Skills, and Flows headers.
+- The Activity page's empty model card points at the Control Center import
+  instead of naming a CLI command.
+
+### Removed
+
+- The project control-center row (durable timeline, handoff panel,
+  approval-reopen chip, and outcome-brief copy). Project tracking belongs to
+  the separate `ptrack` tool, not PAM; approval requests still open
+  automatically and resurface on refresh.
+- The copyable `pam model import` instruction block, replaced by the in-app
+  import flow.
+
 ## [0.3.0] - 2026-08-24
 
 ### Added
