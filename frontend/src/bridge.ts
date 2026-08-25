@@ -22,9 +22,13 @@ import type {
   FlowWorkspaceDto,
   ChatMessageDto,
   HealthDto,
+  HostMemoryDto,
+  ModelDownloadDto,
+  ModelDownloadStatusDto,
   ModelImportDto,
   ModelImportParams,
   ModelInferDto,
+  ModelPresetsDto,
   ModelStatusDto,
   PamBridge,
   SkillAuditDto,
@@ -142,7 +146,19 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         licenseId: params.licenseId,
         licenseUrl: params.licenseUrl,
         licenseNoticeText: params.licenseNoticeText,
+        allowSmall: params.allowSmall,
       })),
+    modelPresets: (fence) =>
+      invokeCommand<ModelPresetsDto>("model_presets", request(flatFence(fence))),
+    modelDownload: (fence, presetId) =>
+      invokeCommand<ModelDownloadDto>("model_download", request({
+        ...flatFence(fence),
+        presetId,
+      })),
+    modelDownloadStatus: (fence) =>
+      invokeCommand<ModelDownloadStatusDto>("model_download_status", request(flatFence(fence))),
+    hostMemory: (fence) =>
+      invokeCommand<HostMemoryDto>("host_memory", request(flatFence(fence))),
     activateProject: (projectHandle, operationId) =>
       invokeCommand<SnapshotDto>(
         "activate_project",

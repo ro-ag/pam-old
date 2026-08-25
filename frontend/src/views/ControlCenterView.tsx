@@ -1,4 +1,5 @@
-import { Brain, CalendarBlank, Check, Lightning, Power, Pulse, Queue, UserCircle } from "@phosphor-icons/react";
+import { Brain, CalendarBlank, CaretDown, CaretRight, Check, Lightning, Power, Pulse, Queue, UserCircle } from "@phosphor-icons/react";
+import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
 import type {
@@ -7,6 +8,7 @@ import type {
   CallerDto,
   DaemonStatsDto,
   ModelImportParams,
+  ModelPresetDto,
   ModelStatusDto,
   PamBridge,
   ProjectSummaryDto,
@@ -273,9 +275,255 @@ type ImportState =
   | { state: "running" }
   | { state: "fail"; detail: string };
 
-// The whole import happens here: pick or drop the GGUF, accept its license,
-// and PAM verifies, hashes, and registers it — no terminal round-trip.
-function ModelImportForm({
+type DownloadPhase = "idle" | "running" | "complete" | "failed";
+
+interface DownloadProgress {
+  receivedBytes: number;
+  totalBytes: number;
+}
+
+// null means "not known yet" (still loading host_memory); the caller treats
+// unknown as neither a pass nor a fail.
+export function fitsMemory(minMemoryBytes: number, hostTotalBytes: number | null): boolean | null {
+  return hostTotalBytes === null ? null : hostTotalBytes >= minMemoryBytes;
+}
+
+// The curated path: pick a preset, review its license, download it. PAM
+// verifies, hashes, and registers it once the bytes land — no terminal
+// round-trip, and no floor warning here since every curated preset is
+// comfortably large (>= 4.9 GB).
+function PresetDownload({
+  bridge,
+  onImported,
+}: {
+  bridge: PamBridge;
+  onImported: () => void;
+}) {
+  const [presets, setPresets] = useState<ModelPresetDto[] | null>(null);
+  const [hostMemoryBytes, setHostMemoryBytes] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [phase, setPhase] = useState<DownloadPhase>("idle");
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const completedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [presetsResponse, memoryResponse] = await Promise.all([
+          bridge.modelPresets(withDaemonOperation()),
+          bridge.hostMemory(withDaemonOperation()),
+        ]);
+        if (cancelled) return;
+        setPresets(presetsResponse.presets);
+        setHostMemoryBytes(memoryResponse.totalBytes);
+      } catch (error) {
+        if (!cancelled) setLoadError(presentError(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
+
+  // Poll while a download is running; the daemon tracks one download at a
+  // time and reports its own progress, so no local byte math is needed here.
+  useEffect(() => {
+    if (phase !== "running") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await bridge.modelDownloadStatus(withDaemonOperation());
+        if (cancelled) return;
+        setProgress({ receivedBytes: status.receivedBytes, totalBytes: status.totalBytes });
+        if (status.status === "complete") {
+          setPhase("complete");
+          if (!completedRef.current) {
+            completedRef.current = true;
+            onImported();
+          }
+        } else if (status.status === "failed") {
+          setPhase("failed");
+          setDownloadError(
+            [status.failure?.detail, status.failure?.recovery].filter(Boolean).join(" ") ||
+              "The download failed partway through.",
+          );
+        } else if (status.status === "idle") {
+          setPhase("idle");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPhase("failed");
+          setDownloadError(presentError(error));
+        }
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [phase, bridge, onImported]);
+
+  const selected = presets?.find((preset) => preset.id === selectedId) ?? null;
+  const fits = selected ? fitsMemory(selected.minMemoryBytes, hostMemoryBytes) : null;
+  const busy = phase === "running";
+
+  const startDownload = async () => {
+    if (!selected || !accepted || busy) return;
+    completedRef.current = false;
+    setDownloadError(null);
+    setProgress({ receivedBytes: 0, totalBytes: selected.expectedSizeBytes });
+    setPhase("running");
+    try {
+      const response = await bridge.modelDownload(withDaemonOperation(), selected.id);
+      if (response.status !== "ok") {
+        setPhase("failed");
+        setDownloadError([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
+      setPhase("failed");
+      setDownloadError(presentError(error));
+    }
+  };
+
+  const percent = progress && progress.totalBytes > 0
+    ? Math.min(100, Math.round((progress.receivedBytes / progress.totalBytes) * 100))
+    : 0;
+
+  return (
+    <div className="model-presets">
+      {loadError ? (
+        <p className="model-verify is-fail" role="alert">{loadError}</p>
+      ) : !presets ? (
+        <p className="model-note">Looking at the curated models PAM can fetch for you…</p>
+      ) : (
+        <>
+          <DropdownMenu.Root open={pickerOpen} onOpenChange={setPickerOpen}>
+            <DropdownMenu.Trigger asChild>
+              <button type="button" className="button button--secondary button--small model-preset-trigger">
+                {selected ? selected.label : "Choose a model"}
+                <CaretDown size={14} weight="bold" aria-hidden="true" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="project-menu-popover model-preset-popover" align="start" sideOffset={8}>
+                <DropdownMenu.RadioGroup
+                  value={selectedId ?? ""}
+                  onValueChange={(value) => {
+                    setSelectedId(value);
+                    setAccepted(false);
+                    setPhase("idle");
+                    setDownloadError(null);
+                    setProgress(null);
+                  }}
+                >
+                  {presets.map((preset) => {
+                    const presetFits = fitsMemory(preset.minMemoryBytes, hostMemoryBytes);
+                    return (
+                      <DropdownMenu.RadioItem
+                        key={preset.id}
+                        className="project-menu-item model-preset-item"
+                        value={preset.id}
+                        textValue={preset.label}
+                      >
+                        <span>
+                          <strong>{preset.label}</strong>
+                          <small>
+                            {preset.paramsLabel} · {preset.quantLabel} · {formatModelSize(preset.expectedSizeBytes)} ·{" "}
+                            {preset.licenseId}
+                          </small>
+                          <small className={presetFits === false ? "model-fit-warn" : undefined}>
+                            {presetFits === null
+                              ? "Checking this Mac's memory…"
+                              : presetFits
+                                ? "Runs on this Mac"
+                                : `Needs ~${formatModelSize(preset.minMemoryBytes)} memory; this Mac has ${formatModelSize(hostMemoryBytes ?? 0)}`}
+                          </small>
+                        </span>
+                        <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
+                      </DropdownMenu.RadioItem>
+                    );
+                  })}
+                </DropdownMenu.RadioGroup>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+
+          {selected && (
+            <div className="model-preset-summary">
+              <div className="model-identity">
+                <strong title={selected.model}>{selected.model}</strong>
+                <small>{formatModelSize(selected.expectedSizeBytes)} download · {selected.licenseId}</small>
+              </div>
+              <p className="model-note">{selected.licenseUrl}</p>
+              <p className="model-note">{selected.licenseNoticeText}</p>
+              {fits === false && (
+                <p className="model-fit-warn" role="status">
+                  Needs ~{formatModelSize(selected.minMemoryBytes)} memory; this Mac has {formatModelSize(hostMemoryBytes ?? 0)}.
+                </p>
+              )}
+              <label className="model-import-consent">
+                <input
+                  type="checkbox"
+                  checked={accepted}
+                  disabled={busy}
+                  onChange={(event) => setAccepted(event.target.checked)}
+                />
+                I accept this model's license exactly as stated above.
+              </label>
+              <div className="model-actions">
+                <button
+                  type="button"
+                  className="button button--primary button--small"
+                  disabled={!accepted || fits === false || busy || phase === "complete"}
+                  onClick={() => void startDownload()}
+                >
+                  {phase === "running"
+                    ? "Downloading…"
+                    : phase === "complete"
+                      ? "Downloaded"
+                      : phase === "failed"
+                        ? "Retry download"
+                        : "Download"}
+                </button>
+                {busy && <small>PAM fetches, hashes, and registers this model, all from this screen.</small>}
+              </div>
+              {phase === "running" && progress && (
+                <div className="model-download-progress">
+                  <div className="model-download-track" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+                    <div className="model-download-fill" style={{ width: `${percent}%` }} />
+                  </div>
+                  <small>
+                    {formatModelSize(progress.receivedBytes)} of {formatModelSize(progress.totalBytes)} · {percent}%
+                  </small>
+                </div>
+              )}
+              {phase === "complete" && (
+                <p className="model-verify is-pass" role="status">
+                  <Check size={16} aria-hidden="true" /> Downloaded and registered.
+                </p>
+              )}
+              {phase === "failed" && downloadError && (
+                <p className="model-verify is-fail" role="alert">{downloadError}</p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// The manual path: point PAM at an already-downloaded GGUF. License fields
+// collapse behind Advanced since most imports reuse the same license across
+// re-imports; drag-drop still fills the path on the native shell.
+function ManualImport({
   bridge,
   onImported,
 }: {
@@ -290,6 +538,8 @@ function ModelImportForm({
     licenseNoticeText: "",
   });
   const [accepted, setAccepted] = useState(false);
+  const [allowSmall, setAllowSmall] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [importState, setImportState] = useState<ImportState>({ state: "idle" });
   const busy = importState.state === "running";
   const set = (field: keyof typeof form) => (value: string) =>
@@ -332,6 +582,7 @@ function ModelImportForm({
       licenseId: form.licenseId.trim(),
       licenseUrl: form.licenseUrl.trim(),
       licenseNoticeText: form.licenseNoticeText,
+      allowSmall,
     };
     try {
       const response = await bridge.modelImport(withDaemonOperation(), params);
@@ -369,26 +620,46 @@ function ModelImportForm({
   );
 
   return (
-    <form className="model-runtime model-import" onSubmit={(event) => void submit(event)}>
-      <p className="model-note">
-        No local model is registered yet. Drop a downloaded GGUF here, or point PAM at it — PAM
-        verifies and registers it, then starts with it, all from this screen.
-      </p>
+    <form className="model-import" onSubmit={(event) => void submit(event)}>
       {field("GGUF file path", "path", "/absolute/path/to/model.gguf")}
       {field("Model identity", "model", "vendor/name, e.g. qwen/qwen3-4b-instruct-q4")}
-      {field("License identifier", "licenseId", "SPDX id, e.g. Apache-2.0")}
-      {field("License URL", "licenseUrl", "https://…", "url")}
-      <label>
-        License notice
-        <textarea
-          name="model-import-notice"
-          placeholder="Paste the exact license notice text you are accepting."
-          rows={3}
-          value={form.licenseNoticeText}
-          disabled={busy}
-          onChange={(event) => set("licenseNoticeText")(event.target.value)}
-        />
-      </label>
+      <div className="model-advanced">
+        <button
+          type="button"
+          className="model-advanced-toggle"
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((current) => !current)}
+        >
+          {advancedOpen ? <CaretDown size={13} weight="bold" aria-hidden="true" /> : <CaretRight size={13} weight="bold" aria-hidden="true" />}
+          Advanced — license details
+        </button>
+        {advancedOpen && (
+          <div className="model-advanced-body">
+            {field("License identifier", "licenseId", "SPDX id, e.g. Apache-2.0")}
+            {field("License URL", "licenseUrl", "https://…", "url")}
+            <label>
+              License notice
+              <textarea
+                name="model-import-notice"
+                placeholder="Paste the exact license notice text you are accepting."
+                rows={3}
+                value={form.licenseNoticeText}
+                disabled={busy}
+                onChange={(event) => set("licenseNoticeText")(event.target.value)}
+              />
+            </label>
+            <label className="model-import-consent">
+              <input
+                type="checkbox"
+                checked={allowSmall}
+                disabled={busy}
+                onChange={(event) => setAllowSmall(event.target.checked)}
+              />
+              Allow a model below PAM's recommended minimum size (results will fall short in real flows).
+            </label>
+          </div>
+        )}
+      </div>
       <label className="model-import-consent">
         <input
           type="checkbox"
@@ -408,6 +679,30 @@ function ModelImportForm({
         <p className="model-verify is-fail" role="alert">{importState.detail}</p>
       )}
     </form>
+  );
+}
+
+// The whole setup happens here: a curated preset PAM downloads for you, or
+// point PAM at a GGUF you already have — no terminal round-trip either way.
+function ModelImportForm({
+  bridge,
+  onImported,
+}: {
+  bridge: PamBridge;
+  onImported: () => void;
+}) {
+  return (
+    <div className="model-runtime model-setup">
+      <p className="model-note">
+        No local model is registered yet. Choose a curated model for PAM to download, or import one
+        you already have.
+      </p>
+      <PresetDownload bridge={bridge} onImported={onImported} />
+      <div className="model-setup-divider" role="separator">
+        <span>or import a downloaded GGUF</span>
+      </div>
+      <ManualImport bridge={bridge} onImported={onImported} />
+    </div>
   );
 }
 

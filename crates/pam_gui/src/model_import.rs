@@ -23,6 +23,9 @@ use sha2::{Digest, Sha256};
 
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const METADATA_RECOVERY: &str = "Check the GGUF file and license metadata, then import again.";
+/// Models below roughly a 7B-parameter Q4 quantization do not hold up in PAM's
+/// flows, so smaller files need the explicit Advanced override to register.
+pub(crate) const MIN_RECOMMENDED_MODEL_BYTES: u64 = 3_500_000_000;
 
 /// One complete GUI-owned import request, with the exact license notice text
 /// the user accepted on screen.
@@ -34,6 +37,8 @@ pub struct ModelImportParams {
     pub license_id: String,
     pub license_url: String,
     pub license_notice_text: String,
+    /// Accepts a model under the recommended minimum size anyway.
+    pub allow_small: bool,
 }
 
 /// A bounded, user-facing import failure.
@@ -122,6 +127,20 @@ pub(crate) fn verify_and_register(
         })?
         .to_owned();
     let (digest, size_bytes) = hash_file(&params.path)?;
+    if size_bytes < MIN_RECOMMENDED_MODEL_BYTES && !params.allow_small {
+        let size_gb = size_bytes / 100_000_000;
+        let floor_gb = MIN_RECOMMENDED_MODEL_BYTES / 100_000_000;
+        return Err(ModelImportFailure::new(
+            format!(
+                "This model is {}.{} GB — below PAM's recommended minimum of {}.{} GB, so results will fall short in real flows.",
+                size_gb / 10,
+                size_gb % 10,
+                floor_gb / 10,
+                floor_gb % 10
+            ),
+            "Pick a curated preset instead, or allow smaller models under Advanced and import again.",
+        ));
+    }
     let license = LicenseSnapshot::new(
         params.license_id,
         params.license_url,

@@ -5,7 +5,9 @@ mod control_center;
 mod current;
 mod desktop;
 mod flow_editor;
+mod model_download;
 mod model_import;
+mod model_presets;
 mod observatory;
 mod skill_audit;
 mod skill_inventory;
@@ -22,7 +24,11 @@ mod desktop_test;
 #[cfg(test)]
 mod flow_editor_test;
 #[cfg(test)]
+mod model_download_test;
+#[cfg(test)]
 mod model_import_test;
+#[cfg(test)]
+mod model_presets_test;
 #[cfg(test)]
 mod observatory_test;
 #[cfg(test)]
@@ -43,10 +49,11 @@ pub use desktop::{
     FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
     FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
     FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    ModelImportDto, ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto,
-    ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
-    ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
-    TimelineFactDto, TimelineKindDto,
+    HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelDownloadStatusKindDto,
+    ModelImportDto, ModelInferDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
+    ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto,
+    ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto,
+    SnapshotDto, SnapshotFence, TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential

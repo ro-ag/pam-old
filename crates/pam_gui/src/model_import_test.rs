@@ -47,7 +47,22 @@ fn params(path: PathBuf) -> ModelImportParams {
         license_id: "Apache-2.0".to_owned(),
         license_url: "https://example.test/license".to_owned(),
         license_notice_text: "Apache License 2.0 notice text".to_owned(),
+        allow_small: true,
     }
+}
+
+#[test]
+fn rejects_models_under_the_recommended_floor_without_the_override() {
+    let dir = TestDirectory::new("floor");
+    let path = dir.0.join("tiny.gguf");
+    fs::write(&path, one_tensor_gguf()).unwrap();
+    let mut small = params(path.clone());
+    small.allow_small = false;
+    let failure = verify_and_register(small, 1).unwrap_err();
+    assert!(failure.detail.contains("recommended minimum"));
+    assert!(failure.recovery.as_deref().unwrap().contains("Advanced"));
+    // The same file registers once the override is granted.
+    assert!(verify_and_register(params(path), 1).is_ok());
 }
 
 #[test]

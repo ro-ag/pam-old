@@ -6,9 +6,10 @@ use pam_gui::{
     ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DaemonStatsDto,
     DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
-    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, ModelImportDto, ModelImportParams,
-    ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
-    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
+    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelInferDto, ModelMessageDto,
+    ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto,
+    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -203,6 +204,20 @@ pub(crate) struct ModelImportRequest {
     license_id: String,
     license_url: String,
     license_notice_text: String,
+    #[serde(default)]
+    allow_small: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelDownloadRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    preset_id: String,
 }
 
 #[derive(Deserialize)]
@@ -492,9 +507,52 @@ pub(crate) async fn model_import(
                 license_id: request.license_id,
                 license_url: request.license_url,
                 license_notice_text: request.license_notice_text,
+                allow_small: request.allow_small,
             },
         )
         .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_presets(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelPresetsDto, DesktopErrorDto> {
+    state.core.model_presets(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn model_download(
+    state: State<'_, DesktopState>,
+    request: ModelDownloadRequest,
+) -> Result<ModelDownloadDto, DesktopErrorDto> {
+    state
+        .core
+        .model_download(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.preset_id,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_download_status(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelDownloadStatusDto, DesktopErrorDto> {
+    state.core.model_download_status(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn host_memory(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<HostMemoryDto, DesktopErrorDto> {
+    state.core.host_memory(request.into_fence()).await
 }
 
 #[tauri::command]

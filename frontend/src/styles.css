@@ -1654,6 +1654,26 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .model-import .model-actions { align-items: center; }
 .model-import .model-actions small { color: var(--pam-muted); font-size: 11px; }
 
+.model-setup { gap: calc(14px * var(--density)); }
+.model-setup-divider { display: flex; align-items: center; gap: 10px; margin: 4px 0; color: var(--pam-muted); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+.model-setup-divider::before, .model-setup-divider::after { flex: 1; height: 1px; background: var(--pam-line); content: ""; }
+.model-presets { display: grid; gap: calc(10px * var(--density)); }
+.model-preset-popover { width: min(360px, calc(100vw - 24px)); }
+.model-preset-item { display: grid; grid-template-columns: minmax(0, 1fr) 18px; gap: 8px; align-items: center; }
+.model-preset-item > span:first-child { display: grid; min-width: 0; gap: 3px; }
+.model-preset-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-preset-item small { color: var(--pam-chrome-muted); font-size: 11px; }
+.model-fit-warn { margin: 0; color: var(--pam-danger); font-size: 11px; }
+.model-preset-summary { display: grid; gap: calc(8px * var(--density)); padding: calc(10px * var(--density)) 14px; border: 1px solid var(--pam-line); border-radius: 10px; background: var(--pam-surface-raised); }
+.model-preset-summary .model-note { margin: 0; overflow-wrap: anywhere; }
+.model-download-progress { display: grid; gap: 6px; }
+.model-download-track { height: 6px; border-radius: 999px; background: var(--pam-line); overflow: hidden; }
+.model-download-fill { height: 100%; background: var(--pam-ice); transition: width 200ms ease-out; }
+.model-advanced { display: grid; gap: calc(8px * var(--density)); }
+.model-advanced-toggle { display: inline-flex; width: max-content; align-items: center; gap: 6px; padding: 0; border: none; color: var(--pam-muted); background: none; font-size: 11px; cursor: pointer; }
+.model-advanced-toggle:hover { color: var(--pam-text); }
+.model-advanced-body { display: grid; gap: calc(8px * var(--density)); }
+
 /* Control-center overview heatmap */
 .heatmap-panel { padding-bottom: 14px; }
 .heatmap-scroll { overflow-x: auto; padding: 6px 18px 12px; }

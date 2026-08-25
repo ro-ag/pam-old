@@ -23,8 +23,13 @@ import type {
   FlowWorkspaceDataDto,
   ChatMessageDto,
   HealthDto,
+  HostMemoryDto,
+  ModelDownloadDto,
+  ModelDownloadStatusDto,
   ModelImportDto,
   ModelInferDto,
+  ModelPresetDto,
+  ModelPresetsDto,
   ModelStatusDto,
   ModelSummaryDto,
   PamBridge,
@@ -264,6 +269,60 @@ const registeredModels: ModelSummaryDto[] = [
   loadedModel,
   { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
 ];
+
+// Three curated presets. Sizes and license ids come from the spec; memory
+// floors are fixture estimates (weight size plus a working margin).
+const modelPresets: ModelPresetDto[] = [
+  {
+    id: "qwen3-8b",
+    label: "Qwen3 8B",
+    model: "qwen/qwen3-8b-instruct-q4",
+    fileName: "qwen3-8b-instruct-q4.gguf",
+    url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-instruct-q4.gguf",
+    expectedSizeBytes: 5_027_783_488,
+    sha256: "sha256:fixture-qwen3-8b",
+    licenseId: "Apache-2.0",
+    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
+    minMemoryBytes: 8_300_000_000,
+    paramsLabel: "8B params",
+    quantLabel: "Q4_K_M",
+  },
+  {
+    id: "qwen3-14b",
+    label: "Qwen3 14B",
+    model: "qwen/qwen3-14b-instruct-q4",
+    fileName: "qwen3-14b-instruct-q4.gguf",
+    url: "https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/qwen3-14b-instruct-q4.gguf",
+    expectedSizeBytes: 9_001_752_960,
+    sha256: "sha256:fixture-qwen3-14b",
+    licenseId: "Apache-2.0",
+    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
+    minMemoryBytes: 15_500_000_000,
+    paramsLabel: "14B params",
+    quantLabel: "Q4_K_M",
+  },
+  {
+    id: "llama-3.1-8b-instruct",
+    label: "Llama 3.1 8B Instruct",
+    model: "meta/llama-3.1-8b-instruct-q4",
+    fileName: "llama-3.1-8b-instruct-q4.gguf",
+    url: "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct-GGUF/resolve/main/llama-3.1-8b-instruct-q4.gguf",
+    expectedSizeBytes: 4_920_739_232,
+    sha256: "sha256:fixture-llama-3.1-8b",
+    licenseId: "Llama-3.1-Community-License",
+    licenseUrl: "https://www.llama.com/llama3_1/license/",
+    licenseNoticeText: "Llama 3.1 Community License Agreement. Copyright (c) Meta Platforms, Inc.",
+    minMemoryBytes: 8_200_000_000,
+    paramsLabel: "8B params",
+    quantLabel: "Q4_K_M",
+  },
+];
+
+// A mid-range consumer Mac: enough for two of the three presets, so the fit
+// hint has both a quiet pass and a visible "needs more memory" case to show.
+const FIXTURE_HOST_MEMORY_BYTES = 12_000_000_000;
 
 const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
 
@@ -626,6 +685,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   const modelCatalog = scenario === "model-none" ? [] : registeredModels;
   let modelLoaded: ModelSummaryDto | null =
     scenario === "model-none" || scenario === "model-on-deck" ? null : loadedModel;
+  // One download at a time, tracked globally like the real daemon; each poll
+  // advances it a fixed step so a fixture-driven UI shows real progress.
+  let download: { presetId: string; receivedBytes: number; totalBytes: number; status: "running" | "complete" } | null = null;
   let savedSource = flowSource;
   const connectors: ConnectorSummaryDto[] = [
     scenario === "connector-unconfigured" || scenario === "connector-blocked"
@@ -810,6 +872,61 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       const imported: ModelSummaryDto = { modelId: params.model, sizeBytes: 4_600_000_000 };
       modelCatalog.push(imported);
       return clone({ status: "ok" as const, model: imported });
+    },
+    async modelPresets(_fence): Promise<ModelPresetsDto> {
+      return clone({ presets: modelPresets });
+    },
+    async modelDownload(_fence, presetId): Promise<ModelDownloadDto> {
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so it cannot start a download.",
+            recovery: "Start PAM, then try the download again.",
+          },
+        };
+      }
+      const preset = modelPresets.find((candidate) => candidate.id === presetId);
+      if (!preset) {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "unknown_preset", detail: "This preset is not offered by PAM.", recovery: null },
+        };
+      }
+      if (download?.status === "running") {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "download_already_running",
+            detail: "A model download is already running.",
+            recovery: "Wait for the current download to finish, then try again.",
+          },
+        };
+      }
+      download = { presetId, receivedBytes: 0, totalBytes: preset.expectedSizeBytes, status: "running" };
+      return { status: "ok" };
+    },
+    async modelDownloadStatus(_fence): Promise<ModelDownloadStatusDto> {
+      if (!download) return { status: "idle", receivedBytes: 0, totalBytes: 0 };
+      if (download.status === "running") {
+        download.receivedBytes = Math.min(download.totalBytes, download.receivedBytes + Math.ceil(download.totalBytes * 0.4));
+        if (download.receivedBytes >= download.totalBytes) {
+          download.status = "complete";
+          modelCatalog.push({ modelId: modelPresets.find((preset) => preset.id === download?.presetId)?.model ?? download.presetId, sizeBytes: download.totalBytes });
+        }
+      }
+      return clone({
+        status: download.status,
+        presetId: download.presetId,
+        receivedBytes: download.receivedBytes,
+        totalBytes: download.totalBytes,
+      });
+    },
+    async hostMemory(_fence): Promise<HostMemoryDto> {
+      return { totalBytes: FIXTURE_HOST_MEMORY_BYTES };
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {

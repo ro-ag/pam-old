@@ -198,6 +198,10 @@ describe("model runtime panel", () => {
     const importButton = within(panel).getByRole("button", { name: "Import model" });
     expect(importButton).toBeDisabled();
 
+    // License fields collapse behind Advanced by default.
+    expect(within(panel).queryByLabelText("License identifier")).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+
     await userEvent.type(
       within(panel).getByLabelText("GGUF file path"),
       "/models/qwen3-4b-instruct-q4.gguf",
@@ -223,6 +227,7 @@ describe("model runtime panel", () => {
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
     await userEvent.type(within(panel).getByLabelText("GGUF file path"), "not-a-path");
     await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
     await userEvent.type(within(panel).getByLabelText("License identifier"), "Apache-2.0");
@@ -236,6 +241,104 @@ describe("model runtime panel", () => {
     ).toBeInTheDocument();
     expect(props.onModelImported).not.toHaveBeenCalled();
   });
+
+  it("lists the curated presets from the fixture, with a fit hint per option", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByText("Qwen3 8B")).toBeInTheDocument();
+    expect(within(menu).getByText("Qwen3 14B")).toBeInTheDocument();
+    expect(within(menu).getByText("Llama 3.1 8B Instruct")).toBeInTheDocument();
+    // The fixture host has 12 GB: the 14B preset does not fit, the two 8B ones do.
+    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(2);
+    expect(within(menu).getByText(/Needs ~15\.5 GB memory; this Mac has 12\.0 GB/)).toBeInTheDocument();
+  });
+
+  it("gates the preset download button on the license checkbox", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 8B/ }));
+
+    expect(within(panel).getByText("qwen/qwen3-8b-instruct-q4")).toBeInTheDocument();
+    expect(within(panel).getByText(/Apache License, Version 2\.0/)).toBeInTheDocument();
+    const downloadButton = within(panel).getByRole("button", { name: "Download" });
+    expect(downloadButton).toBeDisabled();
+
+    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    expect(downloadButton).toBeEnabled();
+  });
+
+  it("disables download for a preset that does not fit this Mac's memory", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 14B/ }));
+
+    expect(
+      within(panel).getByText(/Needs ~15\.5 GB memory; this Mac has 12\.0 GB/),
+    ).toBeInTheDocument();
+    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    expect(within(panel).getByRole("button", { name: "Download" })).toBeDisabled();
+  });
+
+  it("downloads a preset with polled progress, then registers it", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Llama 3\.1 8B Instruct/ }));
+    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
+
+    // The fixture bridge advances the download 40% of its total per poll,
+    // on an ~800ms interval, so later assertions need a longer wait window.
+    expect(await within(panel).findByText(/40%/)).toBeInTheDocument();
+    expect(await within(panel).findByText(/80%/, {}, { timeout: 2_000 })).toBeInTheDocument();
+    expect(
+      await within(panel).findByText("Downloaded and registered.", {}, { timeout: 2_000 }),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
+  it("shows a retry after a failed preset download", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelDownloadStatus")
+      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-8b", receivedBytes: 1_000, totalBytes: 5_027_783_488 })
+      .mockResolvedValueOnce({
+        status: "failed",
+        presetId: "qwen3-8b",
+        receivedBytes: 1_000,
+        totalBytes: 5_027_783_488,
+        failure: { code: "connection_reset", detail: "The download connection dropped.", recovery: "Check the network and retry." },
+      });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 8B/ }));
+    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
+
+    expect(
+      await within(panel).findByText(
+        /The download connection dropped\. Check the network and retry\./,
+        {},
+        { timeout: 2_000 },
+      ),
+    ).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Retry download" })).toBeInTheDocument();
+    expect(props.onModelImported).not.toHaveBeenCalled();
+  }, 10_000);
 
   it("marks the runtime unreachable while PAM is paused", async () => {
     const props = await controlCenterProps("offline");
