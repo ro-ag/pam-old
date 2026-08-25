@@ -371,6 +371,10 @@ impl<R: DownloadResponse> DownloadResponse for CountingResponse<R> {
 
 /// Coarse host memory probe: total physical RAM in bytes.
 ///
+/// PAM's supported system minimum: local AI is the product premise, and the
+/// validated models need a 32 GiB machine or larger.
+pub(crate) const MIN_SUPPORTED_HOST_MEMORY_BYTES: u64 = 32 * (1 << 30);
+
 /// ponytail: shells out to `sysctl -n hw.memsize` instead of binding libc.
 /// This is an advisory "will this preset fit" hint for the picker, not the
 /// daemon's authoritative llama.cpp admission check at load time.

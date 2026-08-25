@@ -589,6 +589,8 @@ export interface ModelDownloadStatusDto {
 
 export interface HostMemoryDto {
   totalBytes: number;
+  /** PAM's supported system minimum: local AI needs a 32 GiB machine. */
+  supportedMinimumBytes: number;
 }
 
 export interface CallerDto {

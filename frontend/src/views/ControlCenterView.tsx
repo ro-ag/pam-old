@@ -7,6 +7,7 @@ import type {
   ActivityDayDto,
   CallerDto,
   DaemonStatsDto,
+  HostMemoryDto,
   ModelImportParams,
   ModelPresetDto,
   ModelStatusDto,
@@ -300,7 +301,8 @@ function PresetDownload({
   onImported: () => void;
 }) {
   const [presets, setPresets] = useState<ModelPresetDto[] | null>(null);
-  const [hostMemoryBytes, setHostMemoryBytes] = useState<number | null>(null);
+  const [hostMemory, setHostMemory] = useState<HostMemoryDto | null>(null);
+  const hostMemoryBytes = hostMemory?.totalBytes ?? null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -320,7 +322,7 @@ function PresetDownload({
         ]);
         if (cancelled) return;
         setPresets(presetsResponse.presets);
-        setHostMemoryBytes(memoryResponse.totalBytes);
+        setHostMemory(memoryResponse);
       } catch (error) {
         if (!cancelled) setLoadError(presentError(error));
       }
@@ -404,6 +406,12 @@ function PresetDownload({
         <p className="model-note">Looking at the curated models PAM can fetch for you…</p>
       ) : (
         <>
+          {hostMemory !== null && hostMemory.totalBytes < hostMemory.supportedMinimumBytes && (
+            <p className="model-fit-warn model-host-notice">
+              PAM's local model is built for machines with {formatHostMemory(hostMemory.supportedMinimumBytes)} of
+              memory or more; this Mac reports {formatHostMemory(hostMemory.totalBytes)}.
+            </p>
+          )}
           <DropdownMenu.Root open={pickerOpen} onOpenChange={setPickerOpen}>
             <DropdownMenu.Trigger asChild>
               <button type="button" className="button button--secondary button--small model-preset-trigger">
@@ -1041,6 +1049,11 @@ export function aggregateProjectUsage(
   return [...rows.values()].sort(
     (left, right) => right.events - left.events || left.name.localeCompare(right.name),
   );
+}
+
+// RAM reads in binary GiB, the way machines are sold: 34_359_738_368 -> "32 GB".
+function formatHostMemory(bytes: number): string {
+  return `${Math.round(bytes / (1 << 30))} GB`;
 }
 
 interface ProjectsPanelProps {

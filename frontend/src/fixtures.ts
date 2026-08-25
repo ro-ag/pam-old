@@ -321,9 +321,11 @@ const modelPresets: ModelPresetDto[] = [
   },
 ];
 
-// A 24 GB Mac: enough for the minimum quant only, so the fit hint has both a
-// quiet pass and a visible "needs more memory" case to show.
-const FIXTURE_HOST_MEMORY_BYTES = 24_000_000_000;
+// A real 32 GB Mac (hw.memsize reports binary GiB) — PAM's supported system
+// minimum. Every curated quant fits here; tests that need the unfit or
+// below-minimum states override hostMemory instead.
+const FIXTURE_HOST_MEMORY_BYTES = 34_359_738_368;
+const FIXTURE_SUPPORTED_MINIMUM_BYTES = 34_359_738_368;
 
 const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
 
@@ -927,7 +929,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       });
     },
     async hostMemory(_fence): Promise<HostMemoryDto> {
-      return { totalBytes: FIXTURE_HOST_MEMORY_BYTES };
+      return { totalBytes: FIXTURE_HOST_MEMORY_BYTES, supportedMinimumBytes: FIXTURE_SUPPORTED_MINIMUM_BYTES };
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {

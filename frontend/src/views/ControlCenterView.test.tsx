@@ -253,10 +253,10 @@ describe("model runtime panel", () => {
     expect(within(menu).getByText("Qwen3 Coder 30B — minimum")).toBeInTheDocument();
     expect(within(menu).getByText("Qwen3 Coder 30B — balanced")).toBeInTheDocument();
     expect(within(menu).getByText("Qwen3 Coder 30B — high fidelity")).toBeInTheDocument();
-    // The fixture host has 24 GB: only the minimum quant fits; the larger two do not.
-    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(1);
-    expect(within(menu).getByText(/Needs ~25\.3 GB memory; this Mac has 24\.0 GB/)).toBeInTheDocument();
-    expect(within(menu).getByText(/Needs ~33\.5 GB memory; this Mac has 24\.0 GB/)).toBeInTheDocument();
+    // The fixture host is a 32 GB Mac — PAM's supported minimum — and every
+    // curated quant fits it.
+    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(3);
+    expect(screen.queryByText(/of memory or more; this Mac reports/)).not.toBeInTheDocument();
   });
 
   it("gates the preset download button on the license checkbox", async () => {
@@ -276,16 +276,24 @@ describe("model runtime panel", () => {
     expect(downloadButton).toBeEnabled();
   });
 
-  it("disables download for a preset that does not fit this Mac's memory", async () => {
+  it("disables download and warns below the supported minimum on an undersized Mac", async () => {
     const props = await controlCenterProps("model-none");
+    // A 24 GB machine: below PAM's supported 32 GB minimum.
+    vi.spyOn(props.bridge, "hostMemory").mockResolvedValue({
+      totalBytes: 25_769_803_776,
+      supportedMinimumBytes: 34_359_738_368,
+    });
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(
+      await within(panel).findByText(/32 GB of memory or more; this Mac reports 24 GB/),
+    ).toBeInTheDocument();
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — balanced/ }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — high fidelity/ }));
 
     expect(
-      within(panel).getByText(/Needs ~25\.3 GB memory; this Mac has 24\.0 GB/),
+      within(panel).getByText(/Needs ~33\.5 GB memory; this Mac has 25\.8 GB/),
     ).toBeInTheDocument();
     await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
     expect(within(panel).getByRole("button", { name: "Download" })).toBeDisabled();

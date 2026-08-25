@@ -43,7 +43,10 @@ use crate::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
-    model_download::{ModelDownloadManager, ModelDownloadStatusKind, host_memory_total_bytes},
+    model_download::{
+        MIN_SUPPORTED_HOST_MEMORY_BYTES, ModelDownloadManager, ModelDownloadStatusKind,
+        host_memory_total_bytes,
+    },
     model_import::{ModelImportParams, run_model_import},
     model_presets,
     observatory::{
@@ -835,6 +838,8 @@ pub struct ModelDownloadStatusDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostMemoryDto {
     pub total_bytes: u64,
+    /// PAM's supported system minimum: local AI needs a 32 GiB machine.
+    pub supported_minimum_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1898,7 +1903,10 @@ impl DesktopCore {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
         let data = host_memory_total_bytes()
-            .map(|total_bytes| HostMemoryDto { total_bytes })
+            .map(|total_bytes| HostMemoryDto {
+                total_bytes,
+                supported_minimum_bytes: MIN_SUPPORTED_HOST_MEMORY_BYTES,
+            })
             .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
