@@ -2,7 +2,6 @@ import {
   ArrowClockwise,
   BookOpen,
   CaretDown,
-  CaretRight,
   Check,
   Circle,
   GitBranch,
@@ -555,12 +554,6 @@ export function Toolbar({
         <SidebarSimple size={19} weight="bold" />
       </button>
       <div className="breadcrumb">
-        {projectName !== null && (
-          <>
-            <span>{projectName}</span>
-            <CaretRight size={12} aria-hidden="true" />
-          </>
-        )}
         <strong>Daemon observatory</strong>
       </div>
       {import.meta.env.DEV && fixture && <span className="fixture-badge">Design fixture</span>}

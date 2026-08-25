@@ -604,10 +604,10 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /^docs/ }));
     await act(async () => { docsGate.resolve(); });
     expect(await screen.findByRole("status")).toHaveTextContent("Now watching docs");
-    expect(document.querySelector(".breadcrumb")).toHaveTextContent("docs");
+    // The docs activation wins and navigates home to the Control Center.
+    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
 
     await act(async () => { ledgerGate.resolve(); });
-    expect(document.querySelector(".breadcrumb")).toHaveTextContent("docs");
     expect(screen.queryByText("Now watching ledger-web")).not.toBeInTheDocument();
   });
 
@@ -991,12 +991,12 @@ describe("global-first workspace", () => {
     expect(await screen.findByRole("button", { name: "PAM is on watch" })).toBeEnabled();
   });
 
-  it("shows the project breadcrumb only while a project is active", async () => {
+  it("keeps the breadcrumb project-free even while a project is active", async () => {
     render(<App bridge={fixtureBridge()} />);
     await screen.findByRole("heading", { name: "Control center" });
     await screen.findByRole("button", { name: "Refresh project" });
 
-    expect(document.querySelector(".breadcrumb")).toHaveTextContent("payments-apiDaemon observatory");
+    expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
   });
 
   it("serves Activity, model status, and chat with zero projects under the daemon authority", async () => {

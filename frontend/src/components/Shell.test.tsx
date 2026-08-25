@@ -178,6 +178,8 @@ describe("Toolbar", () => {
     await user.click(screen.getByRole("button", { name: "Theme: Ventisquero · light" }));
     await user.click(screen.getByRole("menuitemradio", { name: /^Dark/ }));
     expect(onThemeModeChange).toHaveBeenCalledWith("dark");
+
+    expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
   });
 
   it("shows the global breadcrumb alone and hides the queue opener without a project", () => {
