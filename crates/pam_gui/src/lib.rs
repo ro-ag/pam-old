@@ -45,8 +45,8 @@ pub use desktop::{
     FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
     ModelImportDto, ModelInferDto, ModelMessageDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto,
     ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
-    RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
-    TimelineKindDto,
+    ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
+    TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential

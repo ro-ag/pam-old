@@ -51,8 +51,12 @@ describe("daemon observatory", () => {
     expect(within(sidebar).getByText(/^v\d+\.\d+\.\d+$/)).toBeInTheDocument();
     expect(within(sidebar).queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
     // The main page never offers project selection: no switcher, no picker.
+    // A global, display-only fleet overview is fine — project names appear as
+    // text, never as a button, and there is no per-project scoping control.
     expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Projects" })).not.toBeInTheDocument();
+    const fleet = screen.getByRole("region", { name: "Usage by project" });
+    expect(within(fleet).getByText("payments-api")).toBeInTheDocument();
+    expect(within(fleet).queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByRole("separator", { name: "Resize project sidebar" })).toHaveAttribute("aria-valuenow", "248");
     expect(screen.getByText("Design fixture")).toBeInTheDocument();
   });

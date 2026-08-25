@@ -21,7 +21,7 @@ use pam_protocol::{
     ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
     DaemonStatsResult, FailureCode, LogSeverity, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason,
     ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary,
-    ProjectRequestState, ProjectRequestSummary,
+    ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -656,9 +656,16 @@ pub struct DaemonLogEntryDto {
     rename_all_fields = "camelCase"
 )]
 pub enum DaemonStatsDto {
-    Ok { days: Vec<ActivityDayDto> },
-    Blocked { failure: FailureDto },
-    Unavailable { failure: FailureDto },
+    Ok {
+        days: Vec<ActivityDayDto>,
+        projects: Vec<ProjectUsageDto>,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -666,6 +673,14 @@ pub enum DaemonStatsDto {
 pub struct ActivityDayDto {
     pub day_start_ms: u64,
     pub events: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectUsageDto {
+    pub project_id: String,
+    pub events: u64,
+    pub last_event_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2771,6 +2786,7 @@ fn daemon_stats_dto(state: ObservatoryState<DaemonStatsResult>) -> DaemonStatsDt
     match state {
         ObservatoryState::Available(result) => DaemonStatsDto::Ok {
             days: result.days.into_iter().map(activity_day_dto).collect(),
+            projects: result.projects.into_iter().map(project_usage_dto).collect(),
         },
         ObservatoryState::Blocked {
             code,
@@ -2793,6 +2809,14 @@ const fn activity_day_dto(day: ActivityDaySummary) -> ActivityDayDto {
     ActivityDayDto {
         day_start_ms: day.day_start_ms,
         events: day.events,
+    }
+}
+
+fn project_usage_dto(project: ProjectUsageSummary) -> ProjectUsageDto {
+    ProjectUsageDto {
+        project_id: project.project_id,
+        events: project.events,
+        last_event_ms: project.last_event_ms,
     }
 }
 

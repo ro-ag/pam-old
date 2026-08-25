@@ -26,8 +26,8 @@ pub use contract::{
     MAX_PROJECT_OPERATION_KIND_BYTES, ModelFinishReason, ModelGenerationResult, ModelMessage,
     ModelRole, ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult,
     OperationTruth, PacState, ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary,
-    ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload, ResultBody,
-    ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability, StatusResult,
+    ProjectUsageSummary, ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload,
+    ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability, StatusResult,
 };
 
 pub const PROTOCOL_VERSION: u16 = 7;
