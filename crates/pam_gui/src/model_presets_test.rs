@@ -3,7 +3,11 @@ use pam_model::ModelSource;
 use crate::model_import::parse_model_key;
 use crate::model_presets::{CATALOG, find};
 
-const EXPECTED_IDS: [&str; 3] = ["qwen3-8b-q4km", "qwen3-14b-q4km", "llama31-8b-q4km"];
+const EXPECTED_IDS: [&str; 3] = [
+    "qwen3-coder-30b-q4ks",
+    "qwen3-coder-30b-q4km",
+    "qwen3-coder-30b-q6k",
+];
 
 #[test]
 fn catalog_has_exactly_the_three_curated_presets() {

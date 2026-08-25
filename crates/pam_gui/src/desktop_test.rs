@@ -615,7 +615,14 @@ async fn model_presets_lists_exactly_the_curated_catalog() {
         .map(|preset| preset.id.as_str())
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["llama31-8b-q4km", "qwen3-14b-q4km", "qwen3-8b-q4km"]);
+    assert_eq!(
+        ids,
+        [
+            "qwen3-coder-30b-q4km",
+            "qwen3-coder-30b-q4ks",
+            "qwen3-coder-30b-q6k"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1016,7 +1023,7 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
     assert_daemon_replay_conflict(core.model_presets(fence()).await);
     assert_daemon_replay_conflict(
-        core.model_download(fence(), "qwen3-8b-q4km".to_owned())
+        core.model_download(fence(), "qwen3-coder-30b-q4ks".to_owned())
             .await,
     );
     assert_daemon_replay_conflict(core.model_download_status(fence()).await);

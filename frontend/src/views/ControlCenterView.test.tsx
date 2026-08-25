@@ -250,12 +250,13 @@ describe("model runtime panel", () => {
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
 
     const menu = await screen.findByRole("menu");
-    expect(within(menu).getByText("Qwen3 8B")).toBeInTheDocument();
-    expect(within(menu).getByText("Qwen3 14B")).toBeInTheDocument();
-    expect(within(menu).getByText("Llama 3.1 8B Instruct")).toBeInTheDocument();
-    // The fixture host has 12 GB: the 14B preset does not fit, the two 8B ones do.
-    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(2);
-    expect(within(menu).getByText(/Needs ~15\.5 GB memory; this Mac has 12\.0 GB/)).toBeInTheDocument();
+    expect(within(menu).getByText("Qwen3 Coder 30B — minimum")).toBeInTheDocument();
+    expect(within(menu).getByText("Qwen3 Coder 30B — balanced")).toBeInTheDocument();
+    expect(within(menu).getByText("Qwen3 Coder 30B — high fidelity")).toBeInTheDocument();
+    // The fixture host has 24 GB: only the minimum quant fits; the larger two do not.
+    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(1);
+    expect(within(menu).getByText(/Needs ~25\.3 GB memory; this Mac has 24\.0 GB/)).toBeInTheDocument();
+    expect(within(menu).getByText(/Needs ~33\.5 GB memory; this Mac has 24\.0 GB/)).toBeInTheDocument();
   });
 
   it("gates the preset download button on the license checkbox", async () => {
@@ -264,9 +265,9 @@ describe("model runtime panel", () => {
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 8B/ }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
 
-    expect(within(panel).getByText("qwen/qwen3-8b-instruct-q4")).toBeInTheDocument();
+    expect(within(panel).getByText("qwen/qwen3-coder-30b-a3b-instruct-q4_k_s")).toBeInTheDocument();
     expect(within(panel).getByText(/Apache License, Version 2\.0/)).toBeInTheDocument();
     const downloadButton = within(panel).getByRole("button", { name: "Download" });
     expect(downloadButton).toBeDisabled();
@@ -281,10 +282,10 @@ describe("model runtime panel", () => {
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 14B/ }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — balanced/ }));
 
     expect(
-      within(panel).getByText(/Needs ~15\.5 GB memory; this Mac has 12\.0 GB/),
+      within(panel).getByText(/Needs ~25\.3 GB memory; this Mac has 24\.0 GB/),
     ).toBeInTheDocument();
     await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
     expect(within(panel).getByRole("button", { name: "Download" })).toBeDisabled();
@@ -296,7 +297,7 @@ describe("model runtime panel", () => {
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Llama 3\.1 8B Instruct/ }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
     await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
     await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
 
@@ -313,19 +314,19 @@ describe("model runtime panel", () => {
   it("shows a retry after a failed preset download", async () => {
     const props = await controlCenterProps("model-none");
     vi.spyOn(props.bridge, "modelDownloadStatus")
-      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-8b", receivedBytes: 1_000, totalBytes: 5_027_783_488 })
+      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-coder-30b-q4ks", receivedBytes: 1_000, totalBytes: 17_456_012_448 })
       .mockResolvedValueOnce({
         status: "failed",
-        presetId: "qwen3-8b",
+        presetId: "qwen3-coder-30b-q4ks",
         receivedBytes: 1_000,
-        totalBytes: 5_027_783_488,
+        totalBytes: 17_456_012_448,
         failure: { code: "connection_reset", detail: "The download connection dropped.", recovery: "Check the network and retry." },
       });
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 8B/ }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
     await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
     await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
 
