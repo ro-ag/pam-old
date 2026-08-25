@@ -27,7 +27,7 @@ export function layoutSteps(steps: FlowStepJson[]): Map<string, StepPosition> {
     const depth = depthOf(step.id, new Set());
     const row = rows.get(depth) ?? 0;
     rows.set(depth, row + 1);
-    positions.set(step.id, { x: depth * 270, y: row * 130 });
+    positions.set(step.id, { x: depth * 320, y: row * 160 });
   }
   return positions;
 }

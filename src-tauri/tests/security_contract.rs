@@ -60,6 +60,12 @@ fn main_window_is_local_and_has_only_bounded_permissions() {
         .map(|command| Value::String(format!("allow-{}", command.replace('_', "-"))))
         .collect::<Vec<_>>();
     expected.push(Value::String("core:app:allow-set-app-theme".to_owned()));
+    // The overlay titlebar is web content: dragging and double-click maximize
+    // go through the window plugin, so the main window may invoke exactly those.
+    expected.push(Value::String("core:window:allow-start-dragging".to_owned()));
+    expected.push(Value::String(
+        "core:window:allow-internal-toggle-maximize".to_owned(),
+    ));
 
     assert_eq!(capability["local"], true);
     assert_eq!(capability["windows"], json!(["main"]));

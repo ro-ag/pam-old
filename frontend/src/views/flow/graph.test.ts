@@ -7,7 +7,7 @@ describe("flow graph model", () => {
     const positions = layoutSteps(afterMergeDefinition.steps);
     expect(positions.size).toBe(2);
     expect(positions.get("observe-revision")).toEqual({ x: 0, y: 0 });
-    expect(positions.get("verify-worktree")).toEqual({ x: 270, y: 0 });
+    expect(positions.get("verify-worktree")).toEqual({ x: 320, y: 0 });
   });
 
   it("derives one edge per resolvable dependency", () => {

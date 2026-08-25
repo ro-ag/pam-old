@@ -1,4 +1,7 @@
 import {
+  Background,
+  BackgroundVariant,
+  Controls,
   Handle,
   Position,
   ReactFlow,
@@ -48,7 +51,11 @@ export function FlowCanvas({ definition, selectedStepId, onSelectStep }: FlowCan
     selected: step.id === selectedStepId,
     data: { step },
   }));
-  const edges = useMemo(() => stepEdges(definition.steps), [definition.steps]);
+  const edges = useMemo(() => stepEdges(definition.steps).map((edge) => ({
+    ...edge,
+    type: "smoothstep" as const,
+    pathOptions: { borderRadius: 18 },
+  })), [definition.steps]);
   const onNodesChange = (changes: NodeChange<StepNodeType>[]) => {
     setDragged((current) => {
       const moved = changes.filter((change) => change.type === "position" && change.position);
@@ -70,7 +77,18 @@ export function FlowCanvas({ definition, selectedStepId, onSelectStep }: FlowCan
         onNodeClick={(_event, node) => onSelectStep(node.id)}
         onPaneClick={() => onSelectStep(null)}
         fitView
-      />
+        fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+        minZoom={0.2}
+        maxZoom={2}
+        panOnScroll
+        deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
+      >
+        {/* ponytail: no MiniMap — controlled nodes never report measured dims
+            here; adopt applyNodeChanges state if a minimap ever earns its place. */}
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
     </div>
   );
 }

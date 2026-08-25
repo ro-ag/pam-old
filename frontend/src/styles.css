@@ -70,7 +70,9 @@
 @layer reset {
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; }
-body { min-width: 320px; min-height: 560px; overflow: hidden; background: var(--navy-950); -webkit-font-smoothing: antialiased; }
+body { min-width: 320px; min-height: 560px; overflow: hidden; background: var(--navy-950); -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+/* Chrome text stays grabbable for window drags; technical output stays copyable. */
+input, textarea, select, pre, code, [contenteditable], .console-line { user-select: text; -webkit-user-select: text; }
 button, textarea, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible, a:focus-visible {
@@ -564,8 +566,13 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .flow-mode-toggle button[aria-pressed="true"] { color: var(--aqua); background: rgba(7, 45, 54, 0.55); }
 .mode-notice { padding: 8px 13px; border-top: 1px solid var(--line); color: var(--sand-200); background: rgba(12, 39, 67, 0.45); }
 .mode-notice p { margin: 4px 0; font-size: 11px; }
+.flow-workspace.is-catalog-hidden { grid-template-columns: minmax(0, 1fr); }
+.editor-title-lead { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.editor-title-lead > div { display: grid; gap: 4px; min-width: 0; }
+.flow-catalog-toggle { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 6px; color: var(--sand-400); background: transparent; cursor: pointer; }
+.flow-catalog-toggle:hover, .flow-catalog-toggle[aria-pressed="true"] { color: var(--sand-100); background: rgba(18, 47, 70, 0.76); }
 .flow-visual { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(230px, 34%); background: rgba(2, 13, 27, 0.82); }
-.flow-canvas { min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.flow-canvas { position: relative; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .flow-canvas .react-flow { background: transparent; }
 .flow-node { display: grid; gap: 4px; min-width: 190px; max-width: 230px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; color: var(--sand-100); background: rgba(6, 26, 49, 0.92); font-size: 11px; }
 .react-flow__node.selected .flow-node { border-color: rgba(89, 225, 213, 0.55); }
@@ -1365,6 +1372,27 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .mode-notice { border-color: var(--pam-line); color: var(--pam-content-secondary); background: var(--pam-surface); }
 .flow-visual { background: var(--pam-page); }
 .flow-canvas { border-color: var(--pam-line); }
+/* xyflow's stylesheet is unlayered and outranks layered rules, so theming
+   happens through its --xy-* variables instead of property overrides. */
+.flow-canvas .react-flow {
+  --xy-background-color: transparent;
+  --xy-background-pattern-color: color-mix(in srgb, var(--pam-muted) 36%, transparent);
+  --xy-edge-stroke: color-mix(in srgb, var(--pam-muted) 60%, transparent);
+  --xy-edge-stroke-selected: var(--pam-focus);
+  --xy-edge-stroke-width: 1.6;
+  --xy-connectionline-stroke: var(--pam-focus);
+  --xy-handle-background-color: var(--pam-muted);
+  --xy-handle-border-color: var(--pam-surface-raised);
+  --xy-controls-button-background-color: var(--pam-surface-raised);
+  --xy-controls-button-background-color-hover: var(--pam-page);
+  --xy-controls-button-color: var(--pam-muted);
+  --xy-controls-button-color-hover: var(--pam-text);
+  --xy-controls-button-border-color: var(--pam-line);
+  --xy-controls-box-shadow: var(--pam-shadow-soft);
+}
+.flow-canvas .react-flow__controls { overflow: hidden; border: 1px solid var(--pam-line); border-radius: 10px; }
+.flow-catalog-toggle { border-color: var(--pam-line); border-radius: 8px; color: var(--pam-muted); }
+.flow-catalog-toggle:hover, .flow-catalog-toggle[aria-pressed="true"] { color: var(--pam-text); background: var(--pam-page); }
 .flow-node { border-color: var(--pam-line); border-radius: 10px; color: var(--pam-text); background: var(--pam-surface-raised); }
 .react-flow__node.selected .flow-node { border-color: var(--pam-focus); }
 .flow-badge--observe, .flow-badge--verify { color: var(--pam-ice); border-color: color-mix(in srgb, var(--pam-ice) 40%, transparent); }
