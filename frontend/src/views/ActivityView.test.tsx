@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { withDaemonOperation } from "../bridge";
@@ -10,14 +10,23 @@ import { ActivityView, formatModelSize } from "./ActivityView";
 async function activityProps(scenario: FixtureScenario = "solved", modelStatus: ModelStatusDto | null = null) {
   const bridge = fixtureBridge(scenario);
   const { snapshot, catalog } = await bridge.bootstrap();
+  const control = snapshot ? selectControlCenter(snapshot.data, catalog, true) : null;
   return {
     bridge,
-    daemon: snapshot
-      ? selectControlCenter(snapshot.data, catalog, true).daemon
+    daemon: control
+      ? control.daemon
       : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
     projects: catalog.projects,
     pending: false,
     modelStatus,
+    evidence: control?.current.latestOutcome?.brief
+      ? {
+          projectName: control.project.name,
+          handles: control.current.latestOutcome.brief.evidenceHandles,
+          truncated: control.current.latestOutcome.brief.evidenceTruncated,
+        }
+      : null,
+    onEvidence: vi.fn(),
     onReloadModel: vi.fn(),
     onOpenModelChat: vi.fn(),
     onStartDaemon: vi.fn(),
@@ -154,13 +163,35 @@ describe("ActivityView", () => {
     expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled();
   });
 
-  it("shows a calm empty model state with the import hint and no chat", async () => {
+  it("shows a calm empty model state pointing at the Control Center, never a CLI command", async () => {
     const props = await activityProps("solved", { status: "ok", loaded: null, registered: [] });
     render(<ActivityView {...props} />);
 
     expect(screen.getByText("No local model yet")).toBeInTheDocument();
-    expect(screen.getByText(/pam model import/)).toBeInTheDocument();
+    expect(screen.getByText(/Import one from the Control Center/)).toBeInTheDocument();
+    expect(screen.queryByText(/pam model import/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+  });
+
+  it("lists the latest run evidence for the active project and opens a handle", async () => {
+    const user = userEvent.setup();
+    const props = await activityProps();
+    render(<ActivityView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Latest run evidence" });
+    expect(props.evidence?.handles.length).toBeGreaterThan(0);
+    const opener = within(panel).getByRole("button", { name: "Open Evidence 1" });
+    expect(opener).toHaveAccessibleDescription(props.evidence!.handles[0]);
+    await user.click(opener);
+    expect(props.onEvidence).toHaveBeenCalledWith(props.evidence!.handles[0]);
+  });
+
+  it("omits the evidence panel without an active project outcome", async () => {
+    const props = await activityProps("global-only");
+    render(<ActivityView {...props} />);
+
+    expect(props.evidence).toBeNull();
+    expect(screen.queryByRole("region", { name: "Latest run evidence" })).not.toBeInTheDocument();
   });
 
   it("shows blocked and unavailable model failures without a chat entry point", async () => {

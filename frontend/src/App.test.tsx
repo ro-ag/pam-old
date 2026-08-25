@@ -501,6 +501,21 @@ describe("daemon observatory", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
+  it("opens bounded evidence from the Activity page as escaped text", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={fixtureBridge()} initialView="activity" />);
+    await screen.findByRole("heading", { name: "Activity" });
+
+    const opener = await screen.findByRole("button", { name: "Open Evidence 1" });
+    expect(opener).toHaveAccessibleDescription("44444444-4444-4444-8444-444444444444");
+    await user.click(opener);
+    expect(await screen.findByRole("dialog", { name: "Evidence" })).toBeInTheDocument();
+    expect(await screen.findByText(/Null currency in fixture/)).toBeInTheDocument();
+    expect(document.querySelector(".evidence-document pre script")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Close Evidence" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Evidence" })).not.toBeInTheDocument());
+  });
+
   it("shows the exact bounded approval effect without protocol request identifiers", async () => {
     render(<App bridge={fixtureBridge("approval")} />);
 
