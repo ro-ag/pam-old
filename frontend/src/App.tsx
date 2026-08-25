@@ -727,6 +727,12 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   bridge={bridge}
                   pending={busy}
                   modelStatus={modelStatus}
+                  evidence={projectData?.current.latestOutcome?.brief ? {
+                    projectName: projectData.project.name,
+                    handles: projectData.current.latestOutcome.brief.evidenceHandles,
+                    truncated: projectData.current.latestOutcome.brief.evidenceTruncated,
+                  } : null}
+                  onEvidence={(handle) => void loadEvidence(handle)}
                   onReloadModel={reloadModelStatus}
                   onOpenModelChat={openModelChat}
                   onStartDaemon={toggleDaemon}

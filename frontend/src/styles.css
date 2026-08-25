@@ -1311,6 +1311,7 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .provenance-intro { color: var(--pam-muted); }
 .provenance-intro svg, .provenance-intro strong { color: var(--pam-copper); }
 .evidence-handles { margin-left: 0; }
+.panel > .evidence-handles { padding: 0 18px calc(14px * var(--density)); }
 .evidence-handles button { min-height: max(28px, calc(32px * var(--density))); border-color: color-mix(in srgb, var(--pam-copper) 28%, transparent); border-radius: 8px; color: var(--pam-content-secondary); background: var(--pam-surface); }
 .evidence-handles button:hover { border-color: var(--pam-copper); color: var(--pam-text); }
 .evidence-handles code { color: var(--pam-muted); }

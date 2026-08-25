@@ -2,6 +2,7 @@ import {
   ArrowClockwise,
   Brain,
   CheckCircle,
+  FileText,
   Power,
   Pulse,
   Queue,
@@ -26,18 +27,27 @@ export function formatModelSize(sizeBytes: number): string {
   return `${sizeBytes.toLocaleString()} bytes`;
 }
 
+export interface ActivityEvidence {
+  projectName: string;
+  handles: string[];
+  truncated: boolean;
+}
+
 export interface ActivityViewProps {
   daemon: DaemonView;
   projects: ProjectSummaryDto[];
   bridge: PamBridge;
   pending: boolean;
   modelStatus: ModelStatusDto | null;
+  /** Latest terminal-result evidence for the active project, if any. */
+  evidence: ActivityEvidence | null;
+  onEvidence: (handle: string) => void;
   onReloadModel: () => void;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartDaemon: () => void;
 }
 
-export function ActivityView({ daemon, projects, bridge, pending, modelStatus, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
+export function ActivityView({ daemon, projects, bridge, pending, modelStatus, evidence, onEvidence, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
   const [activity, setActivity] = useState<ActivityDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -144,7 +154,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
             <div>
               <small>Local model</small>
               <strong>No local model yet</strong>
-              <small>Import one with pam model import whenever you are ready.</small>
+              <small>Import one from the Control Center whenever you are ready.</small>
             </div>
           )}
           {chatModel && (
@@ -195,6 +205,39 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, o
             <div className="access-list">
               {activity.events.map(eventRow)}
               {activity.truncated && <p className="panel-empty">Older activity was truncated at the bounded feed limit.</p>}
+            </div>
+          )}
+        </section>
+      )}
+      {evidence && !offline && (
+        <section className="panel" aria-labelledby="evidence-heading">
+          <div className="panel-title">
+            <div>
+              <span className="eyebrow">{evidence.projectName}</span>
+              <h2 id="evidence-heading">Latest run evidence</h2>
+            </div>
+          </div>
+          {evidence.handles.length === 0 ? (
+            <p className="panel-empty">The latest terminal result reported no evidence handles.</p>
+          ) : (
+            <div className="evidence-handles">
+              {evidence.handles.map((handle, index) => (
+                <button
+                  type="button"
+                  aria-label={`Open Evidence ${index + 1}`}
+                  aria-description={handle}
+                  title={handle}
+                  key={handle}
+                  onClick={() => onEvidence(handle)}
+                >
+                  <FileText size={17} aria-hidden="true" />
+                  <span>Evidence {index + 1}</span>
+                  <code>{handle.slice(0, 8)}…{handle.slice(-4)}</code>
+                </button>
+              ))}
+              {evidence.truncated && (
+                <p className="panel-empty">Additional evidence handles were truncated at the bounded limit.</p>
+              )}
             </div>
           )}
         </section>
