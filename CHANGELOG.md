@@ -4,6 +4,44 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-24
+
+### Added
+
+- Model runtime panel on the Control Center launch view: shows the local
+  model's state (loaded, on deck, none, unreachable) with its identity and
+  size, verifies the runtime with a live inference round-trip reporting
+  latency and returned tokens, opens the model chat in one click, and can
+  restart PAM carrying a registered model (`start_daemon` now accepts a
+  protocol-validated model key and passes `--model` to the daemon). When no
+  model is registered the panel walks through the import steps with a
+  copyable `pam model import` command.
+
+### Changed
+
+- The release pipeline reuses the packages built and verified by the tag
+  commit's main CI run instead of rebuilding them; macOS signing and
+  notarization happen only on release tags, and release validation refuses
+  to run without a green CI run whose artifacts are still available. Weekly
+  dependabot updates keep the pinned GitHub Actions current.
+- The Control Center overview drops the redundant Projects count tile (the
+  sidebar switcher already lists projects) and keeps a single watch-status
+  tile per screen.
+
+### Fixed
+
+- The project hero no longer clips its status line at compact density or
+  narrow widths.
+- The activity heatmap is legible in dark themes: five measured intensity
+  steps per theme and mode, with clear empty-versus-filled contrast in the
+  grid and the legend.
+- Stat tiles no longer truncate their values at production widths; long
+  values expose the full text via tooltips.
+- Views fill tall windows instead of leaving dead canvas below Access,
+  Skills, Console, Connections, Activity, and the control-center project
+  section.
+- Flow catalog names at narrow widths expose their full value via tooltips.
+
 ## [0.2.0] - 2026-08-24
 
 ### Added
