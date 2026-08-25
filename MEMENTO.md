@@ -77,8 +77,8 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 ## memento-md-trailing-blank-fails-foundation
 - kind: project-way
 - scope: project
-- rule: In the pam repo, any commit touching MEMENTO.md must strip the CLI's trailing blank line at EOF before landing — the Foundation gate's 'git diff --check' fails main on it
-- fix: printf '%s\n' "$(cat MEMENTO.md)" > MEMENTO.md  # then verify: git diff --check $(git hash-object -t tree /dev/null) HEAD
-- hits: 2026-08-24
-- cost: 10
+- rule: In the pam repo, any file the memento CLI touches (MEMENTO.md via hit, AGENTS.md/CLAUDE.md via promote) must have its trailing blank line at EOF stripped before landing — the Foundation gate's git diff --check fails main on it
+- fix: for f in MEMENTO.md AGENTS.md CLAUDE.md; do printf '%s\n' "$(cat $f)" > $f; done; verify: git diff --check $(git hash-object -t tree /dev/null) HEAD
+- hits: 2026-08-24, 2026-08-24
+- cost: 15
 - status: watching

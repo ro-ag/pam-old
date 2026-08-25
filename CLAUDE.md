@@ -66,4 +66,3 @@ Standing rules for any agent working in this project (from ~/dev/ai):
 
 Rules promoted from the memento ledger. Details/fix: `memento show <slug>`.
 - PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note (memento: pam-features-coded-but-not-surfaced)
-
