@@ -55,6 +55,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::caller_registry,
             commands::model_status,
             commands::model_infer,
+            commands::model_import,
             commands::flow_graph,
             commands::flow_compose,
             commands::load_skill_inventory,

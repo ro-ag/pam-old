@@ -532,6 +532,21 @@ export type ModelInferDto =
   | { status: "ok"; model: string; text: string; finishReason: string; usage: ModelUsageDto }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+export interface ModelImportParams {
+  /** Stable model identity in vendor/name form. */
+  model: string;
+  /** Absolute path to the GGUF file on this machine. */
+  path: string;
+  licenseId: string;
+  licenseUrl: string;
+  /** Exact license notice text the user accepted; the backend hashes it. */
+  licenseNoticeText: string;
+}
+
+export type ModelImportDto =
+  | { status: "ok"; model: ModelSummaryDto }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface CallerDto {
   callerId: string;
   registeredAtMs: number;
@@ -588,6 +603,7 @@ export interface PamBridge {
   connectorTest(fence: CommandFence, connector: string): Promise<ConnectorTestDto>;
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
+  modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
   startDaemon(fence: CommandFence, model?: string): Promise<SnapshotDto | null>;

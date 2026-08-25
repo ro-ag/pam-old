@@ -5,7 +5,7 @@ use pam_gui::SkillLibraryRequest;
 use crate::commands::{
     ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest,
     ConnectorConfigureRequest, ConnectorTestRequest, FencedRequest, FlowComposeRequest,
-    FlowGraphRequest, ModelInferRequest,
+    FlowGraphRequest, ModelImportRequest, ModelInferRequest,
 };
 
 const PROJECT_HANDLE: &str = "88d408ec-796b-4f56-b34c-f2a8d25f9128";
@@ -239,6 +239,49 @@ fn model_infer_request_rejects_unknown_fields_and_unknown_roles() {
     assert!(serde_json::from_value::<ModelInferRequest>(ambient).is_err());
     assert!(serde_json::from_value::<ModelInferRequest>(unknown_role).is_err());
     assert!(serde_json::from_value::<ModelInferRequest>(ambient_message_field).is_err());
+}
+
+#[test]
+fn model_import_request_accepts_the_fence_and_complete_license_metadata() {
+    let request = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "path": "/models/model.gguf",
+        "licenseId": "Apache-2.0",
+        "licenseUrl": "https://example.test/license",
+        "licenseNoticeText": "Apache License 2.0 notice text"
+    });
+
+    assert!(serde_json::from_value::<ModelImportRequest>(request).is_ok());
+}
+
+#[test]
+fn model_import_request_rejects_unknown_and_missing_fields() {
+    let ambient = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "path": "/models/model.gguf",
+        "licenseId": "Apache-2.0",
+        "licenseUrl": "https://example.test/license",
+        "licenseNoticeText": "notice",
+        "digest": "sha256:attacker-supplied"
+    });
+    let missing_notice = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "model": "vendor/name",
+        "path": "/models/model.gguf",
+        "licenseId": "Apache-2.0",
+        "licenseUrl": "https://example.test/license"
+    });
+
+    assert!(serde_json::from_value::<ModelImportRequest>(ambient).is_err());
+    assert!(serde_json::from_value::<ModelImportRequest>(missing_notice).is_err());
 }
 
 #[test]

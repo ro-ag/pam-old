@@ -6,9 +6,9 @@ use pam_gui::{
     ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DaemonStatsDto,
     DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
-    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, ModelInferDto, ModelMessageDto,
-    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
-    SkillLibraryRequest, SnapshotDto,
+    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, ModelImportDto, ModelImportParams,
+    ModelInferDto, ModelMessageDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
+    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -185,6 +185,24 @@ pub(crate) struct ModelInferRequest {
     messages: Vec<ModelMessageDto>,
     #[serde(default)]
     max_output_tokens: Option<u32>,
+}
+
+// The license notice text is user-supplied consent material: this request
+// struct must never derive Debug or log its fields wholesale.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelImportRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    model: String,
+    path: String,
+    license_id: String,
+    license_url: String,
+    license_notice_text: String,
 }
 
 #[derive(Deserialize)]
@@ -451,6 +469,30 @@ pub(crate) async fn model_infer(
             request.model,
             request.messages,
             request.max_output_tokens,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_import(
+    state: State<'_, DesktopState>,
+    request: ModelImportRequest,
+) -> Result<ModelImportDto, DesktopErrorDto> {
+    state
+        .core
+        .model_import(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            ModelImportParams {
+                model: request.model,
+                path: request.path.into(),
+                license_id: request.license_id,
+                license_url: request.license_url,
+                license_notice_text: request.license_notice_text,
+            },
         )
         .await
 }

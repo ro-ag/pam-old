@@ -28,7 +28,6 @@ import {
   writePersistedSidebarWidth,
   type LayoutStorage,
 } from "./layout";
-import type { AgentBriefView } from "./selectors";
 import { selectControlCenter, selectDaemonView } from "./selectors";
 import { ProjectContextBar, ProjectPlaceholderView, ResizeSeparator, Sidebar, Toolbar } from "./components/Shell";
 import {
@@ -110,13 +109,6 @@ function readInitialLayout(): InitialLayout {
     sidebarWidth: readPersistedSidebarWidth(storage, viewportWidth),
     storage,
   };
-}
-
-function briefText(brief: AgentBriefView): string {
-  return [
-    brief.title,
-    ...brief.sections.map((section) => `${section.label}: ${section.summary}`),
-  ].join("\n");
 }
 
 const acceptsResponseFence = answersFence;
@@ -530,14 +522,6 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       dispatchOverlay({ type: "evidence-failed", ...identity, error: presentError(error) });
     }
   };
-  const copyBrief = async (brief: AgentBriefView) => {
-    try {
-      await navigator.clipboard.writeText(briefText(brief));
-      showToast("Agent brief copied");
-    } catch {
-      showToast("Clipboard access is unavailable");
-    }
-  };
   const decide = async (decision: ApprovalDecision) => {
     const approval = projectData?.current.approval;
     if (!approval || !state.activeFence) return;
@@ -599,7 +583,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     }
   };
   const commands: CommandPaletteCommand[] = [
-    { id: "view-control-center", label: "Open Control Center", description: "Show the project's runs, requests, and outcomes.", shortcut: "⌘1" },
+    { id: "view-control-center", label: "Open Control Center", description: "Show daemon health, activity, the local model, and requests per caller.", shortcut: "⌘1" },
     { id: "view-access", label: "Open Access", description: "Show the project's authorized capabilities.", shortcut: "⌘2" },
     { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
@@ -709,25 +693,14 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   key={`control-center:${refreshTick}`}
                   bridge={bridge}
                   daemon={daemon}
-                  projects={state.catalog.projects}
-                  onSelectProject={selectProject}
-                  contextBar={projectContextBar}
                   modelStatus={modelStatus}
                   modelBusy={busy}
                   onOpenModelChat={openModelChat}
                   onStartWithModel={startWithModel}
-                  project={projectData && state.activeFence ? {
-                    data: projectData,
-                    onCopy: (brief) => void copyBrief(brief),
-                    onEvidence: (handle) => void loadEvidence(handle),
-                    onContinue: () => { dispatch({ type: "navigate", view: "flows" }); showToast("Flow workspace opened"); },
-                    onOpenQueue: openQueue,
-                    onOpenApproval: () => { if (approvalKey && overlayAuthority) openOverlay({ id: `approval:${approvalKey}`, kind: "approval", authority: overlayAuthority, approvalKey }, false, true); },
-                    onRecoverDaemon: toggleDaemon,
-                    onRefresh: refresh,
-                    onRegisterCaller: registerGuiCaller,
-                    registrationBusy: busy,
-                  } : null}
+                  onModelImported={() => { showToast("Model registered"); reloadModelStatus(); }}
+                  registrationNeeded={projectData?.current.recoveryAction === "register-caller"}
+                  registrationBusy={busy}
+                  onRegisterCaller={registerGuiCaller}
                 />
               )}
               {state.activeView === "access" && (projectData
