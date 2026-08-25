@@ -4,6 +4,34 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-25
+
+### Added
+
+- The Control Center shows the whole known fleet: a "Usage by project" panel
+  lists every catalog project (and any project the daemon reports usage for)
+  with event counts, relative usage bars, and last-activity dates.
+  `daemon.stats` gained bounded per-project totals to feed it — a grouped
+  scan over the audit trail within the same stats window.
+- Local model setup now leads with curated presets: Qwen3 8B, Qwen3 14B
+  (Apache-2.0), and Llama 3.1 8B Instruct, each pinned to an exact download
+  size and SHA-256. Picking one shows its size, license, and a memory-fit
+  hint against this machine; accepting the license starts a resumable,
+  hash-verified download with live progress that registers the model on
+  completion — the entire flow stays on the Control Center screen.
+- Manual GGUF imports enforce a recommended minimum model size (3.5 GB):
+  smaller files are refused with a clear explanation unless the new
+  "allow smaller models" override under Advanced is checked.
+
+### Changed
+
+- The toolbar breadcrumb is project-free: it reads "Daemon observatory"
+  everywhere, since the Control Center is a global surface. Project identity
+  stays contextual in the project-shaped views.
+- The manual import form tucks its license fields behind an
+  "Advanced — license details" disclosure; presets prefill their license
+  metadata, so the happy path never asks for SPDX input.
+
 ## [0.4.1] - 2026-08-25
 
 ### Added
