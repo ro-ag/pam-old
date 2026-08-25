@@ -209,7 +209,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          codesign --force --timestamp --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/PAM.app"
+          # Hardened runtime is a notarization requirement; the Tauri build
+          # used to apply it at build time, so the post-hoc signature must too.
+          codesign --force --timestamp --options runtime --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/PAM.app"
 
       - name: Sign and notarize disk image
         shell: bash
