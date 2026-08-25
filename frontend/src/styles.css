@@ -829,8 +829,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   .sidebar.is-collapsed .brand { height: 48px; margin: 0; }
   .sidebar.is-collapsed .brand img { width: 28px; height: 28px; }
   .sidebar.is-collapsed .project-monogram { width: 38px; height: 38px; flex: 0 0 38px; }
-  .sidebar.is-collapsed .primary-nav { display: flex; width: auto; gap: 2px; margin: 0 0 0 2px; }
-  .sidebar.is-collapsed .nav-item { width: 38px; min-height: 42px; }
+  .sidebar.is-collapsed .primary-nav { display: flex; width: auto; flex: 1 1 auto; min-width: 0; gap: 2px; margin: 0 0 0 2px; overflow-x: auto; }
+  .sidebar.is-collapsed .nav-item { width: 38px; min-height: 42px; flex: 0 0 auto; }
   .sidebar.is-collapsed .nav-separator { margin: 8px 2px; border-top: 0; border-left: 1px solid var(--line-warm); }
   .sidebar.is-collapsed .sidebar-footer { width: auto; margin: 0 0 0 auto; }
   .sidebar.is-collapsed .daemon-control { width: 36px; min-height: 38px; }
