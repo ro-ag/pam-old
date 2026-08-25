@@ -547,11 +547,49 @@ export interface ModelImportParams {
   licenseUrl: string;
   /** Exact license notice text the user accepted; the backend hashes it. */
   licenseNoticeText: string;
+  /** Registers a model below PAM's recommended minimum size anyway. */
+  allowSmall: boolean;
 }
 
 export type ModelImportDto =
   | { status: "ok"; model: ModelSummaryDto }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export interface ModelPresetDto {
+  id: string;
+  label: string;
+  model: string;
+  fileName: string;
+  url: string;
+  expectedSizeBytes: number;
+  sha256: string;
+  licenseId: string;
+  licenseUrl: string;
+  licenseNoticeText: string;
+  minMemoryBytes: number;
+  paramsLabel: string;
+  quantLabel: string;
+}
+
+export interface ModelPresetsDto {
+  presets: ModelPresetDto[];
+}
+
+export type ModelDownloadDto =
+  | { status: "ok" }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export interface ModelDownloadStatusDto {
+  status: "idle" | "running" | "complete" | "failed";
+  presetId?: string;
+  receivedBytes: number;
+  totalBytes: number;
+  failure?: ModelFailureDto;
+}
+
+export interface HostMemoryDto {
+  totalBytes: number;
+}
 
 export interface CallerDto {
   callerId: string;
@@ -610,6 +648,10 @@ export interface PamBridge {
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
+  modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
+  modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
+  modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;
+  hostMemory(fence: CommandFence): Promise<HostMemoryDto>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
   startDaemon(fence: CommandFence, model?: string): Promise<SnapshotDto | null>;

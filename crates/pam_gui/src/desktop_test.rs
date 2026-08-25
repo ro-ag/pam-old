@@ -19,17 +19,18 @@ use super::{
         AccessConfigDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto, CommandFence,
         ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind, DesktopResult,
         EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowGraphDto, GenerationId,
-        HealthDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
-        active_core_for_test, activity_dto_for_test, approval_current_for_test,
-        approval_failure_retains_handle_for_test, bootstrap_with_catalog_for_test,
-        bounded_detail_for_test, callers_dto_for_test, clamp_model_output_tokens_for_test,
-        connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
-        current_dto_for_test, daemon_start_cwd_for_test, evidence_dto_for_test,
-        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
-        gui_registration_current_for_test, manage_skill_library_without_io_for_test,
-        model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
-        reserve_for_test, switch_authority_for_test,
+        HealthDto, ModelDownloadDto, OperationId, ProjectHandle, TimelineKindDto,
+        access_dto_for_test, active_core_for_test, activity_dto_for_test,
+        approval_current_for_test, approval_failure_retains_handle_for_test,
+        bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
+        clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
+        connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
+        daemon_start_cwd_for_test, evidence_dto_for_test, failure_kind_for_test,
+        flow_compose_data_for_test, flow_graph_data_for_test, gui_registration_current_for_test,
+        manage_skill_library_without_io_for_test, model_infer_dto_for_test,
+        model_status_dto_for_test, post_save_reload_error_for_test, registration_contract_for_test,
+        registration_failure_detail, reserve_daemon_for_test, reserve_for_test,
+        switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -143,6 +144,31 @@ fn tagged_desktop_dtos_serialize_variant_fields_in_the_frontend_contract() {
             },
             "approvalId": "approval-1",
             "expiresAtMs": 42
+        })
+    );
+
+    assert_eq!(
+        serde_json::to_value(ModelDownloadDto::Ok).unwrap(),
+        serde_json::json!({ "status": "ok" })
+    );
+    assert_eq!(
+        serde_json::to_value(ModelDownloadDto::Unavailable {
+            failure: FailureDto {
+                kind: FailureKindDto::Unavailable,
+                code: Some("unknown_preset".to_owned()),
+                detail: "This preset is not offered by PAM.".to_owned(),
+                recovery: None,
+            },
+        })
+        .unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": "unknown_preset",
+                "detail": "This preset is not offered by PAM.",
+                "recovery": null
+            }
         })
     );
 }
@@ -574,6 +600,58 @@ fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
     );
 }
 
+#[tokio::test]
+async fn model_presets_lists_exactly_the_curated_catalog() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_presets(daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+
+    assert_eq!(dto.presets.len(), 3);
+    let mut ids: Vec<&str> = dto
+        .presets
+        .iter()
+        .map(|preset| preset.id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["llama31-8b-q4km", "qwen3-14b-q4km", "qwen3-8b-q4km"]);
+}
+
+#[tokio::test]
+async fn model_download_reports_an_unknown_preset_as_unavailable_data_not_an_error() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_download(
+            daemon_fence(OperationId::new()),
+            "does-not-exist".to_owned(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(dto, ModelDownloadDto::Unavailable { .. }));
+}
+
+#[tokio::test]
+async fn model_download_status_defaults_to_idle() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_download_status(daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "idle",
+            "presetId": null,
+            "receivedBytes": 0,
+            "totalBytes": 0,
+            "failure": null
+        })
+    );
+}
+
 #[test]
 fn model_infer_dto_serializes_the_exact_frontend_ok_contract() {
     let dto = model_infer_dto_for_test(ObservatoryState::Available(
@@ -936,6 +1014,13 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     assert_daemon_replay_conflict(core.daemon_health(fence()).await);
     assert_daemon_replay_conflict(core.start_daemon(fence(), None).await);
     assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
+    assert_daemon_replay_conflict(core.model_presets(fence()).await);
+    assert_daemon_replay_conflict(
+        core.model_download(fence(), "qwen3-8b-q4km".to_owned())
+            .await,
+    );
+    assert_daemon_replay_conflict(core.model_download_status(fence()).await);
+    assert_daemon_replay_conflict(core.host_memory(fence()).await);
 }
 
 #[tokio::test]

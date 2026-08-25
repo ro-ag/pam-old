@@ -43,7 +43,9 @@ use crate::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
+    model_download::{ModelDownloadManager, ModelDownloadStatusKind, host_memory_total_bytes},
     model_import::{ModelImportParams, run_model_import},
+    model_presets,
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
@@ -770,6 +772,71 @@ pub enum ModelImportDto {
     Unavailable { failure: FailureDto },
 }
 
+/// One curated, pre-verified downloadable model preset.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPresetDto {
+    pub id: String,
+    pub label: String,
+    pub model: String,
+    pub file_name: String,
+    pub url: String,
+    pub expected_size_bytes: u64,
+    pub sha256: String,
+    pub license_id: String,
+    pub license_url: String,
+    pub license_notice_text: String,
+    pub min_memory_bytes: u64,
+    pub params_label: String,
+    pub quant_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPresetsDto {
+    pub presets: Vec<ModelPresetDto>,
+}
+
+/// Starts a guided download. Unlike the fence itself going stale, business
+/// refusals (unknown preset, already running) are reported as `Unavailable`
+/// data here, exactly like [`ModelImportDto`], rather than an `Err`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelDownloadDto {
+    Ok,
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelDownloadStatusKindDto {
+    Idle,
+    Running,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelDownloadStatusDto {
+    pub status: ModelDownloadStatusKindDto,
+    pub preset_id: Option<String>,
+    pub received_bytes: u64,
+    pub total_bytes: u64,
+    pub failure: Option<FailureDto>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostMemoryDto {
+    pub total_bytes: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRoleDto {
@@ -894,6 +961,7 @@ pub enum FlowComposeDto {
 pub struct DesktopCore {
     inner: Arc<Mutex<DesktopState>>,
     command_gate: Arc<Mutex<()>>,
+    downloads: Arc<ModelDownloadManager>,
 }
 
 impl fmt::Debug for DesktopCore {
@@ -967,6 +1035,7 @@ impl DesktopCore {
                 catalog_warning: None,
             })),
             command_gate: Arc::new(Mutex::new(())),
+            downloads: ModelDownloadManager::new(),
         }
     }
 
@@ -1717,6 +1786,120 @@ impl DesktopCore {
                 ),
             },
         };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Lists the curated, pre-verified model download presets. Static data:
+    /// works under either the daemon authority or an active project, exactly
+    /// like [`Self::model_status`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_presets(&self, fence: CommandFence) -> DesktopResult<ModelPresetsDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = ModelPresetsDto {
+            presets: model_presets::CATALOG
+                .iter()
+                .map(model_preset_dto)
+                .collect(),
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Starts a guided background download for one curated preset. Business
+    /// refusals (unknown preset, already running) come back as
+    /// `ModelDownloadDto::Unavailable`, not an `Err`; only fence problems do.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_download(
+        &self,
+        fence: CommandFence,
+        preset_id: String,
+    ) -> DesktopResult<ModelDownloadDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = match model_presets::find(&preset_id) {
+            None => ModelDownloadDto::Unavailable {
+                failure: unavailable_failure(
+                    Some("unknown_preset".to_owned()),
+                    "This preset is not offered by PAM.",
+                    Some("Reload the preset list and select it again.".to_owned()),
+                ),
+            },
+            Some(preset) => match Arc::clone(&self.downloads).start(*preset) {
+                Ok(()) => ModelDownloadDto::Ok,
+                Err(failure) => ModelDownloadDto::Unavailable {
+                    failure: unavailable_failure(
+                        Some("download_already_running".to_owned()),
+                        failure.detail,
+                        failure.recovery,
+                    ),
+                },
+            },
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Polls the current guided download status. There is no event bus in
+    /// this codebase, so the GUI polls this instead of receiving progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_download_status(
+        &self,
+        fence: CommandFence,
+    ) -> DesktopResult<ModelDownloadStatusDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let snapshot = self.downloads.snapshot();
+        let data = ModelDownloadStatusDto {
+            status: match snapshot.status {
+                ModelDownloadStatusKind::Idle => ModelDownloadStatusKindDto::Idle,
+                ModelDownloadStatusKind::Running => ModelDownloadStatusKindDto::Running,
+                ModelDownloadStatusKind::Complete => ModelDownloadStatusKindDto::Complete,
+                ModelDownloadStatusKind::Failed => ModelDownloadStatusKindDto::Failed,
+            },
+            preset_id: snapshot.preset_id,
+            received_bytes: snapshot.received_bytes,
+            total_bytes: snapshot.total_bytes,
+            failure: snapshot.failure.map(|failure| {
+                unavailable_failure(
+                    Some("model_download_failed".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                )
+            }),
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Probes total host physical memory, for a coarse "will this preset fit"
+    /// hint in the picker. Advisory only: the daemon's llama.cpp admission
+    /// check at load time stays authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused,
+    /// or when the host memory probe is unsupported or fails.
+    pub async fn host_memory(&self, fence: CommandFence) -> DesktopResult<HostMemoryDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = host_memory_total_bytes()
+            .map(|total_bytes| HostMemoryDto { total_bytes })
+            .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -2873,6 +3056,24 @@ fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDt
     }
 }
 
+fn model_preset_dto(preset: &model_presets::ModelPreset) -> ModelPresetDto {
+    ModelPresetDto {
+        id: preset.id.to_owned(),
+        label: preset.label.to_owned(),
+        model: preset.model.to_owned(),
+        file_name: preset.file_name.to_owned(),
+        url: preset.url.to_owned(),
+        expected_size_bytes: preset.expected_size_bytes,
+        sha256: preset.sha256.to_owned(),
+        license_id: preset.license_id.to_owned(),
+        license_url: preset.license_url.to_owned(),
+        license_notice_text: preset.license_notice_text.to_owned(),
+        min_memory_bytes: preset.min_memory_bytes(),
+        params_label: preset.params_label.to_owned(),
+        quant_label: preset.quant_label.to_owned(),
+    }
+}
+
 fn model_summary_dto(summary: &ModelSummary) -> ModelSummaryDto {
     ModelSummaryDto {
         model_id: bounded_detail(summary.model_id().to_owned()),
@@ -3640,6 +3841,7 @@ pub(crate) fn active_core_at_for_test(
     DesktopCore {
         inner: Arc::new(Mutex::new(state)),
         command_gate: Arc::new(Mutex::new(())),
+        downloads: ModelDownloadManager::new(),
     }
 }
 
