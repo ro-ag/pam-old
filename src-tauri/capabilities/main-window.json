@@ -35,6 +35,8 @@
     "allow-connector-configure",
     "allow-connector-test",
     "allow-daemon-health",
-    "core:app:allow-set-app-theme"
+    "core:app:allow-set-app-theme",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
   ]
 }

@@ -4,6 +4,7 @@ import {
   FloppyDisk,
   GitBranch,
   ListChecks,
+  SidebarSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
@@ -58,6 +59,7 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
   const [loadError, setLoadError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [catalogHidden, setCatalogHidden] = useState(false);
   const validationErrorId = useId();
   const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
@@ -353,8 +355,8 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
       ) : !workspace ? (
         <section className="panel loading-panel" aria-busy="true" aria-live="polite"><ArrowClockwise className={busy ? "is-spinning" : ""} size={25} /><p>Loading bounded flow workspace…</p></section>
       ) : (
-        <section className="flow-workspace" aria-label="Flow workspace">
-          <aside className="flow-catalog">
+        <section className={`flow-workspace ${catalogHidden ? "is-catalog-hidden" : ""}`} aria-label="Flow workspace">
+          <aside className="flow-catalog" hidden={catalogHidden}>
             <div className="panel-title"><div><span className="eyebrow">Project catalog</span><h2>Definitions</h2></div><FileText size={20} /></div>
             <div className="flow-list">
               {workspace.definitions.map((flow) => (
@@ -368,7 +370,19 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
           </aside>
           <section className="flow-editor">
             <div className="panel-title editor-title">
-              <div><span className="eyebrow">Editing</span><h2>{selected?.identity?.fileName ?? "Select a definition"}</h2></div>
+              <div className="editor-title-lead">
+                <button
+                  type="button"
+                  className="flow-catalog-toggle"
+                  aria-pressed={catalogHidden}
+                  aria-label={catalogHidden ? "Show flow catalog" : "Hide flow catalog"}
+                  title={catalogHidden ? "Show catalog" : "Hide catalog for more canvas"}
+                  onClick={() => setCatalogHidden((hidden) => !hidden)}
+                >
+                  <SidebarSimple size={17} weight="bold" />
+                </button>
+                <div><span className="eyebrow">Editing</span><h2>{selected?.identity?.fileName ?? "Select a definition"}</h2></div>
+              </div>
               <div>
                 {selected && (
                   <div className="flow-mode-toggle" role="group" aria-label="Editor mode">

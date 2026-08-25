@@ -288,7 +288,7 @@ export function Sidebar({
   };
   return (
     <aside ref={containerRef} className={`sidebar ${collapsed ? "is-collapsed" : ""}`} aria-label="Daemon navigation" onKeyDownCapture={trapTabFocus}>
-      <div className="brand" aria-label="PAM" data-tauri-drag-region>
+      <div className="brand" aria-label="PAM" data-tauri-drag-region="deep">
         <img src="/assets/pam-mark.png" alt="" />
         {!collapsed && (
           <div className="brand-identity">
@@ -550,11 +550,11 @@ export function Toolbar({
   queueButtonRef: RefObject<HTMLButtonElement | null>;
 }) {
   return (
-    <header className="toolbar">
+    <header className="toolbar" data-tauri-drag-region="deep">
       <button ref={toggleButtonRef} type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={onToggleSidebar}>
         <SidebarSimple size={19} weight="bold" />
       </button>
-      <div className="breadcrumb" data-tauri-drag-region>
+      <div className="breadcrumb">
         {projectName !== null && (
           <>
             <span>{projectName}</span>
