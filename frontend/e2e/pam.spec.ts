@@ -70,7 +70,7 @@ test.describe("responsive visual contract", () => {
     test(`keeps the solved Current surface bounded at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await openFixture(page);
-      await expect(page.getByRole("heading", { name: "payments-api" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Control center" })).toBeVisible();
 
       const geometry = await page.evaluate(() => {
         const rect = (selector: string) => {
@@ -121,10 +121,10 @@ test.describe("responsive visual contract", () => {
     });
   }
 
-  test("keeps every primary handoff action reachable at effective 320px", async ({ page }) => {
+  test("keeps every latest-evidence action reachable at effective 320px", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 800 });
-    await openFixture(page);
-    const actions = ["Copy outcome brief", "Open evidence", "Continue flow"];
+    await openFixture(page, "solved", "activity");
+    const actions = ["Open Evidence 1", "Open Evidence 2"];
 
     for (const name of actions) {
       const action = page.getByRole("button", { name, exact: true });
@@ -139,24 +139,27 @@ test.describe("responsive visual contract", () => {
     const horizontal = await horizontalMetrics(page);
     expect(horizontal.htmlScroll).toBe(horizontal.htmlClient);
     expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
-    await expect(page).toHaveScreenshot("current-actions-320x800.png");
+    await expect(page).toHaveScreenshot("activity-evidence-320x800.png");
   });
 
-  test("lets an active timeline use the full canvas when no outcome exists", async ({ page }) => {
+  test("lets the activity feed use the full canvas when no evidence exists", async ({ page }) => {
     await page.setViewportSize({ width: 1_180, height: 800 });
-    await openFixture(page, "active");
-    await expect(page.locator(".outcome-card")).toHaveCount(0);
+    await openFixture(page, "active", "activity");
+    await expect(page.getByRole("heading", { name: "Latest run evidence" })).toHaveCount(0);
 
     const geometry = await page.evaluate(() => {
-      const layout = document.querySelector<HTMLElement>(".timeline-layout")!.getBoundingClientRect();
-      const timeline = document.querySelector<HTMLElement>(".timeline-column")!.getBoundingClientRect();
+      const overview = document.querySelector<HTMLElement>(".project-overview")!.getBoundingClientRect();
+      const feed = Array.from(document.querySelectorAll<HTMLElement>("section.panel"))
+        .find((panel) => panel.textContent?.includes("Recent activity"))!
+        .getBoundingClientRect();
       return {
-        layout: { left: layout.left, right: layout.right, width: layout.width },
-        timeline: { left: timeline.left, right: timeline.right, width: timeline.width },
+        overview: { left: overview.left, right: overview.right, width: overview.width },
+        feed: { left: feed.left, right: feed.right, width: feed.width },
       };
     });
-    expect(geometry.timeline).toEqual(geometry.layout);
-    await expect(page).toHaveScreenshot("current-active-1180x800.png");
+    expect(geometry.feed.left).toBe(geometry.overview.left);
+    expect(geometry.feed.right).toBe(geometry.overview.right);
+    await expect(page).toHaveScreenshot("activity-active-1180x800.png");
   });
 });
 
@@ -166,7 +169,8 @@ test.describe("production-shaped interactions", () => {
   });
 
   test("uses the complete keyboard project-menu contract", async ({ page }) => {
-    await openFixture(page);
+    // The project menu lives in the context bar of project-shaped views.
+    await openFixture(page, "solved", "flows");
     const trigger = page.getByRole("button", { name: "payments-api" });
     await trigger.focus();
     await page.keyboard.press("ArrowDown");
@@ -209,7 +213,7 @@ test.describe("production-shaped interactions", () => {
   });
 
   test("opens bounded evidence and restores the exact opener", async ({ page }) => {
-    await openFixture(page, "evidence-available");
+    await openFixture(page, "evidence-available", "activity");
     const opener = page.getByRole("button", { name: "Open Evidence 1" });
     await expect(opener).toHaveAttribute("aria-description", "44444444-4444-4444-8444-444444444444");
     await opener.click();
@@ -246,9 +250,11 @@ test.describe("production-shaped interactions", () => {
   test("executes the bounded recovery action at effective 320px", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 800 });
     await openFixture(page, "missing-credential");
-    await expect(page.getByRole("heading", { name: "Authenticated project state is unavailable" })).toBeVisible();
+    const watch = page.locator(".project-stat", { hasText: "Watch status" });
+    await expect(watch.getByText("PAM has no native caller credential for this caller.")).toBeVisible();
     await page.getByRole("button", { name: "Register GUI caller" }).click();
-    await expect(page.getByRole("heading", { name: "Ready for the next agent" })).toBeVisible();
+    await expect(watch.getByText("PAM is on watch")).toBeVisible();
+    await expect(page.getByText("GUI caller registered")).toBeVisible();
     const horizontal = await horizontalMetrics(page);
     expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
   });
@@ -307,7 +313,6 @@ test.describe("selectable theme families and variants", () => {
         const separator = document.querySelector<HTMLElement>(".resize-separator")!;
         const surface = document.querySelector<HTMLElement>(".project-overview")!;
         const title = document.querySelector<HTMLElement>(".project-header h1")!;
-        const art = document.querySelector<HTMLElement>(".project-header-art")!;
         const root = getComputedStyle(document.documentElement);
         type Rgba = [number, number, number, number];
         const parseColor = (value: string): Rgba => {
@@ -377,7 +382,7 @@ test.describe("selectable theme families and variants", () => {
           surface: getComputedStyle(surface).backgroundColor,
           accent: root.getPropertyValue("--pam-ice").trim(),
           font: getComputedStyle(title).fontFamily,
-          art: getComputedStyle(art).backgroundImage,
+          art: root.getPropertyValue("--pam-hero-image").trim(),
           semanticPillContrasts,
         };
       });
@@ -430,7 +435,7 @@ test.describe("Skills audit tab", () => {
     const navigationLabels = await page.getByRole("navigation", { name: "Primary" })
       .getByRole("button")
       .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
-    expect(navigationLabels).toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Connections"]);
+    expect(navigationLabels).toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Console", "Connections"]);
     const geometry = await page.evaluate(() => {
       const width = (selector: string) => document.querySelector<HTMLElement>(selector)?.getBoundingClientRect().width ?? -1;
       const workspace = document.querySelector<HTMLElement>(".workspace")?.getBoundingClientRect();
