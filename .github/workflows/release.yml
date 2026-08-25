@@ -166,6 +166,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
+      # The dmg is rebuilt below with tools/package-macos-dmg.sh.
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Download packages from the main CI run
         shell: bash
         env:
@@ -213,6 +217,15 @@ jobs:
           # used to apply it at build time, so the post-hoc signature must too.
           codesign --force --timestamp --options runtime --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/PAM.app"
 
+      - name: Rebuild the disk image from the signed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The CI-built dmg wraps the unsigned app, and notarization scans
+          # the dmg payload: it must be rebuilt around the signed bundle.
+          rm -rf bundle/dmg
+          tools/package-macos-dmg.sh "$PWD/bundle/macos/PAM.app" "$PWD/bundle/dmg"
+
       - name: Sign and notarize disk image
         shell: bash
         env:
@@ -223,11 +236,22 @@ jobs:
           dmg="$(find bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           [[ -n "$dmg" ]]
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
-          xcrun notarytool submit "$dmg" \
+          submission="$(xcrun notarytool submit "$dmg" \
             --key "$APPLE_API_KEY_PATH" \
             --key-id "$APPLE_API_KEY" \
             --issuer "$APPLE_API_ISSUER" \
-            --wait --timeout 20m
+            --wait --timeout 20m --output-format json)"
+          printf '%s\n' "$submission"
+          submission_id="$(printf '%s' "$submission" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          status="$(printf '%s' "$submission" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+          if [[ "$status" != "Accepted" ]]; then
+            # Surface the exact rejection reasons instead of a bare staple error.
+            xcrun notarytool log "$submission_id" \
+              --key "$APPLE_API_KEY_PATH" \
+              --key-id "$APPLE_API_KEY" \
+              --issuer "$APPLE_API_ISSUER"
+            exit 1
+          fi
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
 
