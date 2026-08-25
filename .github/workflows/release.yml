@@ -126,7 +126,8 @@ jobs:
           ARTIFACT: ${{ matrix.artifact }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --name "$ARTIFACT" --dir downloaded
+          # No checkout in this job: point gh at the repository explicitly.
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir downloaded
 
       - name: Assemble Linux release archive
         if: ${{ matrix.family == 'linux' }}
@@ -172,7 +173,8 @@ jobs:
           RUN_ID: ${{ needs.validate.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --name PAM-macos-arm64 --dir downloaded
+          # No checkout in this job: point gh at the repository explicitly.
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name PAM-macos-arm64 --dir downloaded
           mkdir -p bundle
           tar -xzf downloaded/PAM-macos-arm64-bundle.tar.gz -C bundle
 
