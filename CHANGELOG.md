@@ -4,6 +4,27 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-25
+
+### Changed
+
+- The curated model catalog is now Qwen3-Coder-30B-A3B-Instruct only — the
+  smallest model PAM's flows were validated on — offered at three
+  quantizations: Q4_K_S "minimum" (17.5 GB), Q4_K_M "balanced" (18.6 GB), and
+  Q6_K "high fidelity" (25.1 GB), each pinned to an exact size and SHA-256.
+  The previous 8B/14B presets sat below the validated quality bar and are
+  gone.
+- The manual GGUF import floor rose from 3.5 GB to 17 GB — just under the
+  validated minimum quant. The "allow smaller models" override under
+  Advanced remains.
+
+### Added
+
+- PAM now states its supported system minimum: local AI needs a machine with
+  32 GB of memory or more. The host memory probe reports that minimum, and
+  the model setup panel shows a calm notice on smaller machines, with RAM
+  formatted in binary GiB the way machines are sold.
+
 ## [0.5.0] - 2026-08-25
 
 ### Added
