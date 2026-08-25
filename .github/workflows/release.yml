@@ -70,6 +70,16 @@ jobs:
             echo "::error::No green CI run on $sha; refusing to release unverified packages."
             exit 1
           fi
+          # CI artifacts expire after 7 days; fail here, not mid-build, when a
+          # tag lands late. Re-running the CI run refreshes its artifacts.
+          names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not) | .name] | join(" ")')"
+          for artifact in PAM-linux-amd64 PAM-linux-arm64 PAM-windows-amd64 PAM-windows-arm64 PAM-macos-arm64; do
+            if [[ " $names " != *" $artifact "* ]]; then
+              echo "::error::Artifact $artifact from CI run $run_id is missing or expired; re-run that CI run, then retry the release."
+              exit 1
+            fi
+          done
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
   build:
