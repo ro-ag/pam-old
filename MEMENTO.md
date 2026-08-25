@@ -82,3 +82,13 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-24, 2026-08-24
 - cost: 15
 - status: watching
+
+## pam-minimum-model-qwen3-coder-30b
+- kind: project-way
+- scope: project
+- rule: PAM's minimum viable local model is Qwen3-Coder-30B-A3B-Instruct Q4_K_S — all owner validation ran on it; presets, floors, and docs must never offer smaller models as adequate
+- fix: Preset catalog baseline = Qwen3-Coder-30B-A3B-Instruct Q4_K_S; manual-import floor sits just under its file size; larger quants (Q4_K_M+) are the upgrades
+- hits: 2026-08-25
+- cost: 15
+- status: watching
+

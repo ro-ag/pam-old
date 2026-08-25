@@ -270,59 +270,60 @@ const registeredModels: ModelSummaryDto[] = [
   { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
 ];
 
-// Three curated presets. Sizes and license ids come from the spec; memory
+// Three curated presets: Qwen3 Coder 30B is PAM's validated quality floor,
+// offered at three quantizations. Sizes match the real catalog; memory
 // floors are fixture estimates (weight size plus a working margin).
 const modelPresets: ModelPresetDto[] = [
   {
-    id: "qwen3-8b",
-    label: "Qwen3 8B",
-    model: "qwen/qwen3-8b-instruct-q4",
-    fileName: "qwen3-8b-instruct-q4.gguf",
-    url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-instruct-q4.gguf",
-    expectedSizeBytes: 5_027_783_488,
-    sha256: "sha256:fixture-qwen3-8b",
+    id: "qwen3-coder-30b-q4ks",
+    label: "Qwen3 Coder 30B — minimum",
+    model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_s",
+    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
+    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
+    expectedSizeBytes: 17_456_012_448,
+    sha256: "sha256:fixture-qwen3-coder-30b-q4ks",
     licenseId: "Apache-2.0",
     licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
     licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
-    minMemoryBytes: 8_300_000_000,
-    paramsLabel: "8B params",
-    quantLabel: "Q4_K_M",
+    minMemoryBytes: 23_970_000_000,
+    paramsLabel: "30B-A3B params",
+    quantLabel: "Q4_K_S",
   },
   {
-    id: "qwen3-14b",
-    label: "Qwen3 14B",
-    model: "qwen/qwen3-14b-instruct-q4",
-    fileName: "qwen3-14b-instruct-q4.gguf",
-    url: "https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/qwen3-14b-instruct-q4.gguf",
-    expectedSizeBytes: 9_001_752_960,
-    sha256: "sha256:fixture-qwen3-14b",
+    id: "qwen3-coder-30b-q4km",
+    label: "Qwen3 Coder 30B — balanced",
+    model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_m",
+    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+    expectedSizeBytes: 18_556_689_568,
+    sha256: "sha256:fixture-qwen3-coder-30b-q4km",
     licenseId: "Apache-2.0",
     licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
     licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
-    minMemoryBytes: 15_500_000_000,
-    paramsLabel: "14B params",
+    minMemoryBytes: 25_340_000_000,
+    paramsLabel: "30B-A3B params",
     quantLabel: "Q4_K_M",
   },
   {
-    id: "llama-3.1-8b-instruct",
-    label: "Llama 3.1 8B Instruct",
-    model: "meta/llama-3.1-8b-instruct-q4",
-    fileName: "llama-3.1-8b-instruct-q4.gguf",
-    url: "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct-GGUF/resolve/main/llama-3.1-8b-instruct-q4.gguf",
-    expectedSizeBytes: 4_920_739_232,
-    sha256: "sha256:fixture-llama-3.1-8b",
-    licenseId: "Llama-3.1-Community-License",
-    licenseUrl: "https://www.llama.com/llama3_1/license/",
-    licenseNoticeText: "Llama 3.1 Community License Agreement. Copyright (c) Meta Platforms, Inc.",
-    minMemoryBytes: 8_200_000_000,
-    paramsLabel: "8B params",
-    quantLabel: "Q4_K_M",
+    id: "qwen3-coder-30b-q6k",
+    label: "Qwen3 Coder 30B — high fidelity",
+    model: "qwen/qwen3-coder-30b-a3b-instruct-q6_k",
+    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
+    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
+    expectedSizeBytes: 25_092_535_456,
+    sha256: "sha256:fixture-qwen3-coder-30b-q6k",
+    licenseId: "Apache-2.0",
+    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
+    minMemoryBytes: 33_500_000_000,
+    paramsLabel: "30B-A3B params",
+    quantLabel: "Q6_K",
   },
 ];
 
-// A mid-range consumer Mac: enough for two of the three presets, so the fit
-// hint has both a quiet pass and a visible "needs more memory" case to show.
-const FIXTURE_HOST_MEMORY_BYTES = 12_000_000_000;
+// A 24 GB Mac: enough for the minimum quant only, so the fit hint has both a
+// quiet pass and a visible "needs more memory" case to show.
+const FIXTURE_HOST_MEMORY_BYTES = 24_000_000_000;
 
 const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
 

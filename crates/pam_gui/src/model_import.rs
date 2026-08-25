@@ -23,9 +23,10 @@ use sha2::{Digest, Sha256};
 
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const METADATA_RECOVERY: &str = "Check the GGUF file and license metadata, then import again.";
-/// Models below roughly a 7B-parameter Q4 quantization do not hold up in PAM's
-/// flows, so smaller files need the explicit Advanced override to register.
-pub(crate) const MIN_RECOMMENDED_MODEL_BYTES: u64 = 3_500_000_000;
+/// Qwen3-Coder-30B-A3B-Instruct at `Q4_K_S` (~17.5 GB) is the smallest model
+/// PAM's flows were validated on; anything under this floor needs the
+/// explicit Advanced override to register.
+pub(crate) const MIN_RECOMMENDED_MODEL_BYTES: u64 = 17_000_000_000;
 
 /// One complete GUI-owned import request, with the exact license notice text
 /// the user accepted on screen.
