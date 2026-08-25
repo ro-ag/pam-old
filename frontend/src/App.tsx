@@ -693,6 +693,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   key={`control-center:${refreshTick}`}
                   bridge={bridge}
                   daemon={daemon}
+                  catalog={state.catalog.projects}
                   modelStatus={modelStatus}
                   modelBusy={busy}
                   onOpenModelChat={openModelChat}

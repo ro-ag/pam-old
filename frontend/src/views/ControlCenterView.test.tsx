@@ -23,6 +23,7 @@ async function controlCenterProps(scenario: FixtureScenario = "solved") {
     daemon: control
       ? control.daemon
       : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
+    catalog: catalog.projects,
     modelStatus: await bridge.modelStatus(withDaemonOperation()),
     modelBusy: false,
     onOpenModelChat: vi.fn(),
@@ -42,9 +43,8 @@ describe("ControlCenterView", () => {
     expect(within(overview).getByText("Active days")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: /Daily daemon activity/ })).toBeInTheDocument();
 
-    // Projects reduce to per-caller requests: no picker, no switcher, no
-    // project row on this screen.
-    expect(screen.queryByRole("region", { name: "Projects" })).not.toBeInTheDocument();
+    // The fleet overview is display-only and global: no picker, no switcher,
+    // no single "active project" row on this screen.
     expect(screen.queryByRole("region", { name: "Active project" })).not.toBeInTheDocument();
     expect(screen.queryByText("Bring a queue into view")).not.toBeInTheDocument();
 
@@ -86,6 +86,53 @@ describe("ControlCenterView", () => {
       screen.getByText("The activity picture returns when PAM is back on watch."),
     ).toBeInTheDocument();
     expect(screen.getByText("PAM is paused, so no requests are being served.")).toBeInTheDocument();
+  });
+});
+
+describe("Projects panel", () => {
+  it("lists every catalog project plus usage, display-only, with zero-usage projects included", async () => {
+    const props = await controlCenterProps();
+    render(<ControlCenterView {...props} />);
+
+    const panel = await screen.findByRole("region", { name: "Usage by project" });
+    expect(within(panel).getByText("payments-api")).toBeInTheDocument();
+    expect(within(panel).getByText("128 events")).toBeInTheDocument();
+    expect(within(panel).getByText("ledger-web")).toBeInTheDocument();
+    expect(within(panel).getByText("54 events")).toBeInTheDocument();
+    // "docs" carries no usage fixture row but is still a catalog project.
+    expect(within(panel).getByText("docs")).toBeInTheDocument();
+    expect(within(panel).getByText("0 events")).toBeInTheDocument();
+    // Display only: no click-through, no selector.
+    expect(within(panel).queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("renders a usage row for a project outside the catalog under its truncated id", async () => {
+    const props = await controlCenterProps();
+    vi.spyOn(props.bridge, "daemonStats").mockResolvedValue({
+      status: "ok",
+      days: [],
+      projects: [
+        { projectId: "99999999-9999-4999-8999-999999999999", events: 3, lastEventMs: 1_777_000_000_000 },
+      ],
+    });
+    render(<ControlCenterView {...props} />);
+
+    const panel = await screen.findByRole("region", { name: "Usage by project" });
+    expect(await within(panel).findByText("99999999…")).toBeInTheDocument();
+    expect(within(panel).getByText("3 events")).toBeInTheDocument();
+  });
+
+  it("treats a missing projects field defensively as empty, for an older daemon", async () => {
+    const props = await controlCenterProps();
+    vi.spyOn(props.bridge, "daemonStats").mockResolvedValue({
+      status: "ok",
+      days: [],
+    } as never);
+    render(<ControlCenterView {...props} />);
+
+    const panel = await screen.findByRole("region", { name: "Usage by project" });
+    expect(within(panel).getByText("payments-api")).toBeInTheDocument();
+    expect(within(panel).getAllByText("0 events").length).toBeGreaterThan(0);
   });
 });
 

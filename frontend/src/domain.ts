@@ -497,8 +497,14 @@ export interface ActivityDayDto {
   events: number;
 }
 
+export interface ProjectUsageDto {
+  projectId: string;
+  events: number;
+  lastEventMs: number;
+}
+
 export type DaemonStatsDto =
-  | { status: "ok"; days: ActivityDayDto[] }
+  | { status: "ok"; days: ActivityDayDto[]; projects: ProjectUsageDto[] }
   | { status: "blocked" | "unavailable"; failure: BridgeFailureDto };
 
 export interface ModelSummaryDto {

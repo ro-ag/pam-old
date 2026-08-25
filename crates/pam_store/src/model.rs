@@ -113,6 +113,14 @@ pub struct ActivityDay {
     pub events: u64,
 }
 
+/// One project's audit-event usage total within a since-window scan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectUsage {
+    pub project_id: String,
+    pub events: u64,
+    pub last_event_ms: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallerRegistration {
     pub caller_id: CallerId,

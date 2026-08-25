@@ -15,6 +15,7 @@ import type {
   DaemonLogsDto,
   DaemonStatsDto,
   EvidenceDataDto,
+  ProjectUsageDto,
   FlowDefinitionJson,
   FlowDocumentDataDto,
   FlowReviewDataDto,
@@ -67,6 +68,13 @@ const daemonStatDays: ActivityDayDto[] = Array.from({ length: 140 }, (_, index) 
   dayStartMs: statsAnchorDay - (139 - index) * DAY_MS,
   events: (index * 7) % 11 === 0 ? 0 : ((index * 13) % 23) + 1,
 })).filter((day) => day.events > 0);
+
+// "docs" is deliberately absent: the catalog still lists it, so the Projects
+// panel renders it as a known project with zero usage.
+const projectUsage: ProjectUsageDto[] = [
+  { projectId: "11111111-1111-4111-8111-111111111111", events: 128, lastEventMs: 1_777_001_520_000 },
+  { projectId: "22222222-2222-4222-8222-222222222222", events: 54, lastEventMs: 1_777_001_400_000 },
+];
 
 const registeredCallers: CallerDto[] = [
   { callerId: "gui:pam-desktop", registeredAtMs: 1_776_900_000_000, revokedAtMs: null },
@@ -716,11 +724,12 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           },
         };
       }
-      if (scenario === "empty") return { status: "ok", days: [] };
+      if (scenario === "empty") return { status: "ok", days: [], projects: [] };
       const window = (days && days > 0 ? days : 182) * DAY_MS;
       return clone({
         status: "ok" as const,
         days: daemonStatDays.filter((day) => day.dayStartMs >= statsAnchorDay - window),
+        projects: projectUsage,
       });
     },
     async modelStatus(_fence): Promise<ModelStatusDto> {

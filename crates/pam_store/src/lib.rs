@@ -32,9 +32,9 @@ pub use model::{
     MAX_EVIDENCE_MEDIA_TYPE_BYTES, MAX_EVIDENCE_PRUNE_BATCH_SIZE, MAX_EVIDENCE_RANGE_BYTES,
     MAX_FLOW_CHECKPOINT_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_FLOW_TRANSITION_BYTES,
     MAX_PROJECT_CURRENT_QUEUED, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent, ProjectPolicy,
-    ProjectRequestSummary, ProjectWorkload, PutEvidence, PutGrant, RecentAuditEvents, Replay,
-    RequestSnapshot, RequestState, SaveFlowCheckpoint, StoredResult, StoredSkillsAuditReport,
-    TerminalState, UpsertConnectorConfig,
+    ProjectRequestSummary, ProjectUsage, ProjectWorkload, PutEvidence, PutGrant, RecentAuditEvents,
+    Replay, RequestSnapshot, RequestState, SaveFlowCheckpoint, StoredResult,
+    StoredSkillsAuditReport, TerminalState, UpsertConnectorConfig,
 };
 pub use pam_model::{ModelKey, RegisteredModel};
 pub use store::{EffectApprovalCapability, Store};

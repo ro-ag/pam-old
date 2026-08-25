@@ -1990,6 +1990,7 @@ pub struct ActivityResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DaemonStatsResult {
     pub days: Vec<ActivityDaySummary>,
+    pub projects: Vec<ProjectUsageSummary>,
 }
 
 /// One UTC day of daemon-wide activity.
@@ -1997,6 +1998,14 @@ pub struct DaemonStatsResult {
 pub struct ActivityDaySummary {
     pub day_start_ms: u64,
     pub events: u64,
+}
+
+/// One project's usage total within the daemon stats window.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProjectUsageSummary {
+    pub project_id: String,
+    pub events: u64,
+    pub last_event_ms: u64,
 }
 
 /// Bounded oldest-first slice of the daemon's in-memory diagnostic log.

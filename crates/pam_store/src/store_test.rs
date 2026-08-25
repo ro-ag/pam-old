@@ -30,8 +30,8 @@ use super::{
     MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES,
     MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
     MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_PROJECT_CURRENT_QUEUED,
-    MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectWorkload, PutGrant, RequestState, SaveFlowCheckpoint,
-    Store, StoreError, TerminalState, UpsertConnectorConfig,
+    MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectUsage, ProjectWorkload, PutGrant, RequestState,
+    SaveFlowCheckpoint, Store, StoreError, TerminalState, UpsertConnectorConfig,
 };
 use crate::store::database_path;
 
@@ -7000,5 +7000,54 @@ async fn activity_day_rollup_counts_events_and_survives_pruning() {
             .is_empty()
     );
     assert_eq!(store.activity_days(0).await.unwrap(), days);
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn project_usage_groups_counts_and_orders_by_events_within_window() {
+    const DAY_MS: u64 = 86_400_000;
+    let (_directory, path) = database_path("project-usage");
+    let store = Store::open(&path).unwrap();
+
+    for (event_id, project_id, occurred_at) in [
+        ("pre-window", "project-a", 0),
+        ("a-first", "project-a", DAY_MS + 10),
+        ("a-second", "project-a", DAY_MS + 20),
+        ("b-first", "project-b", DAY_MS + 5),
+    ] {
+        store
+            .append_audit_event(audit_event(
+                event_id,
+                project_id,
+                "caller-a",
+                occurred_at,
+                occurred_at + 1_000,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let usage = store.project_usage(DAY_MS).await.unwrap();
+    assert_eq!(
+        usage,
+        vec![
+            ProjectUsage {
+                project_id: "project-a".to_owned(),
+                events: 2,
+                last_event_ms: DAY_MS + 20,
+            },
+            ProjectUsage {
+                project_id: "project-b".to_owned(),
+                events: 1,
+                last_event_ms: DAY_MS + 5,
+            },
+        ]
+    );
+
+    // `since` excludes the pre-window event entirely.
+    let all_time = store.project_usage(0).await.unwrap();
+    assert_eq!(all_time[0].events, 3);
+    assert_eq!(all_time[0].project_id, "project-a");
+
     store.shutdown().await.unwrap();
 }

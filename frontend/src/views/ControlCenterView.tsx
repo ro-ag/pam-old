@@ -9,6 +9,8 @@ import type {
   ModelImportParams,
   ModelStatusDto,
   PamBridge,
+  ProjectSummaryDto,
+  ProjectUsageDto,
 } from "../domain";
 import type { DaemonView } from "../selectors";
 import { presentError } from "../state";
@@ -123,12 +125,14 @@ function StatTile({
   );
 }
 
-export interface OverviewPanelProps {
-  bridge: PamBridge;
-  daemon: DaemonView;
+// Daemon-wide activity stats: one fetch shared by every panel that needs
+// them (overview heatmap, project usage), each rendering its own slice.
+export interface DaemonStatsState {
+  stats: DaemonStatsDto | null;
+  loadError: string | null;
 }
 
-export function OverviewPanel({ bridge, daemon }: OverviewPanelProps) {
+export function useDaemonStats(bridge: PamBridge, daemon: DaemonView): DaemonStatsState {
   const [stats, setStats] = useState<DaemonStatsDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -159,6 +163,17 @@ export function OverviewPanel({ bridge, daemon }: OverviewPanelProps) {
     };
   }, [load, offline]);
 
+  return { stats, loadError };
+}
+
+export interface OverviewPanelProps {
+  daemon: DaemonView;
+  stats: DaemonStatsDto | null;
+  loadError: string | null;
+}
+
+export function OverviewPanel({ daemon, stats, loadError }: OverviewPanelProps) {
+  const offline = daemon.state === "stopped";
   const todayStartMs = Math.floor(Date.now() / DAY_MS) * DAY_MS;
   const days = stats?.status === "ok" ? stats.days : [];
   const streaks = computeStreaks(days, todayStartMs);
@@ -685,9 +700,123 @@ function CallerRequestsPanel({
   );
 }
 
+function formatLastActive(lastEventMs: number | null): string {
+  if (lastEventMs === null) return "No activity yet";
+  const date = new Date(lastEventMs);
+  return Number.isNaN(date.valueOf())
+    ? "Date unavailable"
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+export interface ProjectUsageRow {
+  projectId: string;
+  name: string;
+  location: string | null;
+  events: number;
+  lastEventMs: number | null;
+}
+
+// The whole known fleet, not just the active project: every catalog project
+// appears (zero-usage ones included), plus any usage row PAM reports for a
+// project the catalog does not (yet) know about.
+export function aggregateProjectUsage(
+  catalog: ProjectSummaryDto[],
+  usage: ProjectUsageDto[],
+): ProjectUsageRow[] {
+  const rows = new Map<string, ProjectUsageRow>();
+  for (const project of catalog) {
+    rows.set(project.handle, {
+      projectId: project.handle,
+      name: project.name,
+      location: project.location,
+      events: 0,
+      lastEventMs: null,
+    });
+  }
+  for (const row of usage) {
+    const known = catalog.find((project) => project.handle === row.projectId);
+    rows.set(row.projectId, {
+      projectId: row.projectId,
+      name: known ? known.name : `${row.projectId.slice(0, 8)}…`,
+      location: known ? known.location : null,
+      events: row.events,
+      lastEventMs: row.lastEventMs,
+    });
+  }
+  return [...rows.values()].sort(
+    (left, right) => right.events - left.events || left.name.localeCompare(right.name),
+  );
+}
+
+interface ProjectsPanelProps {
+  daemon: DaemonView;
+  catalog: ProjectSummaryDto[];
+  stats: DaemonStatsDto | null;
+  loadError: string | null;
+}
+
+// The fleet overview: every project PAM knows about, at a glance, with no
+// selector — this screen never scopes to one project.
+function ProjectsPanel({ daemon, catalog, stats, loadError }: ProjectsPanelProps) {
+  const offline = daemon.state === "stopped";
+
+  // Defensive: an older daemon may not report `projects` yet.
+  const usage = stats?.status === "ok" ? stats.projects ?? [] : [];
+  const rows = aggregateProjectUsage(catalog, usage);
+  const maxEvents = Math.max(1, ...rows.map((row) => row.events));
+
+  return (
+    <section className="panel projects-panel" aria-labelledby="projects-panel-heading">
+      <div className="panel-title">
+        <div>
+          <span className="eyebrow">Projects</span>
+          <h2 id="projects-panel-heading">Usage by project</h2>
+        </div>
+      </div>
+      {loadError ? (
+        <p className="panel-empty" role="alert">
+          {loadError}
+        </p>
+      ) : offline ? (
+        <p className="panel-empty">Project usage returns when PAM is back on watch.</p>
+      ) : stats && stats.status !== "ok" ? (
+        <p className="panel-empty">
+          {[stats.failure.detail, stats.failure.recovery].filter(Boolean).join(" ")}
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="panel-empty">No projects are known to PAM yet.</p>
+      ) : (
+        <div className="project-usage-list">
+          {rows.map((row) => (
+            <article className="project-usage-row" key={row.projectId}>
+              <div className="project-usage-identity">
+                <strong title={row.name}>{row.name}</strong>
+                {row.location && <small title={row.location}>{row.location}</small>}
+              </div>
+              <div className="project-usage-bar-track" aria-hidden="true">
+                <div
+                  className="project-usage-bar-fill"
+                  style={{ width: `${Math.round((row.events / maxEvents) * 100)}%` }}
+                />
+              </div>
+              <div className="project-usage-meta">
+                <strong>
+                  {row.events.toLocaleString()} event{row.events === 1 ? "" : "s"}
+                </strong>
+                <small>{formatLastActive(row.lastEventMs)}</small>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export interface ControlCenterViewProps {
   bridge: PamBridge;
   daemon: DaemonView;
+  catalog?: ProjectSummaryDto[];
   modelStatus: ModelStatusDto | null;
   modelBusy: boolean;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
@@ -701,6 +830,7 @@ export interface ControlCenterViewProps {
 export function ControlCenterView({
   bridge,
   daemon,
+  catalog = [],
   modelStatus,
   modelBusy,
   onOpenModelChat,
@@ -710,6 +840,7 @@ export function ControlCenterView({
   registrationBusy = false,
   onRegisterCaller = () => {},
 }: ControlCenterViewProps) {
+  const { stats, loadError } = useDaemonStats(bridge, daemon);
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
@@ -718,7 +849,8 @@ export function ControlCenterView({
           <p>Everything PAM watches, at a glance.</p>
         </div>
       </header>
-      <OverviewPanel bridge={bridge} daemon={daemon} />
+      <OverviewPanel daemon={daemon} stats={stats} loadError={loadError} />
+      <ProjectsPanel daemon={daemon} catalog={catalog} stats={stats} loadError={loadError} />
       <ModelPanel
         bridge={bridge}
         daemon={daemon}

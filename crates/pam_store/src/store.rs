@@ -45,7 +45,7 @@ use crate::{
     MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES,
     MAX_FLOW_TRANSITION_BYTES, MAX_PROJECT_CURRENT_QUEUED,
     MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent,
-    ProjectPolicy, ProjectRequestSummary, ProjectWorkload, PutEvidence, PutGrant,
+    ProjectPolicy, ProjectRequestSummary, ProjectUsage, ProjectWorkload, PutEvidence, PutGrant,
     RecentAuditEvents, Replay, RequestSnapshot, RequestState, SaveFlowCheckpoint,
     SkillInventoryDrift, StoreError, StoredAgentArtifact, StoredResult, StoredSkillsAuditReport,
     TerminalState, UpsertConnectorConfig,
@@ -656,6 +656,24 @@ impl Store {
     pub async fn activity_days(&self, since_ms: u64) -> Result<Vec<ActivityDay>, StoreError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Audit(AuditCommand::Days {
+            since_ms,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Reads per-project audit-event totals since `since_ms`, ordered by
+    /// event count descending.
+    ///
+    /// Bounded to the busiest 64 projects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn project_usage(&self, since_ms: u64) -> Result<Vec<ProjectUsage>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Audit(AuditCommand::Projects {
             since_ms,
             response: response_tx,
         }))
@@ -1866,6 +1884,10 @@ enum AuditCommand {
         since_ms: u64,
         response: Response<Vec<ActivityDay>>,
     },
+    Projects {
+        since_ms: u64,
+        response: Response<Vec<ProjectUsage>>,
+    },
 }
 
 enum EvidenceCommand {
@@ -2221,6 +2243,9 @@ fn run_audit_command(connection: &mut Connection, command: AuditCommand) {
         }
         AuditCommand::Days { since_ms, response } => {
             respond(response, activity_days(connection, since_ms));
+        }
+        AuditCommand::Projects { since_ms, response } => {
+            respond(response, project_usage(connection, since_ms));
         }
     }
 }
@@ -3370,6 +3395,37 @@ fn activity_days(connection: &Connection, since_ms: u64) -> Result<Vec<ActivityD
         .collect::<Result<Vec<_>, _>>()?;
     days.reverse();
     Ok(days)
+}
+
+/// Newest projects served from a single usage scan.
+const MAX_PROJECT_USAGE_ROWS: usize = 64;
+
+fn project_usage(connection: &Connection, since_ms: u64) -> Result<Vec<ProjectUsage>, StoreError> {
+    let since = sql_integer(since_ms)?;
+    // ponytail: full window scan over audit_events, occurred_at index if it ever hurts
+    let mut statement = connection.prepare(
+        "SELECT project_id, COUNT(*), MAX(occurred_at_ms) FROM audit_events
+         WHERE occurred_at_ms >= ?1
+         GROUP BY project_id
+         ORDER BY COUNT(*) DESC
+         LIMIT ?2",
+    )?;
+    let projects = statement
+        .query_map(
+            params![
+                since,
+                i64::try_from(MAX_PROJECT_USAGE_ROWS).expect("bound fits")
+            ],
+            |row| {
+                Ok(ProjectUsage {
+                    project_id: row.get::<_, String>(0)?,
+                    events: row.get::<_, i64>(1)?.max(0).cast_unsigned(),
+                    last_event_ms: row.get::<_, i64>(2)?.max(0).cast_unsigned(),
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(projects)
 }
 
 fn export_audit_events(

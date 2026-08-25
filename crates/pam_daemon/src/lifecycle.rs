@@ -79,9 +79,10 @@ use pam_protocol::{
     ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
     ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
     ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
-    ProjectRequestSummary as ProtocolProjectRequestSummary, ReplayResult, RequestEnvelope,
-    RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability,
-    StatusResult, decode_request_envelope, decode_server_message_envelope, encode,
+    ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
+    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
+    SourceAvailability, StatusResult, decode_request_envelope, decode_server_message_envelope,
+    encode,
 };
 use pam_store::{
     AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
@@ -90,8 +91,8 @@ use pam_store::{
     CallerAuthentication, CallerRegistration, CancelOutcome, ConnectorRecord, ConnectorTestStatus,
     EventRecord, ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
     LeasedRequest, ProjectCurrent as StoreProjectCurrent,
-    ProjectRequestSummary as StoreProjectRequestSummary, Replay, RequestSnapshot, RequestState,
-    Store, StoreError, TerminalState,
+    ProjectRequestSummary as StoreProjectRequestSummary, ProjectUsage, Replay, RequestSnapshot,
+    RequestState, Store, StoreError, TerminalState,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::{
@@ -2394,8 +2395,16 @@ async fn handle_daemon_stats(
             return;
         }
     };
+    let projects = match store.project_usage(since).await {
+        Ok(projects) => projects,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return;
+        }
+    };
     let result = DaemonStatsResult {
         days: observed.into_iter().map(activity_day_summary).collect(),
+        projects: projects.into_iter().map(project_usage_summary).collect(),
     };
     send_routed(
         outbound,
@@ -2414,6 +2423,14 @@ const fn activity_day_summary(day: ActivityDay) -> ActivityDaySummary {
     ActivityDaySummary {
         day_start_ms: day.day_start_ms,
         events: day.events,
+    }
+}
+
+fn project_usage_summary(project: ProjectUsage) -> ProjectUsageSummary {
+    ProjectUsageSummary {
+        project_id: project.project_id,
+        events: project.events,
+        last_event_ms: project.last_event_ms,
     }
 }
 
