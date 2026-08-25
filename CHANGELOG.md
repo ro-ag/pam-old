@@ -4,6 +4,31 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-25
+
+### Added
+
+- The flow visual editor grew real canvas chrome: dotted background, themed
+  zoom in/out/fit controls, elbow (smoothstep) edges, pan-on-scroll with
+  bounded zoom, a roomier auto-layout, and a catalog toggle that collapses
+  the definitions column for a wider canvas. Styling follows both theme
+  families through xyflow's theme variables.
+
+### Fixed
+
+- The window can actually be moved by its title bar again: the main-window
+  capability never granted `core:window:allow-start-dragging`, so drag
+  attempts were silently denied and fell through to text selection. The
+  toolbar and the sidebar brand are now deep drag regions (buttons stay
+  clickable), and double-click maximize is permitted alongside.
+- Interface chrome text is no longer selectable; inputs, code, diffs, and
+  console output stay copyable.
+- At phone-narrow widths (≤600px) the stacked sidebar no longer overflows
+  the viewport horizontally: the navigation row scrolls inside the bar
+  instead of pushing the whole page wide.
+- The Playwright visual contract was repaired for the project-free shell
+  and every macOS snapshot regenerated; the suite is green again (24/24).
+
 ## [0.4.0] - 2026-08-25
 
 ### Added
