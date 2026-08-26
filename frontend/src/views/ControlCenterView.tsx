@@ -608,6 +608,15 @@ const KNOWN_SPDX_LICENSES: Record<string, string> = {
   "GPL-3.0": "https://www.gnu.org/licenses/gpl-3.0.html",
 };
 
+// GGUF metadata and Hugging Face license tags usually spell the id in
+// lowercase; map onto the canonical SPDX key when one matches.
+function canonicalSpdxId(licenseId: string): string {
+  return (
+    Object.keys(KNOWN_SPDX_LICENSES).find((id) => id.toLowerCase() === licenseId.toLowerCase()) ??
+    licenseId
+  );
+}
+
 // The manual path: point PAM at an already-downloaded GGUF. License fields
 // collapse behind Advanced since most imports reuse the same license across
 // re-imports; drag-drop still fills the path on the native shell.
@@ -748,7 +757,11 @@ function ManualImport({
         // auto-fillable: if the user already typed a different license ID,
         // filling in the detected file's URL/notice would describe the
         // wrong license, so both stay untouched too.
-        const prefillLicense = (licenseId: string, fileName: string) => {
+        const prefillLicense = (rawLicenseId: string, fileName: string) => {
+          // GGUF metadata and Hugging Face tags usually carry the id in
+          // lowercase ("apache-2.0"); canonicalize case-insensitively so the
+          // known SPDX URL and notice prefill either way.
+          const licenseId = canonicalSpdxId(rawLicenseId);
           const knownUrl = KNOWN_SPDX_LICENSES[licenseId];
           const notice = knownUrl ? `${fileName} is distributed under the ${licenseId} license at ${knownUrl}.` : null;
           setForm((current) => {
@@ -784,10 +797,7 @@ function ManualImport({
             const found = await bridge.modelLicenseDiscover(withDaemonOperation(), query);
             if (sequence !== inspectSequence.current) return;
             if (found.status === "ok") {
-              const canonical =
-                Object.keys(KNOWN_SPDX_LICENSES).find(
-                  (id) => id.toLowerCase() === found.licenseId.toLowerCase(),
-                ) ?? found.licenseId;
+              const canonical = canonicalSpdxId(found.licenseId);
               setDiscovery({ state: "found", repoId: found.repoId, licenseId: canonical });
               prefillLicense(canonical, response.fileName);
             } else {

@@ -1023,7 +1023,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           // Only the dedicated "licensed" fixture path declares a GGUF
           // license, so tests exercising the missing-license-fields flow on
           // an ordinary path are unaffected by license auto-prefill.
-          license: path.endsWith("licensed.gguf") ? "Apache-2.0" : null,
+          // Lowercase, as real GGUF metadata usually spells it — the form
+          // canonicalizes onto the SPDX id.
+          license: path.endsWith("licensed.gguf") ? "apache-2.0" : null,
           belowFloor: false,
           floorBytes: 17_000_000_000,
         });
