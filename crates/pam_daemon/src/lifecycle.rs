@@ -441,7 +441,7 @@ where
             completed = handlers.join_next(), if !handlers.is_empty() => {
                 ServeAction::HandlerCompleted(completed)
             }
-            completed = &mut scheduler => {
+            completed = &mut scheduler, if !scheduler_joined => {
                 scheduler_joined = true;
                 ServeAction::SchedulerCompleted(completed)
             }

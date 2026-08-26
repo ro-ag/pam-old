@@ -29,6 +29,10 @@ pub const MAX_VERSION_DIFF_LINES: usize = 1_024;
 const MAX_SELECTOR_BYTES: usize = 256;
 const MAX_VALIDATION_MESSAGE_BYTES: usize = 2_048;
 const SAVE_TEMP_ATTEMPTS: u64 = 8;
+/// Backoff between advisory-lock retries: a cooperating writer holds the
+/// lock only for the brief verify-write-rename window, so a short sleep
+/// lets a transient contender finish instead of failing the whole save.
+const SAVE_LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 const MAX_FLOW_OWNED_ARTIFACTS: usize = MAX_FLOW_CATALOG_ENTRIES;
 const MAX_FLOW_DIRECTORY_ENTRIES: usize = MAX_FLOW_CATALOG_ENTRIES + MAX_FLOW_OWNED_ARTIFACTS;
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -1169,7 +1173,7 @@ fn atomic_save(
 }
 
 fn acquire_save_lock(pam_directory: &Dir) -> Result<std::fs::File, FlowEditorError> {
-    for _ in 0..SAVE_TEMP_ATTEMPTS {
+    for attempt in 0..SAVE_TEMP_ATTEMPTS {
         let mut create_options = OpenOptions::new();
         create_options
             .read(true)
@@ -1213,8 +1217,16 @@ fn acquire_save_lock(pam_directory: &Dir) -> Result<std::fs::File, FlowEditorErr
                     )));
                 }
                 let lock = file.into_std();
-                try_lock_save_file(&lock)?;
-                return Ok(lock);
+                match try_lock_save_file(&lock) {
+                    Ok(()) => return Ok(lock),
+                    // A cooperating writer holds this lock only for its brief
+                    // verify-write-rename window: back off and recheck rather
+                    // than failing the save on a transient hold.
+                    Err(FlowEditorError::SaveBusy) if attempt + 1 < SAVE_TEMP_ATTEMPTS => {
+                        std::thread::sleep(SAVE_LOCK_RETRY_DELAY);
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(FlowEditorError::Write(error)),

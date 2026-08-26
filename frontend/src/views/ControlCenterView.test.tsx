@@ -317,6 +317,23 @@ describe("model runtime panel", () => {
     expect(note).not.toHaveAttribute("role", "alert");
   });
 
+  it("reveals the license fields and explains, instead of a dead Import button", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/tmp/model.gguf");
+    await userEvent.clear(within(panel).getByLabelText("Model identity"));
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "vendor/model");
+    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/).slice(-1)[0]);
+    await userEvent.click(within(panel).getByRole("button", { name: "Import model" }));
+
+    expect(await within(panel).findByRole("alert")).toHaveTextContent(/under Advanced/);
+    // The disclosure opened so the named fields are visible for filling.
+    expect(within(panel).getByLabelText("License identifier")).toBeVisible();
+    expect(props.onModelImported).not.toHaveBeenCalled();
+  });
+
   it("lists the curated presets from the fixture, with a fit hint per option", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);
