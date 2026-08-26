@@ -274,7 +274,7 @@ type VerifyState =
 
 type ImportState =
   | { state: "idle" }
-  | { state: "running" }
+  | { state: "running"; stage: "hashing" | "registering"; hashedBytes: number; totalBytes: number }
   | { state: "fail"; detail: string };
 
 type DownloadPhase = "idle" | "running" | "complete" | "failed";
@@ -605,6 +605,72 @@ function ManualImport({
   const autoFilledLicenseIdRef = useRef<string | null>(null);
   const autoFilledLicenseUrlRef = useRef<string | null>(null);
   const autoFilledLicenseNoticeRef = useRef<string | null>(null);
+  // Reattach to an import the daemon is already hashing: the import manager
+  // is single-flight and keeps running even if this component (or the whole
+  // view) remounts, so a fresh mount checks in before assuming idle.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await bridge.modelImportStatus(withDaemonOperation());
+        if (cancelled || status.status !== "running") return;
+        setImportState({
+          state: "running",
+          stage: status.stage ?? "hashing",
+          hashedBytes: status.hashedBytes,
+          totalBytes: status.totalBytes,
+        });
+      } catch {
+        // Reattachment is an enhancement; the form still works without it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Reattachment only ever happens once, on mount.
+  }, [bridge]);
+
+  // Poll while an import is running; the manager hashes in the background
+  // (off the desktop command gate) and reports its own progress, exactly
+  // like the download manager. A stale "idle" is ignored rather than
+  // clearing state a concurrent submit may have just set.
+  useEffect(() => {
+    if (importState.state !== "running") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await bridge.modelImportStatus(withDaemonOperation());
+        if (cancelled) return;
+        if (status.status === "running") {
+          setImportState({
+            state: "running",
+            stage: status.stage ?? "hashing",
+            hashedBytes: status.hashedBytes,
+            totalBytes: status.totalBytes,
+          });
+        } else if (status.status === "complete") {
+          setImportState({ state: "idle" });
+          onImported();
+        } else if (status.status === "failed") {
+          setImportState({
+            state: "fail",
+            detail:
+              [status.failure?.detail, status.failure?.recovery].filter(Boolean).join(" ") ||
+              "The import failed partway through.",
+          });
+        }
+      } catch (error) {
+        if (!cancelled) setImportState({ state: "fail", detail: presentError(error) });
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [importState.state, bridge, onImported]);
+
   const set = (field: keyof typeof form) => (value: string) => {
     if (field === "model") autoFilledModelRef.current = null;
     if (field === "licenseId") autoFilledLicenseIdRef.current = null;
@@ -722,6 +788,11 @@ function ManualImport({
     };
   }, [bridge]);
 
+  const importPercent =
+    importState.state === "running" && importState.totalBytes > 0
+      ? Math.min(100, Math.round((importState.hashedBytes / importState.totalBytes) * 100))
+      : 0;
+
   const missingLicenseFields = [
     form.licenseId.trim() === "" && "license identifier",
     form.licenseUrl.trim() === "" && "license URL",
@@ -742,7 +813,7 @@ function ManualImport({
       });
       return;
     }
-    setImportState({ state: "running" });
+    setImportState({ state: "running", stage: "hashing", hashedBytes: 0, totalBytes: 0 });
     const params: ModelImportParams = {
       model: form.model.trim(),
       path: form.path.trim(),
@@ -752,11 +823,10 @@ function ManualImport({
       allowSmall,
     };
     try {
+      // The starter returns immediately; the polling effect above carries
+      // the run through hashing and registration to its terminal state.
       const response = await bridge.modelImport(withDaemonOperation(), params);
-      if (response.status === "ok") {
-        setImportState({ state: "idle" });
-        onImported();
-      } else {
+      if (response.status !== "ok") {
         setImportState({
           state: "fail",
           detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
@@ -886,8 +956,27 @@ function ManualImport({
         <button type="submit" className="button button--primary button--small" disabled={!ready || busy}>
           {busy ? "Verifying and registering…" : "Import model"}
         </button>
-        {busy && <small>PAM reads and hashes the whole file; large models take a moment.</small>}
+        {busy && <small>PAM reads and hashes the whole file in the background; the rest of the app stays responsive.</small>}
       </div>
+      {importState.state === "running" && importState.stage === "hashing" && importState.totalBytes > 0 && (
+        <div className="model-download-progress">
+          <div
+            className="model-download-track"
+            role="progressbar"
+            aria-valuenow={importPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="model-download-fill" style={{ width: `${importPercent}%` }} />
+          </div>
+          <small>
+            Hashing {formatModelSize(importState.hashedBytes)} of {formatModelSize(importState.totalBytes)} · {importPercent}%
+          </small>
+        </div>
+      )}
+      {importState.state === "running" && importState.stage === "registering" && (
+        <p className="model-note" role="status">Registering — verifying the copy…</p>
+      )}
       {importState.state === "fail" && (
         <p className="model-verify is-fail" role="alert">{importState.detail}</p>
       )}

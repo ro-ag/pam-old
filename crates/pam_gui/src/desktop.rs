@@ -48,7 +48,8 @@ use crate::{
         host_memory_total_bytes,
     },
     model_import::{
-        MIN_RECOMMENDED_MODEL_BYTES, ModelImportParams, run_model_import, run_model_inspect,
+        MIN_RECOMMENDED_MODEL_BYTES, ModelImportManager, ModelImportParams, ModelImportStage,
+        ModelImportStatusKind, run_model_inspect,
     },
     model_presets,
     observatory::{
@@ -776,6 +777,9 @@ pub struct ModelUsageDto {
     pub emitted_output_tokens: u32,
 }
 
+/// Starts a background import. Like [`ModelDownloadDto`], business refusals
+/// (bad path, already running) are `Unavailable` data, not an `Err`; the
+/// import itself is polled through [`ModelImportStatusDto`].
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "status",
@@ -783,9 +787,36 @@ pub struct ModelUsageDto {
     rename_all_fields = "camelCase"
 )]
 pub enum ModelImportDto {
-    Ok { model: ModelSummaryDto },
+    Ok,
     Blocked { failure: FailureDto },
     Unavailable { failure: FailureDto },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelImportStatusKindDto {
+    Idle,
+    Running,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelImportStageDto {
+    Hashing,
+    Registering,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelImportStatusDto {
+    pub status: ModelImportStatusKindDto,
+    pub model: Option<String>,
+    pub stage: Option<ModelImportStageDto>,
+    pub hashed_bytes: u64,
+    pub total_bytes: u64,
+    pub failure: Option<FailureDto>,
 }
 
 /// Pre-import preview of a candidate GGUF for the Control Center's manual
@@ -1027,6 +1058,7 @@ pub struct DesktopCore {
     inner: Arc<Mutex<DesktopState>>,
     command_gate: Arc<Mutex<()>>,
     downloads: Arc<ModelDownloadManager>,
+    imports: Arc<ModelImportManager>,
 }
 
 impl fmt::Debug for DesktopCore {
@@ -1103,6 +1135,7 @@ impl DesktopCore {
             })),
             command_gate: Arc::new(Mutex::new(())),
             downloads: ModelDownloadManager::new(),
+            imports: ModelImportManager::new(),
         }
     }
 
@@ -1845,13 +1878,12 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Imports a user-owned GGUF entirely from the GUI: PAM hashes the file
-    /// and the accepted license notice itself, verifies the artifact through
-    /// the shared import path, and registers it durably.
-    ///
-    /// This is a local administrative operation on the user's own store, like
-    /// the skill library actions; import failures are returned as bounded
-    /// unavailable data, never raw internals.
+    /// Starts a guided background import of a user-owned GGUF: PAM hashes
+    /// the file and the accepted license notice itself, verifies the
+    /// artifact through the shared import path, and registers it durably —
+    /// all off the command gate, so hashing a multi-GB file never starves
+    /// the rest of the GUI. Business refusals (already running) come back as
+    /// `ModelImportDto::Unavailable`, not an `Err`; only fence problems do.
     ///
     /// # Errors
     ///
@@ -1863,20 +1895,56 @@ impl DesktopCore {
     ) -> DesktopResult<ModelImportDto> {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
-        let data = match run_model_import(params).await {
-            Ok(registered) => ModelImportDto::Ok {
-                model: ModelSummaryDto {
-                    model_id: bounded_detail(registered.key.id()),
-                    size_bytes: registered.size_bytes,
-                },
-            },
+        let data = match Arc::clone(&self.imports).start(params) {
+            Ok(()) => ModelImportDto::Ok,
             Err(failure) => ModelImportDto::Unavailable {
                 failure: unavailable_failure(
-                    Some("model_import_failed".to_owned()),
+                    Some("import_already_running".to_owned()),
                     failure.detail,
                     failure.recovery,
                 ),
             },
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Polls the current guided import status. There is no event bus in this
+    /// codebase, so the GUI polls this instead of receiving progress —
+    /// exactly like [`Self::model_download_status`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_import_status(
+        &self,
+        fence: CommandFence,
+    ) -> DesktopResult<ModelImportStatusDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let snapshot = self.imports.snapshot();
+        let data = ModelImportStatusDto {
+            status: match snapshot.status {
+                ModelImportStatusKind::Idle => ModelImportStatusKindDto::Idle,
+                ModelImportStatusKind::Running => ModelImportStatusKindDto::Running,
+                ModelImportStatusKind::Complete => ModelImportStatusKindDto::Complete,
+                ModelImportStatusKind::Failed => ModelImportStatusKindDto::Failed,
+            },
+            model: snapshot.model.map(bounded_detail),
+            stage: snapshot.stage.map(|stage| match stage {
+                ModelImportStage::Hashing => ModelImportStageDto::Hashing,
+                ModelImportStage::Registering => ModelImportStageDto::Registering,
+            }),
+            hashed_bytes: snapshot.hashed_bytes,
+            total_bytes: snapshot.total_bytes,
+            failure: snapshot.failure.map(|failure| {
+                unavailable_failure(
+                    Some("model_import_failed".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                )
+            }),
         };
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
@@ -4137,6 +4205,7 @@ pub(crate) fn active_core_at_for_test(
         inner: Arc::new(Mutex::new(state)),
         command_gate: Arc::new(Mutex::new(())),
         downloads: ModelDownloadManager::new(),
+        imports: ModelImportManager::new(),
     }
 }
 

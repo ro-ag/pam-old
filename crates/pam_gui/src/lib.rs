@@ -53,11 +53,12 @@ pub use desktop::{
     FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto, FlowReviewDataDto, FlowReviewDto,
     FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto, FlowVersionDiffLineDto, FlowWorkspaceDataDto,
     FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
-    ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelImportDto, ModelInferDto,
-    ModelInspectDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
-    ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto,
-    ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto,
-    SnapshotDto, SnapshotFence, TimelineFactDto, TimelineKindDto,
+    ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelImportDto, ModelImportStageDto,
+    ModelImportStatusDto, ModelImportStatusKindDto, ModelInferDto, ModelInspectDto,
+    ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto, ModelStatusDto,
+    ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto, ProjectHandle,
+    ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto,
+    SnapshotFence, TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential

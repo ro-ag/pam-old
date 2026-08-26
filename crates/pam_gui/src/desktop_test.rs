@@ -646,6 +646,27 @@ async fn model_download_reports_an_unknown_preset_as_unavailable_data_not_an_err
 }
 
 #[tokio::test]
+async fn model_import_status_defaults_to_idle() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_import_status(daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap(),
+        serde_json::json!({
+            "status": "idle",
+            "model": null,
+            "stage": null,
+            "hashedBytes": 0,
+            "totalBytes": 0,
+            "failure": null
+        })
+    );
+}
+
+#[tokio::test]
 async fn model_download_status_defaults_to_idle() {
     let core = DesktopCore::new("/bounded/test");
     let dto = core
@@ -1205,6 +1226,21 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     assert_daemon_replay_conflict(core.start_daemon(fence(), None).await);
     assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
     assert_daemon_replay_conflict(core.model_presets(fence()).await);
+    assert_daemon_replay_conflict(
+        core.model_import(
+            fence(),
+            crate::model_import::ModelImportParams {
+                model: "vendor/model".to_owned(),
+                path: "/bounded/test/model.gguf".into(),
+                license_id: "Apache-2.0".to_owned(),
+                license_url: "https://example.test/license".to_owned(),
+                license_notice_text: "notice".to_owned(),
+                allow_small: true,
+            },
+        )
+        .await,
+    );
+    assert_daemon_replay_conflict(core.model_import_status(fence()).await);
     assert_daemon_replay_conflict(
         core.model_download(fence(), "qwen3-coder-30b-q4ks".to_owned())
             .await,

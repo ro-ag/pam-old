@@ -29,6 +29,7 @@ import type {
   ModelDownloadStatusDto,
   ModelFailureDto,
   ModelImportDto,
+  ModelImportStatusDto,
   ModelInspectDto,
   ModelInferDto,
   ModelPresetDto,
@@ -734,6 +735,17 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   // "model-download-fail" fails the first attempt (mirroring a dropped
   // connection) so a retry can then be driven through to a real completion.
   let downloadAttempts = 0;
+  // One import at a time, tracked globally like the real import manager;
+  // each poll advances the hash a fixed step, then spends one poll in the
+  // indeterminate registering stage before completing.
+  let importRun: {
+    model: string;
+    hashedBytes: number;
+    totalBytes: number;
+    stage: "hashing" | "registering";
+    status: "running" | "complete" | "failed";
+    failure: ModelFailureDto | null;
+  } | null = null;
   let modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
   let logsSizeBytes = FIXTURE_LOGS_SIZE_BYTES;
   const appSettingsSnapshot = (): AppSettingsDto => ({
@@ -926,9 +938,51 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           },
         };
       }
-      const imported: ModelSummaryDto = { modelId: params.model, sizeBytes: 4_600_000_000 };
-      modelCatalog.push(imported);
-      return clone({ status: "ok" as const, model: imported });
+      if (importRun?.status === "running") {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "import_already_running",
+            detail: "A model import is already running.",
+            recovery: "Wait for the current import to finish, then retry.",
+          },
+        };
+      }
+      importRun = {
+        model: params.model,
+        hashedBytes: 0,
+        totalBytes: 4_600_000_000,
+        stage: "hashing",
+        status: "running",
+        failure: null,
+      };
+      return { status: "ok" };
+    },
+    async modelImportStatus(_fence): Promise<ModelImportStatusDto> {
+      if (!importRun) {
+        return { status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, failure: null };
+      }
+      if (importRun.status === "running") {
+        if (importRun.stage === "hashing") {
+          importRun.hashedBytes = Math.min(
+            importRun.totalBytes,
+            importRun.hashedBytes + Math.ceil(importRun.totalBytes * 0.4),
+          );
+          if (importRun.hashedBytes >= importRun.totalBytes) importRun.stage = "registering";
+        } else {
+          importRun.status = "complete";
+          modelCatalog.push({ modelId: importRun.model, sizeBytes: importRun.totalBytes });
+        }
+      }
+      return clone({
+        status: importRun.status,
+        model: importRun.model,
+        stage: importRun.status === "running" ? importRun.stage : null,
+        hashedBytes: importRun.hashedBytes,
+        totalBytes: importRun.totalBytes,
+        failure: importRun.failure,
+      });
     },
     async modelInspect(_fence, path): Promise<ModelInspectDto> {
       const fileName = path.split("/").pop() ?? path;

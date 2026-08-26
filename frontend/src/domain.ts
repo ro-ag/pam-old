@@ -556,9 +556,21 @@ export interface ModelImportParams {
   allowSmall: boolean;
 }
 
+// Starting an import only acknowledges the background run; completion and
+// failure arrive through ModelImportStatusDto polls.
 export type ModelImportDto =
-  | { status: "ok"; model: ModelSummaryDto }
+  | { status: "ok" }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export interface ModelImportStatusDto {
+  status: "idle" | "running" | "complete" | "failed";
+  model: string | null;
+  /** "hashing" carries live bytes; "registering" is indeterminate. */
+  stage: "hashing" | "registering" | null;
+  hashedBytes: number;
+  totalBytes: number;
+  failure: ModelFailureDto | null;
+}
 
 export type ModelInspectDto =
   | {
@@ -684,6 +696,7 @@ export interface PamBridge {
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
+  modelImportStatus(fence: CommandFence): Promise<ModelImportStatusDto>;
   modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
   modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
   modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
