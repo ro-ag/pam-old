@@ -2,6 +2,7 @@ import type {
   ActivityDto,
   ActivityEventDto,
   ApprovalDecision,
+  AppSettingsDto,
   CallerDto,
   CallersDto,
   CatalogDto,
@@ -349,6 +350,13 @@ const modelPresets: ModelPresetDto[] = [
 // below-minimum states override hostMemory instead.
 const FIXTURE_HOST_MEMORY_BYTES = 34_359_738_368;
 const FIXTURE_SUPPORTED_MINIMUM_BYTES = 34_359_738_368;
+
+// Settings v1 is global, so these locations never depend on the scenario's
+// active project.
+const FIXTURE_DEFAULT_MODELS_DIR = "/Users/fixture/llm";
+const FIXTURE_DATA_DIR = "/Users/fixture/Library/Application Support/dev.PAM.PAM";
+const FIXTURE_LOGS_DIR = `${FIXTURE_DATA_DIR}/logs`;
+const FIXTURE_LOGS_SIZE_BYTES = 842_318;
 
 const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
 
@@ -725,6 +733,15 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   // "model-download-fail" fails the first attempt (mirroring a dropped
   // connection) so a retry can then be driven through to a real completion.
   let downloadAttempts = 0;
+  let modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
+  let logsSizeBytes = FIXTURE_LOGS_SIZE_BYTES;
+  const appSettingsSnapshot = (): AppSettingsDto => ({
+    modelsDir,
+    modelsDirIsDefault: modelsDir === FIXTURE_DEFAULT_MODELS_DIR,
+    dataDir: FIXTURE_DATA_DIR,
+    logsDir: FIXTURE_LOGS_DIR,
+    logsSizeBytes,
+  });
   let savedSource = flowSource;
   const connectors: ConnectorSummaryDto[] = [
     scenario === "connector-unconfigured" || scenario === "connector-blocked"
@@ -1014,6 +1031,28 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     },
     async hostMemory(_fence): Promise<HostMemoryDto> {
       return { totalBytes: FIXTURE_HOST_MEMORY_BYTES, supportedMinimumBytes: FIXTURE_SUPPORTED_MINIMUM_BYTES };
+    },
+    async appSettings(_fence): Promise<AppSettingsDto> {
+      return clone(appSettingsSnapshot());
+    },
+    async settingsUpdate(_fence, requestedModelsDir): Promise<AppSettingsDto> {
+      if (requestedModelsDir !== null) {
+        if (!requestedModelsDir.startsWith("/")) {
+          throw new Error("The models directory must be an absolute path with no `..` segments.");
+        }
+        modelsDir = requestedModelsDir;
+      } else {
+        modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
+      }
+      return clone(appSettingsSnapshot());
+    },
+    async logsDelete(_fence): Promise<AppSettingsDto> {
+      logsSizeBytes = 0;
+      return clone(appSettingsSnapshot());
+    },
+    async revealPath(_fence, path): Promise<void> {
+      const known = [modelsDir, FIXTURE_DATA_DIR, FIXTURE_LOGS_DIR];
+      if (!known.includes(path)) throw new Error("This path is not a PAM Settings location.");
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {

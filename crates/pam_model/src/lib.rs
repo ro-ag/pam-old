@@ -38,7 +38,9 @@ pub use model::{
     CALIBRATED_ARTIFACTS, CalibratedArtifact, GgufMetadata, LicenseConsent, LicenseSnapshot,
     ModelDescriptor, ModelKey, ModelSource, RegisteredModel, is_calibrated_artifact,
 };
-pub use path::{default_model_path, validate_model_filename};
+pub use path::{
+    default_model_path, model_path_under, validate_absolute_unicode_path, validate_model_filename,
+};
 pub use runtime::{
     CancellationSignal, CancellationToken, ModelRuntime, RuntimeError, RuntimeFinishReason,
     RuntimeFlashAttention, RuntimeGpuOffload, RuntimeHostAdmission, RuntimeHostSnapshot,

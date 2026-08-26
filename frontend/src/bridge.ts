@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActivityDto,
+  AppSettingsDto,
   BootstrapResponse,
   ApprovalDecisionResponseDto,
   CallersDto,
@@ -165,6 +166,17 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       invokeCommand<ModelDownloadStatusDto>("model_download_status", request(flatFence(fence))),
     hostMemory: (fence) =>
       invokeCommand<HostMemoryDto>("host_memory", request(flatFence(fence))),
+    appSettings: (fence) =>
+      invokeCommand<AppSettingsDto>("app_settings", request(flatFence(fence))),
+    settingsUpdate: (fence, modelsDir) =>
+      invokeCommand<AppSettingsDto>("settings_update", request({
+        ...flatFence(fence),
+        modelsDir,
+      })),
+    logsDelete: (fence) =>
+      invokeCommand<AppSettingsDto>("logs_delete", request(flatFence(fence))),
+    revealPath: (fence, path) =>
+      invokeCommand<void>("reveal_path", request({ ...flatFence(fence), path })),
     activateProject: (projectHandle, operationId) =>
       invokeCommand<SnapshotDto>(
         "activate_project",

@@ -189,6 +189,29 @@ describe("Tauri bridge ABI", () => {
     ]);
   });
 
+  it("keeps the Settings commands on the fixed request ABI", async () => {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    const invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
+      calls.push([command, args]);
+      return {} as T;
+    };
+    const bridge = createTauriBridge(invoke);
+
+    await bridge.appSettings(fence);
+    await bridge.settingsUpdate(fence, "/Volumes/external/models");
+    await bridge.settingsUpdate(fence, null);
+    await bridge.logsDelete(fence);
+    await bridge.revealPath(fence, "/Users/example/llm");
+
+    expect(calls).toEqual([
+      ["app_settings", { request: fence }],
+      ["settings_update", { request: { ...fence, modelsDir: "/Volumes/external/models" } }],
+      ["settings_update", { request: { ...fence, modelsDir: null } }],
+      ["logs_delete", { request: fence }],
+      ["reveal_path", { request: { ...fence, path: "/Users/example/llm" } }],
+    ]);
+  });
+
   it("compares all three fence fields", () => {
     expect(sameFence(fence, { ...fence })).toBe(true);
     expect(sameFence(fence, { ...fence, generation: "33333333-3333-4333-8333-333333333333" })).toBe(false);

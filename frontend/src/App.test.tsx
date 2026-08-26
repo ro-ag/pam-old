@@ -183,7 +183,7 @@ describe("daemon observatory", () => {
     expect(screen.getByRole("button", { name: "Retry safely" })).toBeEnabled();
   });
 
-  it("supports keyboard resizing, the seven view shortcuts, and Escape drawer recovery", async () => {
+  it("supports keyboard resizing, the eight view shortcuts, and Escape drawer recovery", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge()} />);
     await screen.findByRole("heading", { name: "Control center" });
@@ -205,6 +205,8 @@ describe("daemon observatory", () => {
     expect(await screen.findByRole("heading", { name: "Console" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "7", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "8", metaKey: true });
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
 

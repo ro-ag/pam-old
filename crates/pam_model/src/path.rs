@@ -21,6 +21,25 @@ pub fn validate_model_filename(filename: &str) -> Result<(), ModelError> {
     Ok(())
 }
 
+/// Returns `<root>/<vendor>/<filename>` without creating it. `root` is
+/// caller-chosen: [`default_model_path`] passes `<home>/llm`, and PAM's
+/// Settings-configured custom download directory passes its own root
+/// directly.
+///
+/// # Errors
+///
+/// Returns an error when `root` is not an absolute Unicode path or the
+/// filename is unsafe.
+pub fn model_path_under(
+    root: &Path,
+    key: &ModelKey,
+    filename: &str,
+) -> Result<PathBuf, ModelError> {
+    validate_absolute_unicode_path(root)?;
+    validate_model_filename(filename)?;
+    Ok(root.join(key.vendor()).join(filename))
+}
+
 /// Returns `<home>/llm/<vendor>/<filename>` without creating it.
 ///
 /// # Errors
@@ -32,12 +51,18 @@ pub fn default_model_path(
     key: &ModelKey,
     filename: &str,
 ) -> Result<PathBuf, ModelError> {
-    validate_absolute_unicode_path(home)?;
-    validate_model_filename(filename)?;
-    Ok(home.join("llm").join(key.vendor()).join(filename))
+    model_path_under(&home.join("llm"), key, filename)
 }
 
-pub(crate) fn validate_absolute_unicode_path(path: &Path) -> Result<(), ModelError> {
+/// Validates an absolute, non-parent-traversing Unicode path. Shared by the
+/// default `<home>/llm` model root and PAM's Settings-configured custom
+/// models directory.
+///
+/// # Errors
+///
+/// Returns [`ModelError::InvalidPath`] when `path` is relative, not valid
+/// Unicode, or contains a `..` component.
+pub fn validate_absolute_unicode_path(path: &Path) -> Result<(), ModelError> {
     if !path.is_absolute()
         || path.to_str().is_none()
         || path

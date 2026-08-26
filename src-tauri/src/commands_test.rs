@@ -5,7 +5,8 @@ use pam_gui::SkillLibraryRequest;
 use crate::commands::{
     ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest,
     ConnectorConfigureRequest, ConnectorTestRequest, FencedRequest, FlowComposeRequest,
-    FlowGraphRequest, ModelImportRequest, ModelInferRequest,
+    FlowGraphRequest, ModelImportRequest, ModelInferRequest, RevealPathRequest,
+    SettingsUpdateRequest,
 };
 
 const PROJECT_HANDLE: &str = "88d408ec-796b-4f56-b34c-f2a8d25f9128";
@@ -381,6 +382,58 @@ fn flow_graph_request_accepts_only_the_fence_and_source_text() {
 
     assert!(serde_json::from_value::<FlowGraphRequest>(valid).is_ok());
     assert!(serde_json::from_value::<FlowGraphRequest>(ambient_path).is_err());
+}
+
+#[test]
+fn settings_update_request_accepts_a_null_or_present_models_dir_and_rejects_unknown_fields() {
+    let clearing = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID
+    });
+    let setting = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "modelsDir": "/Users/example/llm"
+    });
+    let ambient = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "modelsDir": "/Users/example/llm",
+        "logsDir": "/tmp/untrusted"
+    });
+
+    assert!(serde_json::from_value::<SettingsUpdateRequest>(clearing).is_ok());
+    assert!(serde_json::from_value::<SettingsUpdateRequest>(setting).is_ok());
+    assert!(serde_json::from_value::<SettingsUpdateRequest>(ambient).is_err());
+}
+
+#[test]
+fn reveal_path_request_requires_a_path_and_rejects_unknown_fields() {
+    let valid = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "path": "/Users/example/llm"
+    });
+    let missing_path = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID
+    });
+    let ambient = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "path": "/Users/example/llm",
+        "reveal": true
+    });
+
+    assert!(serde_json::from_value::<RevealPathRequest>(valid).is_ok());
+    assert!(serde_json::from_value::<RevealPathRequest>(missing_path).is_err());
+    assert!(serde_json::from_value::<RevealPathRequest>(ambient).is_err());
 }
 
 #[test]

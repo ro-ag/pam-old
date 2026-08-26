@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use super::{ModelError, ModelKey, default_model_path, validate_model_filename};
+use super::{
+    ModelError, ModelKey, default_model_path, model_path_under, validate_absolute_unicode_path,
+    validate_model_filename,
+};
 
 #[test]
 fn default_location_is_user_owned_home_llm_vendor_filename() {
@@ -35,4 +38,33 @@ fn default_location_requires_an_absolute_unicode_home() {
         default_model_path(Path::new("relative"), &key, "model.gguf"),
         Err(ModelError::InvalidPath)
     ));
+}
+
+#[test]
+fn model_path_under_joins_a_caller_chosen_root() {
+    let key = ModelKey::new("qwen", "qwen3.6-35b").unwrap();
+    assert_eq!(
+        model_path_under(
+            Path::new("/Volumes/external/models"),
+            &key,
+            "qwen3.6-35b-q4.gguf"
+        )
+        .unwrap(),
+        PathBuf::from("/Volumes/external/models/qwen/qwen3.6-35b-q4.gguf")
+    );
+}
+
+#[test]
+fn model_path_under_rejects_a_relative_root() {
+    let key = ModelKey::new("vendor", "model").unwrap();
+    assert!(matches!(
+        model_path_under(Path::new("relative"), &key, "model.gguf"),
+        Err(ModelError::InvalidPath)
+    ));
+}
+
+#[test]
+fn absolute_unicode_path_rejects_parent_traversal() {
+    assert!(validate_absolute_unicode_path(Path::new("/a/../b")).is_err());
+    assert!(validate_absolute_unicode_path(Path::new("/a/b")).is_ok());
 }
