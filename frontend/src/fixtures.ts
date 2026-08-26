@@ -32,6 +32,7 @@ import type {
   ModelImportStatusDto,
   ModelInspectDto,
   ModelInferDto,
+  ModelLicenseDiscoveryDto,
   ModelPresetDto,
   ModelPresetsDto,
   ModelStatusDto,
@@ -998,6 +999,20 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           floorBytes: 17_000_000_000,
         });
       }
+      if (path.endsWith("community.gguf")) {
+        // Declares no license and answers Hugging Face discovery: the
+        // narrated auto-prefill flow's fixture path.
+        return clone({
+          status: "ok" as const,
+          fileName,
+          sizeBytes: 17_456_012_448,
+          architecture: "qwen3moe",
+          modelName: "Qwen3-Coder-30B-A3B-Community",
+          license: null,
+          belowFloor: false,
+          floorBytes: 17_000_000_000,
+        });
+      }
       if (path.endsWith(".gguf")) {
         return clone({
           status: "ok" as const,
@@ -1022,6 +1037,21 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           recovery: null,
         },
       });
+    },
+    async modelLicenseDiscover(_fence, query): Promise<ModelLicenseDiscoveryDto> {
+      // Only the dedicated community fixture model resolves, so ordinary
+      // paths keep exercising the manual license flow untouched.
+      if (query.includes("Community")) {
+        return {
+          status: "ok",
+          repoId: "the-community/Qwen3-Coder-30B-A3B-Community",
+          licenseId: "apache-2.0",
+        };
+      }
+      return {
+        status: "unavailable",
+        failure: { kind: "unavailable", code: "license_discovery_failed", detail: "No matching Hugging Face model declares a license.", recovery: "Fill in the license details under Advanced manually." },
+      };
     },
     async modelPresets(_fence): Promise<ModelPresetsDto> {
       return clone({ presets: modelPresets });

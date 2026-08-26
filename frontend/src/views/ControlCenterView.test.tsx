@@ -358,6 +358,49 @@ describe("model runtime panel", () => {
     );
   });
 
+  it("discovers a missing license on Hugging Face, narrated, and prefills it", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/community.gguf");
+    await userEvent.tab();
+    await within(panel).findByText("community.gguf");
+
+    // The lookup is narrated, names the repo it matched, and the raw
+    // "apache-2.0" tag maps onto the canonical SPDX prefill.
+    expect(
+      await within(panel).findByText(/License found on Hugging Face \(the-community\/Qwen3-Coder-30B-A3B-Community\): Apache-2\.0/),
+    ).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+    expect(within(panel).getByLabelText("License identifier")).toHaveValue("Apache-2.0");
+    expect(within(panel).getByLabelText("License URL")).toHaveValue(
+      "https://www.apache.org/licenses/LICENSE-2.0",
+    );
+    expect(within(panel).getByLabelText("License notice")).toHaveValue(
+      "community.gguf is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.",
+    );
+  });
+
+  it("stays quiet when discovery finds nothing and manual entry proceeds", async () => {
+    const props = await controlCenterProps("model-none");
+    const spy = vi.spyOn(props.bridge, "modelLicenseDiscover");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/plain.gguf");
+    await userEvent.tab();
+    await within(panel).findByText("plain.gguf");
+
+    // The ordinary fixture model resolves nothing on Hugging Face: the
+    // lookup ran, no narration sticks, and the license fields stay empty
+    // for manual entry.
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(within(panel).queryByText(/License found on Hugging Face/)).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+    expect(within(panel).getByLabelText("License identifier")).toHaveValue("");
+  });
+
   it("never overwrites a license identifier the user already typed", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);

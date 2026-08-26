@@ -59,6 +59,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::model_import,
             commands::model_import_status,
             commands::model_inspect,
+            commands::model_license_discover,
             commands::model_presets,
             commands::model_download,
             commands::model_download_status,

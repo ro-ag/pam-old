@@ -3150,6 +3150,7 @@ dependencies = [
  "pam_protocol",
  "pam_skills",
  "pam_store",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

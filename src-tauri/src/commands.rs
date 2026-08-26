@@ -8,9 +8,9 @@ use pam_gui::{
     EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle,
     FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto,
     HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
-    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelMessageDto, ModelPresetsDto,
-    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
-    SkillLibraryRequest, SnapshotDto,
+    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto,
+    ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
+    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -219,6 +219,18 @@ pub(crate) struct ModelInspectRequest {
     #[serde(deserialize_with = "canonical_uuid")]
     operation_id: OperationId,
     path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelLicenseDiscoverRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    query: String,
 }
 
 #[derive(Deserialize)]
@@ -573,6 +585,24 @@ pub(crate) async fn model_inspect(
                 request.operation_id,
             ),
             request.path,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_license_discover(
+    state: State<'_, DesktopState>,
+    request: ModelLicenseDiscoverRequest,
+) -> Result<ModelLicenseDiscoveryDto, DesktopErrorDto> {
+    state
+        .core
+        .model_license_discover(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.query,
         )
         .await
 }

@@ -1268,6 +1268,12 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
         .await,
     );
     assert_daemon_replay_conflict(core.model_import_status(fence()).await);
+    // The replay conflict fires before any Hugging Face exchange, so this
+    // stays network-free.
+    assert_daemon_replay_conflict(
+        core.model_license_discover(fence(), "vendor/model".to_owned())
+            .await,
+    );
     assert_daemon_replay_conflict(
         core.model_download(fence(), "qwen3-coder-30b-q4ks".to_owned())
             .await,
