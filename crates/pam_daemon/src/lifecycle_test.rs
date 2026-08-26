@@ -2801,8 +2801,10 @@ fn caller_summaries_preserve_registration_and_revocation() {
         caller_id: CallerId::from("caller-a"),
         registered_at_ms: 5,
         revoked_at_ms: Some(9),
+        kind: Some("coding-agent".to_owned()),
     });
     assert_eq!(summary.caller_id, CallerId::from("caller-a"));
     assert_eq!(summary.registered_at_ms, 5);
     assert_eq!(summary.revoked_at_ms, Some(9));
+    assert_eq!(summary.kind.as_deref(), Some("coding-agent"));
 }

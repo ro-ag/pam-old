@@ -710,6 +710,10 @@ pub struct CallerDto {
     pub caller_id: String,
     pub registered_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
+    /// Self-declared local caller surface (`cli`, `gui`, `coding-agent`, or
+    /// `local-application`). `None` for callers registered before this field
+    /// existed.
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -795,6 +799,7 @@ pub enum ModelInspectDto {
         size_bytes: u64,
         architecture: Option<String>,
         model_name: Option<String>,
+        license: Option<String>,
         below_floor: bool,
         floor_bytes: u64,
     },
@@ -1851,6 +1856,7 @@ impl DesktopCore {
                 size_bytes: report.size_bytes,
                 architecture: report.architecture,
                 model_name: report.model_name,
+                license: report.license,
                 below_floor: report.below_floor,
                 floor_bytes: MIN_RECOMMENDED_MODEL_BYTES,
             },
@@ -3115,6 +3121,7 @@ fn caller_dto(caller: &CallerSummary) -> CallerDto {
         caller_id: bounded_detail(caller.caller_id.as_str().to_owned()),
         registered_at_ms: caller.registered_at_ms,
         revoked_at_ms: caller.revoked_at_ms,
+        kind: caller.kind.clone(),
     }
 }
 

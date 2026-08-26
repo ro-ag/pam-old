@@ -562,6 +562,17 @@ function PresetDownload({
   );
 }
 
+// Canonical URL and notice sentence for the handful of SPDX IDs manual GGUF
+// imports commonly declare. Unlisted IDs still prefill the license
+// identifier alone (see runInspect below); only these get the URL and notice
+// auto-filled too.
+const KNOWN_SPDX_LICENSES: Record<string, string> = {
+  "Apache-2.0": "https://www.apache.org/licenses/LICENSE-2.0",
+  MIT: "https://opensource.org/license/mit",
+  "BSD-3-Clause": "https://opensource.org/license/bsd-3-clause",
+  "GPL-3.0": "https://www.gnu.org/licenses/gpl-3.0.html",
+};
+
 // The manual path: point PAM at an already-downloaded GGUF. License fields
 // collapse behind Advanced since most imports reuse the same license across
 // re-imports; drag-drop still fills the path on the native shell.
@@ -588,10 +599,17 @@ function ManualImport({
   const busy = importState.state === "running";
   // Remembers the last identity runInspect wrote so a later inspection can
   // tell "still what we auto-filled" apart from "the user edited this" —
-  // any manual edit to the model field clears it.
+  // any manual edit to the model field clears it. The three license refs are
+  // the same pattern, one per auto-fillable license field.
   const autoFilledModelRef = useRef<string | null>(null);
+  const autoFilledLicenseIdRef = useRef<string | null>(null);
+  const autoFilledLicenseUrlRef = useRef<string | null>(null);
+  const autoFilledLicenseNoticeRef = useRef<string | null>(null);
   const set = (field: keyof typeof form) => (value: string) => {
     if (field === "model") autoFilledModelRef.current = null;
+    if (field === "licenseId") autoFilledLicenseIdRef.current = null;
+    if (field === "licenseUrl") autoFilledLicenseUrlRef.current = null;
+    if (field === "licenseNoticeText") autoFilledLicenseNoticeRef.current = null;
     setForm((current) => ({ ...current, [field]: value }));
   };
 
@@ -614,6 +632,35 @@ function ManualImport({
             if (!stillAutoFilled) return current;
             autoFilledModelRef.current = identity;
             return { ...current, model: identity };
+          });
+        }
+        // Same never-overwrite-the-user rule as identity above. The URL and
+        // notice sentence are gated behind the license ID itself still being
+        // auto-fillable: if the user already typed a different license ID,
+        // filling in the detected file's URL/notice would describe the
+        // wrong license, so both stay untouched too.
+        if (response.status === "ok" && response.license) {
+          const licenseId = response.license;
+          const knownUrl = KNOWN_SPDX_LICENSES[licenseId];
+          const notice = knownUrl ? `${response.fileName} is distributed under the ${licenseId} license at ${knownUrl}.` : null;
+          setForm((current) => {
+            const licenseIdStillAutoFilled =
+              !current.licenseId.trim() || current.licenseId === autoFilledLicenseIdRef.current;
+            if (!licenseIdStillAutoFilled) return current;
+            const next = { ...current, licenseId };
+            autoFilledLicenseIdRef.current = licenseId;
+            if (knownUrl && (!current.licenseUrl.trim() || current.licenseUrl === autoFilledLicenseUrlRef.current)) {
+              autoFilledLicenseUrlRef.current = knownUrl;
+              next.licenseUrl = knownUrl;
+            }
+            if (
+              notice &&
+              (!current.licenseNoticeText.trim() || current.licenseNoticeText === autoFilledLicenseNoticeRef.current)
+            ) {
+              autoFilledLicenseNoticeRef.current = notice;
+              next.licenseNoticeText = notice;
+            }
+            return next;
           });
         }
       } catch {
@@ -1027,6 +1074,8 @@ export interface CallerRequestRow {
   callerId: string;
   requests: number;
   revoked: boolean;
+  /** Self-declared local caller surface; null for legacy or unregistered callers. */
+  kind: string | null;
 }
 
 // The whole project story on this screen: recent daemon requests, grouped by
@@ -1041,15 +1090,34 @@ export function aggregateCallerRequests(
       callerId: caller.callerId,
       requests: 0,
       revoked: caller.revokedAtMs !== null,
+      kind: caller.kind,
     });
   }
   for (const event of events) {
-    const row = rows.get(event.callerId) ?? { callerId: event.callerId, requests: 0, revoked: false };
+    const row = rows.get(event.callerId) ?? {
+      callerId: event.callerId,
+      requests: 0,
+      revoked: false,
+      kind: null,
+    };
     row.requests += 1;
     rows.set(event.callerId, row);
   }
   return [...rows.values()].sort(
     (left, right) => right.requests - left.requests || left.callerId.localeCompare(right.callerId),
+  );
+}
+
+// e.g. "GUI · bfb1974c…" for a caller with a declared kind — production
+// caller IDs are UUIDs, so only the first 8 characters are shown, with the
+// full ID as a tooltip. Legacy callers with no recorded kind render exactly
+// as before: the full ID, no badge.
+function CallerLabel({ callerId, kind }: { callerId: string; kind: string | null }) {
+  if (!kind) return <strong>{callerId}</strong>;
+  return (
+    <strong title={callerId}>
+      <span className="state-pill state-pill--observed">{kind.toUpperCase()}</span> {callerId.slice(0, 8)}…
+    </strong>
   );
 }
 
@@ -1154,7 +1222,7 @@ function CallerRequestsPanel({
             <article key={row.callerId}>
               <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
               <div>
-                <strong>{row.callerId}</strong>
+                <CallerLabel callerId={row.callerId} kind={row.kind} />
                 <p>{row.requests.toLocaleString()} request{row.requests === 1 ? "" : "s"} recently</p>
               </div>
               <span className={`state-pill state-pill--${row.revoked ? "attention" : "observed"}`}>

@@ -52,7 +52,7 @@ describe("ActivityView", () => {
     expect(await screen.findByText("project.current")).toBeInTheDocument();
     expect(screen.getByText(/gui:pam-desktop · payments-api · served/)).toBeInTheDocument();
     expect(screen.getByText(/cli:release-agent · ledger-web/)).toBeInTheDocument();
-    expect(screen.getAllByText("allowed")).toHaveLength(3);
+    expect(screen.getAllByText("allowed")).toHaveLength(5);
     expect(screen.getByText("approval required")).toBeInTheDocument();
   });
 

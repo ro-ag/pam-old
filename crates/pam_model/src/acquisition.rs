@@ -41,11 +41,12 @@ const GGUF_MAX_TENSOR_NAME_BYTES: u64 = 127;
 const GGUF_MAX_STRING_BYTES: u64 = 256 * 1024 * 1024;
 const GGUF_MAX_DIMENSIONS: u32 = 4;
 const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024;
-/// Display cap on the two identity metadata strings PAM extracts for the UI
-/// (`general.architecture`, `general.name`): both are short identifiers in
-/// every known GGUF, but neither is required by the format itself, so a
-/// value past this cap is skipped like any other metadata PAM doesn't read
-/// rather than treated as a malformed file — see `read_gguf_identity_string`.
+/// Display cap on the identity metadata strings PAM extracts for the UI
+/// (`general.architecture`, `general.name`, `general.license`): each is a
+/// short identifier in every known GGUF, but none is required by the format
+/// itself, so a value past this cap is skipped like any other metadata PAM
+/// doesn't read rather than treated as a malformed file — see
+/// `read_gguf_identity_string`.
 const GGUF_MAX_IDENTITY_STRING_BYTES: u64 = 256;
 
 pub struct ImportRequest {
@@ -749,6 +750,7 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
     let mut array_items = 0;
     let mut architecture = None;
     let mut model_name = None;
+    let mut license = None;
     for _ in 0..metadata_kv_count {
         let key = read_gguf_string(file, &mut cursor, file_size, GGUF_MAX_METADATA_KEY_BYTES)?;
         if !valid_metadata_key(&key) || !metadata_keys.insert(key.clone()) {
@@ -763,13 +765,19 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
             if !(8..=GGUF_MAX_ALIGNMENT).contains(&alignment) || !alignment.is_power_of_two() {
                 return Err(ModelError::InvalidGguf);
             }
-        } else if value_type == 8 && (key == b"general.architecture" || key == b"general.name") {
+        } else if value_type == 8
+            && (key == b"general.architecture"
+                || key == b"general.name"
+                || key == b"general.license")
+        {
             let value = read_gguf_identity_string(file, &mut cursor, file_size)?
                 .and_then(|bytes| String::from_utf8(bytes).ok());
             if key == b"general.architecture" {
                 architecture = value;
-            } else {
+            } else if key == b"general.name" {
                 model_name = value;
+            } else {
+                license = value;
             }
         } else {
             skip_metadata_value(file, &mut cursor, file_size, value_type, &mut array_items)?;
@@ -806,6 +814,7 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
         metadata_kv_count,
         architecture,
         model_name,
+        license,
     })
 }
 
@@ -992,8 +1001,8 @@ fn read_gguf_string(
     Ok(bytes)
 }
 
-/// Reads a display-only GGUF identity string (`general.architecture` or
-/// `general.name`), or skips it and returns `None` when it exceeds
+/// Reads a display-only GGUF identity string (`general.architecture`,
+/// `general.name`, or `general.license`), or skips it and returns `None` when it exceeds
 /// [`GGUF_MAX_IDENTITY_STRING_BYTES`].
 ///
 /// The length itself is still checked against the file's own structural

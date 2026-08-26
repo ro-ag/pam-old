@@ -40,8 +40,13 @@ describe("ConnectionsView", () => {
     const revokedRow = screen.getByText("cli:retired-agent").closest("article");
     expect(revokedRow).not.toBeNull();
     expect(within(revokedRow!).getByText("revoked")).toBeInTheDocument();
-    expect(screen.getAllByText("active")).toHaveLength(2);
-    expect(screen.getAllByText(/^Registered .*\d{4}$/)).toHaveLength(3);
+    expect(screen.getAllByText("active")).toHaveLength(4);
+    expect(screen.getAllByText(/^Registered .*\d{4}$/)).toHaveLength(5);
+    // A caller with a declared kind gets a badge and a shortened UUID; a
+    // legacy null-kind row (asserted above) keeps rendering its full ID.
+    expect(screen.getByText("GUI")).toBeInTheDocument();
+    expect(screen.getByText("CLI")).toBeInTheDocument();
+    expect(screen.getByTitle("8f14e45f-ceea-467e-adc9-15794b520d1d")).toHaveTextContent("GUI 8f14e45f…");
   });
 
   it("refreshes the caller registry on demand", async () => {

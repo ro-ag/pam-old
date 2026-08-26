@@ -506,11 +506,14 @@ fn callers_dto_serializes_the_exact_frontend_ok_contract() {
                 caller_id: CallerId::from("gui"),
                 registered_at_ms: 123,
                 revoked_at_ms: None,
+                kind: Some("gui".to_owned()),
             },
             CallerSummary {
                 caller_id: CallerId::from("cli"),
                 registered_at_ms: 100,
                 revoked_at_ms: Some(200),
+                // A legacy row registered before `kind` existed.
+                kind: None,
             },
         ],
     }));
@@ -520,8 +523,8 @@ fn callers_dto_serializes_the_exact_frontend_ok_contract() {
         serde_json::json!({
             "status": "ok",
             "callers": [
-                { "callerId": "gui", "registeredAtMs": 123, "revokedAtMs": null },
-                { "callerId": "cli", "registeredAtMs": 100, "revokedAtMs": 200 }
+                { "callerId": "gui", "registeredAtMs": 123, "revokedAtMs": null, "kind": "gui" },
+                { "callerId": "cli", "registeredAtMs": 100, "revokedAtMs": 200, "kind": null }
             ]
         })
     );

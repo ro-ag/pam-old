@@ -14,6 +14,19 @@ function formatDate(registeredAtMs: number): string {
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
 }
 
+// e.g. "GUI · bfb1974c…" for a caller with a declared kind — production
+// caller IDs are UUIDs, so only the first 8 characters are shown, with the
+// full ID as a tooltip. Legacy callers with no recorded kind render exactly
+// as before: the full ID, no badge.
+function CallerLabel({ callerId, kind }: { callerId: string; kind: string | null }) {
+  if (!kind) return <strong>{callerId}</strong>;
+  return (
+    <strong title={callerId}>
+      <span className="state-pill state-pill--observed">{kind.toUpperCase()}</span> {callerId.slice(0, 8)}…
+    </strong>
+  );
+}
+
 export interface ConnectionsViewProps {
   bridge: PamBridge;
 }
@@ -75,7 +88,7 @@ function CallersPanel({ bridge }: ConnectionsViewProps) {
             <article key={caller.callerId}>
               <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
               <div>
-                <strong>{caller.callerId}</strong>
+                <CallerLabel callerId={caller.callerId} kind={caller.kind} />
                 <p>Registered {formatDate(caller.registeredAtMs)}</p>
               </div>
               <span className={`state-pill state-pill--${caller.revokedAtMs === null ? "observed" : "attention"}`}>

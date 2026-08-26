@@ -421,6 +421,9 @@ async fn caller_list_returns_revocations_without_credential_material() {
         .expect("active callers are listed");
     assert_eq!(active.registered_at_ms, 10);
     assert_eq!(active.revoked_at_ms, None);
+    // Seeded through the plain (no-kind) registration path: legacy rows must
+    // still round-trip cleanly over the wire.
+    assert_eq!(active.kind, None);
 
     shutdown.send(()).unwrap();
     daemon.await.unwrap().unwrap();

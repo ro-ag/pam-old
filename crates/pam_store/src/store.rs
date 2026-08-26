@@ -59,7 +59,7 @@ const STATUS_OPERATION_KIND: &str = "status";
 const LEGACY_STATUS_OPERATION_KIND: &str = "daemon_status";
 const FLOW_CAPABILITY_NAME: &str = "flow.run";
 const EFFECT_APPROVAL_AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
-pub(super) const LATEST_SCHEMA_VERSION: u32 = 15;
+pub(super) const LATEST_SCHEMA_VERSION: u32 = 16;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_initial.sql")),
     (2, include_str!("../migrations/0002_evidence.sql")),
@@ -88,6 +88,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (13, include_str!("../migrations/0013_connectors.sql")),
     (14, include_str!("../migrations/0014_activity_days.sql")),
     (15, include_str!("../migrations/0015_project_roots.sql")),
+    (16, include_str!("../migrations/0016_callers_kind.sql")),
 ];
 
 type Response<T> = oneshot::Sender<Result<T, StoreError>>;
@@ -183,10 +184,33 @@ impl Store {
         credential: CallerCredential,
         now_ms: u64,
     ) -> Result<CallerRegistration, StoreError> {
+        self.register_caller_with_kind(caller_id, credential, None, now_ms)
+            .await
+    }
+
+    /// Registers a caller credential together with its self-declared local
+    /// caller surface (`cli`, `gui`, `coding-agent`, or `local-application`).
+    ///
+    /// The kind is a request-scoping label supplied by the registering
+    /// process, not an authentication boundary, exactly like the caller ID
+    /// itself. Pass `None` to register without one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid credential, duplicate caller, invalid
+    /// timestamp, or unavailable durable state.
+    pub async fn register_caller_with_kind(
+        &self,
+        caller_id: CallerId,
+        credential: CallerCredential,
+        kind: Option<String>,
+        now_ms: u64,
+    ) -> Result<CallerRegistration, StoreError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Caller(CallerCommand::Register {
             caller_id,
             credential,
+            kind,
             now_ms,
             response: response_tx,
         }))
@@ -1819,6 +1843,7 @@ enum CallerCommand {
     Register {
         caller_id: CallerId,
         credential: CallerCredential,
+        kind: Option<String>,
         now_ms: u64,
         response: Response<CallerRegistration>,
     },
@@ -2125,11 +2150,12 @@ fn run_caller_command(connection: &mut Connection, command: CallerCommand) {
         CallerCommand::Register {
             caller_id,
             credential,
+            kind,
             now_ms,
             response,
         } => respond(
             response,
-            register_caller(connection, caller_id, &credential, now_ms),
+            register_caller(connection, caller_id, &credential, kind.as_deref(), now_ms),
         ),
         CallerCommand::Authenticate {
             caller_id,
@@ -2466,6 +2492,7 @@ fn decode_model(row: StoredModelRow) -> Result<RegisteredModel, StoreError> {
             // recomputed live at revalidation time, and PartialEq ignores it.
             architecture: None,
             model_name: None,
+            license: None,
         },
         license,
         source,
@@ -5094,6 +5121,7 @@ fn register_caller(
     connection: &mut Connection,
     caller_id: CallerId,
     credential: &CallerCredential,
+    kind: Option<&str>,
     now_ms: u64,
 ) -> Result<CallerRegistration, StoreError> {
     if !credential.is_valid() {
@@ -5113,18 +5141,18 @@ fn register_caller(
         None => {
             transaction.execute(
                 "INSERT INTO callers(
-                    caller_id, credential_digest, registered_at_ms, revoked_at_ms
-                 ) VALUES (?1, ?2, ?3, NULL)",
-                params![caller_id.as_str(), digest.as_slice(), registered_at],
+                    caller_id, credential_digest, registered_at_ms, revoked_at_ms, kind
+                 ) VALUES (?1, ?2, ?3, NULL, ?4)",
+                params![caller_id.as_str(), digest.as_slice(), registered_at, kind],
             )?;
         }
         Some(None) => return Err(StoreError::CallerAlreadyRegistered(caller_id)),
         Some(Some(_)) => {
             transaction.execute(
                 "UPDATE callers
-                 SET credential_digest = ?2, registered_at_ms = ?3, revoked_at_ms = NULL
+                 SET credential_digest = ?2, registered_at_ms = ?3, revoked_at_ms = NULL, kind = ?4
                  WHERE caller_id = ?1",
-                params![caller_id.as_str(), digest.as_slice(), registered_at],
+                params![caller_id.as_str(), digest.as_slice(), registered_at, kind],
             )?;
         }
     }
@@ -5133,6 +5161,7 @@ fn register_caller(
         caller_id,
         registered_at_ms: now_ms,
         revoked_at_ms: None,
+        kind: kind.map(str::to_owned),
     })
 }
 
@@ -5199,7 +5228,7 @@ fn revoke_caller(
 
 fn list_callers(connection: &Connection) -> Result<Vec<CallerRegistration>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT caller_id, registered_at_ms, revoked_at_ms
+        "SELECT caller_id, registered_at_ms, revoked_at_ms, kind
          FROM callers
          ORDER BY registered_at_ms DESC, caller_id ASC",
     )?;
@@ -5208,15 +5237,17 @@ fn list_callers(connection: &Connection) -> Result<Vec<CallerRegistration>, Stor
             row.get::<_, String>(0)?,
             row.get::<_, i64>(1)?,
             row.get::<_, Option<i64>>(2)?,
+            row.get::<_, Option<String>>(3)?,
         ))
     })?;
     rows.collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .map(|(caller_id, registered_at, revoked_at)| {
+        .map(|(caller_id, registered_at, revoked_at, kind)| {
             Ok(CallerRegistration {
                 caller_id: CallerId::from(caller_id),
                 registered_at_ms: unsigned_integer(registered_at)?,
                 revoked_at_ms: revoked_at.map(unsigned_integer).transpose()?,
+                kind,
             })
         })
         .collect()

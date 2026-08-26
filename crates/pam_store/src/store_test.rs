@@ -143,6 +143,7 @@ fn registered_model(path: &Path) -> RegisteredModel {
             metadata_kv_count: 29,
             architecture: None,
             model_name: None,
+            license: None,
         },
         license: LicenseSnapshot::new(
             "Apache-2.0",
@@ -4752,14 +4753,54 @@ async fn list_callers_is_newest_first_and_includes_revocations() {
                 caller_id: CallerId::from("caller-new"),
                 registered_at_ms: 20,
                 revoked_at_ms: None,
+                kind: None,
             },
             CallerRegistration {
                 caller_id: CallerId::from("caller-old"),
                 registered_at_ms: 10,
                 revoked_at_ms: Some(30),
+                kind: None,
             },
         ]
     );
+    close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn register_caller_with_kind_persists_and_serves_the_declared_kind() {
+    let (directory, path) = database_path("caller-kind");
+    let store = Store::open(&path).unwrap();
+
+    store
+        .register_caller_with_kind(
+            CallerId::from("caller-gui"),
+            CallerCredential::new("gui-credential"),
+            Some("gui".to_owned()),
+            10,
+        )
+        .await
+        .unwrap();
+    store
+        .register_caller(
+            CallerId::from("caller-legacy"),
+            CallerCredential::new("legacy-credential"),
+            20,
+        )
+        .await
+        .unwrap();
+
+    let callers = store.list_callers().await.unwrap();
+    let gui = callers
+        .iter()
+        .find(|caller| caller.caller_id.as_str() == "caller-gui")
+        .unwrap();
+    assert_eq!(gui.kind.as_deref(), Some("gui"));
+    let legacy = callers
+        .iter()
+        .find(|caller| caller.caller_id.as_str() == "caller-legacy")
+        .unwrap();
+    assert_eq!(legacy.kind, None);
+
     close(store, &directory).await;
 }
 

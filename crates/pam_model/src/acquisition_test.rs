@@ -149,6 +149,7 @@ fn inspect_model_file_reports_no_identity_metadata_when_absent() {
 
     assert!(report.metadata.architecture.is_none());
     assert!(report.metadata.model_name.is_none());
+    assert!(report.metadata.license.is_none());
 }
 
 #[test]
@@ -163,6 +164,32 @@ fn inspect_model_file_imports_fine_when_general_name_exceeds_the_identity_cap() 
 
     assert_eq!(report.size_bytes, u64::try_from(bytes.len()).unwrap());
     assert!(report.metadata.model_name.is_none());
+}
+
+#[test]
+fn inspect_model_file_reports_the_license_when_present() {
+    let directory = TestDirectory::new("inspect-license");
+    let path = directory.0.join("model.gguf");
+    let bytes = one_tensor_gguf_with_metadata(&[("general.license", "Apache-2.0")]);
+    fs::write(&path, &bytes).unwrap();
+
+    let report = inspect_model_file(&path).unwrap();
+
+    assert_eq!(report.metadata.license.as_deref(), Some("Apache-2.0"));
+}
+
+#[test]
+fn inspect_model_file_imports_fine_when_general_license_exceeds_the_identity_cap() {
+    let directory = TestDirectory::new("inspect-oversized-license");
+    let path = directory.0.join("model.gguf");
+    let long_license = "x".repeat(257);
+    let bytes = one_tensor_gguf_with_metadata(&[("general.license", &long_license)]);
+    fs::write(&path, &bytes).unwrap();
+
+    let report = inspect_model_file(&path).unwrap();
+
+    assert_eq!(report.size_bytes, u64::try_from(bytes.len()).unwrap());
+    assert!(report.metadata.license.is_none());
 }
 
 #[test]

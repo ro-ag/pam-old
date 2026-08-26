@@ -67,6 +67,12 @@ const activityEvents: ActivityEventDto[] = [
   { sequence: 1, projectId: null, callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000, projectRoot: null },
   { sequence: 6, projectId: DAEMON_ONLY_WITH_ROOT, callerId: "cli:daemon-only-rooted", action: "agent.sync", decision: "denied", outcome: null, occurredAtMs: 1_777_001_320_000, projectRoot: "/work/scratch-agent" },
   { sequence: 5, projectId: DAEMON_ONLY_ROOTLESS, callerId: "cli:daemon-only-rootless", action: "agent.deploy", decision: "denied", outcome: null, occurredAtMs: 1_777_001_310_000, projectRoot: null },
+  // Production caller IDs are UUIDs, unlike the pretty legacy IDs above; the
+  // matching registeredCallers row carries a kind so the UI can label these.
+  // Distinct action names from the rows above, so feed assertions elsewhere
+  // that match on action text stay unambiguous.
+  { sequence: 7, projectId: "11111111-1111-4111-8111-111111111111", callerId: "8f14e45f-ceea-467e-adc9-15794b520d1d", action: "model.infer", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_530_000, projectRoot: null },
+  { sequence: 8, projectId: "11111111-1111-4111-8111-111111111111", callerId: "3f79bb7b-4a57-4b14-9b3a-9bb6b3b6c56a", action: "skill.audit", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_540_000, projectRoot: null },
 ];
 
 const daemonLogEntries: DaemonLogEntryDto[] = [
@@ -94,9 +100,13 @@ const projectUsage: ProjectUsageDto[] = [
 ];
 
 const registeredCallers: CallerDto[] = [
-  { callerId: "gui:pam-desktop", registeredAtMs: 1_776_900_000_000, revokedAtMs: null },
-  { callerId: "cli:release-agent", registeredAtMs: 1_776_500_000_000, revokedAtMs: null },
-  { callerId: "cli:retired-agent", registeredAtMs: 1_775_000_000_000, revokedAtMs: 1_776_800_000_000 },
+  // Legacy rows registered before `kind` existed: still render with no badge.
+  { callerId: "gui:pam-desktop", registeredAtMs: 1_776_900_000_000, revokedAtMs: null, kind: null },
+  { callerId: "cli:release-agent", registeredAtMs: 1_776_500_000_000, revokedAtMs: null, kind: null },
+  { callerId: "cli:retired-agent", registeredAtMs: 1_775_000_000_000, revokedAtMs: 1_776_800_000_000, kind: null },
+  // Production-shaped UUID callers with a declared kind.
+  { callerId: "8f14e45f-ceea-467e-adc9-15794b520d1d", registeredAtMs: 1_776_950_000_000, revokedAtMs: null, kind: "gui" },
+  { callerId: "3f79bb7b-4a57-4b14-9b3a-9bb6b3b6c56a", registeredAtMs: 1_776_600_000_000, revokedAtMs: null, kind: "cli" },
 ];
 
 const evidenceHandles = [
@@ -909,6 +919,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           sizeBytes: 2_800_000_000,
           architecture: null,
           modelName: null,
+          license: null,
           belowFloor: true,
           floorBytes: 17_000_000_000,
         });
@@ -920,6 +931,10 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           sizeBytes: 17_456_012_448,
           architecture: "qwen3moe",
           modelName: "Qwen3-Coder-30B-A3B-Instruct",
+          // Only the dedicated "licensed" fixture path declares a GGUF
+          // license, so tests exercising the missing-license-fields flow on
+          // an ordinary path are unaffected by license auto-prefill.
+          license: path.endsWith("licensed.gguf") ? "Apache-2.0" : null,
           belowFloor: false,
           floorBytes: 17_000_000_000,
         });

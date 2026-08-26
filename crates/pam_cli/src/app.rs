@@ -507,7 +507,12 @@ pub(crate) async fn caller_register(kind: CallerKindArg) -> i32 {
         return report_native_credential_error(&error);
     }
     let result = store
-        .register_caller(caller_id.clone(), credential.clone(), now_ms())
+        .register_caller_with_kind(
+            caller_id.clone(),
+            credential.clone(),
+            Some(caller_kind_label(kind).to_owned()),
+            now_ms(),
+        )
         .await;
     let shutdown = store.shutdown().await;
     let registration = match result {
@@ -1510,6 +1515,18 @@ const fn caller_kind(kind: CallerKindArg) -> CallerKind {
         CallerKindArg::Gui => CallerKind::Gui,
         CallerKindArg::CodingAgent => CallerKind::CodingAgent,
         CallerKindArg::LocalApplication => CallerKind::LocalApplication,
+    }
+}
+
+/// The durable label persisted alongside a caller's registration: exactly
+/// the surface the invoking process declared on the command line, matching
+/// `--kind`'s own kebab-case argument spelling.
+const fn caller_kind_label(kind: CallerKindArg) -> &'static str {
+    match kind {
+        CallerKindArg::Cli => "cli",
+        CallerKindArg::Gui => "gui",
+        CallerKindArg::CodingAgent => "coding-agent",
+        CallerKindArg::LocalApplication => "local-application",
     }
 }
 

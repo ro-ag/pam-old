@@ -25,6 +25,7 @@ fn model(size_bytes: u64) -> RegisteredModel {
             metadata_kv_count: 54,
             architecture: None,
             model_name: None,
+            license: None,
         },
         license: LicenseSnapshot::new("Apache-2.0", "https://example.test/license", digest(2))
             .unwrap(),
