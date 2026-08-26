@@ -4,6 +4,34 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-26
+
+### Added
+
+- Caller histories across the Control Center and Activity views now show
+  repo names instead of project ids: every CLI request carries its
+  validated project root, the daemon remembers it, and the GUI labels
+  projects by catalog name first, then the repo folder name with the full
+  path on hover.
+- The manual import's Browse button actually opens the file picker (the
+  dialog module was missing from the shipped bundle in 0.5.2).
+
+### Changed
+
+- The runtime now accepts all three curated quantizations — balanced and
+  high fidelity presets load after downloading instead of being refused.
+- Resumed downloads report true progress, counting what is already on
+  disk.
+- A deep multi-agent review hardened the model surfaces: hostile paths
+  (pipes, devices, symlinks) are rejected before they can stall the app,
+  imports and inspections carry bounded timeouts, oversized model-name
+  metadata no longer fails an import, the fleet usage list covers up to
+  512 projects, downloads survive an app reload and block preset
+  switching while running, stale badges and prefills clear correctly,
+  phone-width fleet rows collapse properly, license checkboxes read
+  distinctly, memory figures use one unit base, and light-theme warnings
+  meet WCAG AA contrast.
+
 ## [0.5.2] - 2026-08-26
 
 ### Added
