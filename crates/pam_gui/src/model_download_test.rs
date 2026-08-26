@@ -249,6 +249,106 @@ async fn a_new_download_can_start_once_the_previous_one_finished() {
     assert!(restarted.is_ok());
 }
 
+/// A response that drops the connection partway through, like a real
+/// interrupted transfer: it yields its chunks and then ends (`Ok(None)`)
+/// without ever reaching the descriptor's expected size. Carries a strong
+/// `ETag` so `pam_model` treats the partial bytes it leaves on disk as safe
+/// to resume rather than discarding them.
+struct InterruptedResponse {
+    etag: &'static str,
+    chunks: Vec<Vec<u8>>,
+}
+
+impl DownloadResponse for InterruptedResponse {
+    fn status(&self) -> u16 {
+        200
+    }
+
+    fn content_length(&self) -> Option<&str> {
+        None
+    }
+
+    fn content_range(&self) -> Option<&str> {
+        None
+    }
+
+    fn content_encoding(&self) -> Option<&str> {
+        None
+    }
+
+    fn etag(&self) -> Option<&str> {
+        Some(self.etag)
+    }
+
+    fn location(&self) -> Option<&str> {
+        None
+    }
+
+    fn next_chunk(&mut self) -> impl Future<Output = Result<Option<Vec<u8>>, ModelError>> + Send {
+        let chunk = if self.chunks.is_empty() {
+            None
+        } else {
+            Some(self.chunks.remove(0))
+        };
+        std::future::ready(Ok(chunk))
+    }
+}
+
+struct InterruptedTransport(std::sync::Mutex<Option<InterruptedResponse>>);
+
+impl DownloadTransport for InterruptedTransport {
+    type Response = InterruptedResponse;
+
+    async fn send(&self, _request: TransferRequest) -> Result<Self::Response, ModelError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one response per test"))
+    }
+}
+
+#[tokio::test]
+async fn a_resumed_download_seeds_the_counter_from_the_existing_partial_offset() {
+    let directory = TestDirectory::new("resume-seed");
+    let preset = tiny_preset();
+
+    // Phase 1: a real (fake-transport-backed) download that drops partway
+    // through, leaving a genuine partial file and matching checkpoint on
+    // disk — exactly what a resumed download resumes from.
+    let interrupted = ModelDownloadManager::new();
+    Arc::clone(&interrupted)
+        .start_with(preset, directory.0.clone(), |_received| {
+            Ok(InterruptedTransport(std::sync::Mutex::new(Some(
+                InterruptedResponse {
+                    etag: "\"stable\"",
+                    chunks: vec![vec![0; 1024]],
+                },
+            ))))
+        })
+        .unwrap();
+    let interrupted_snapshot = wait_for_terminal(&interrupted).await;
+    assert_eq!(interrupted_snapshot.status, ModelDownloadStatusKind::Failed);
+
+    // Phase 2: resuming the same destination must start the counter at the
+    // offset already on disk, not zero.
+    let resumed = ModelDownloadManager::new();
+    let holding = HoldingTransport::new();
+    Arc::clone(&resumed)
+        .start_with(preset, directory.0.clone(), {
+            let holding = holding.clone();
+            move |_received| Ok(holding)
+        })
+        .unwrap();
+
+    holding.entered.notified().await;
+    assert_eq!(resumed.snapshot().received_bytes, 1024);
+
+    holding.release.notify_one();
+    wait_for_terminal(&resumed).await;
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn host_memory_probe_reports_a_positive_total_on_macos() {

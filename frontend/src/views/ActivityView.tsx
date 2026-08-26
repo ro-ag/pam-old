@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
 import type { ActivityDto, ActivityEventDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
-import type { DaemonView } from "../selectors";
+import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
 
 function formatClock(occurredAtMs: number): string {
@@ -85,19 +85,25 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
     ? modelStatus.loaded ?? modelStatus.registered[0] ?? null
     : null;
 
-  const projectLabel = (projectId: string | null) => projectId === null
-    ? "daemon"
-    : projects.find((project) => project.handle === projectId)?.name ?? `${projectId.slice(0, 8)}…`;
+  const projectLabel = (projectId: string | null, projectRoot: string | null) => {
+    if (projectId === null) return { text: "daemon" };
+    const known = projects.find((project) => project.handle === projectId);
+    if (known) return { text: known.name };
+    if (projectRoot) return { text: basename(projectRoot), title: projectRoot };
+    return { text: `${projectId.slice(0, 8)}…` };
+  };
 
-  const eventRow = (event: ActivityEventDto) => (
+  const eventRow = (event: ActivityEventDto) => {
+    const label = projectLabel(event.projectId, event.projectRoot);
+    return (
     <article key={event.sequence}>
       <span className="access-icon" aria-hidden="true">
         {event.decision === "allowed" ? <CheckCircle size={21} /> : <WarningCircle size={21} />}
       </span>
       <div>
         <strong>{event.action}</strong>
-        <p>
-          {formatClock(event.occurredAtMs)} · {event.callerId} · {projectLabel(event.projectId)}
+        <p title={label.title}>
+          {formatClock(event.occurredAtMs)} · {event.callerId} · {label.text}
           {event.outcome && ` · ${event.outcome}`}
         </p>
       </div>
@@ -105,7 +111,8 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
         {event.decision.replaceAll("_", " ")}
       </span>
     </article>
-  );
+    );
+  };
 
   return (
     <main className="canvas" id="main-content">

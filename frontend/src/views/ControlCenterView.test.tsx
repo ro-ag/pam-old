@@ -112,13 +112,13 @@ describe("Projects panel", () => {
     expect(within(panel).queryAllByRole("button")).toHaveLength(0);
   });
 
-  it("renders a usage row for a project outside the catalog under its truncated id", async () => {
+  it("renders a usage row for a project outside the catalog under its truncated id when rootless", async () => {
     const props = await controlCenterProps();
     vi.spyOn(props.bridge, "daemonStats").mockResolvedValue({
       status: "ok",
       days: [],
       projects: [
-        { projectId: "99999999-9999-4999-8999-999999999999", events: 3, lastEventMs: 1_777_000_000_000 },
+        { projectId: "99999999-9999-4999-8999-999999999999", events: 3, lastEventMs: 1_777_000_000_000, root: null },
       ],
     });
     render(<ControlCenterView {...props} />);
@@ -126,6 +126,16 @@ describe("Projects panel", () => {
     const panel = await screen.findByRole("region", { name: "Usage by project" });
     expect(await within(panel).findByText("99999999…")).toBeInTheDocument();
     expect(within(panel).getByText("3 events")).toBeInTheDocument();
+  });
+
+  it("renders a usage row for a project outside the catalog under its remembered root's basename", async () => {
+    const props = await controlCenterProps();
+    render(<ControlCenterView {...props} />);
+
+    const panel = await screen.findByRole("region", { name: "Usage by project" });
+    expect(await within(panel).findByText("scratch-agent")).toBeInTheDocument();
+    expect(within(panel).getByText("/work/scratch-agent")).toBeInTheDocument();
+    expect(within(panel).getByText("12 events")).toBeInTheDocument();
   });
 
   it("treats a missing projects field defensively as empty, for an older daemon", async () => {
@@ -571,8 +581,8 @@ describe("caller request aggregation", () => {
         { callerId: "cli:quiet", registeredAtMs: 2, revokedAtMs: 3 },
       ],
       [
-        { sequence: 2, projectId: null, callerId: "gui:desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 5 },
-        { sequence: 1, projectId: null, callerId: "cli:unregistered", action: "flow.save", decision: "allowed", outcome: "served", occurredAtMs: 4 },
+        { sequence: 2, projectId: null, callerId: "gui:desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 5, projectRoot: null },
+        { sequence: 1, projectId: null, callerId: "cli:unregistered", action: "flow.save", decision: "allowed", outcome: "served", occurredAtMs: 4, projectRoot: null },
       ],
     );
     expect(rows).toEqual([

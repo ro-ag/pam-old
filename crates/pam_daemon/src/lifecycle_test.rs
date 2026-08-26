@@ -2756,6 +2756,7 @@ fn activity_event_summaries_drop_redacted_detail_and_retention() {
         redacted_detail: "detail-must-not-cross".to_owned(),
         occurred_at_ms: 11,
         retain_until_ms: 99,
+        project_root: None,
     });
     assert_eq!(summary.sequence, 7);
     assert_eq!(summary.project_id, ProjectId::from("project-a"));

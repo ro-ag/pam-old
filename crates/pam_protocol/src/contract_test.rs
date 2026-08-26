@@ -443,6 +443,7 @@ fn flow_run_constructor_reserves_authenticated_approval_frame_space() {
         caller_id: CallerId::from("cli-1"),
         authentication: None,
         approval_id: None,
+        project_root: None,
         project_id: ProjectId::from("project-1"),
         capability: Capability::FlowRun,
         idempotency_key: IdempotencyKey::from("flow-1"),

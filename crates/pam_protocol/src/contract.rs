@@ -40,6 +40,12 @@ pub struct RequestEnvelope {
     pub authentication: Option<CallerCredential>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<ApprovalId>,
+    /// The caller's canonical project root, when it discovered one for this
+    /// request. Additive and opportunistic: the daemon re-validates it exactly
+    /// like a flow run's project root (canonical, absolute, matching this
+    /// project ID) before ever persisting it, and simply ignores it otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<FlowProjectRoot>,
     pub project_id: ProjectId,
     pub capability: Capability,
     pub idempotency_key: IdempotencyKey,
@@ -61,6 +67,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::DaemonStatus,
             idempotency_key,
@@ -86,6 +93,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::DaemonStop,
             idempotency_key,
@@ -113,6 +121,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ProjectCurrent,
             idempotency_key,
@@ -141,6 +150,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::DaemonActivity,
             idempotency_key,
@@ -169,6 +179,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::DaemonLogs,
             idempotency_key,
@@ -197,6 +208,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::DaemonStats,
             idempotency_key,
@@ -222,6 +234,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::CallerList,
             idempotency_key,
@@ -248,6 +261,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ModelStatus,
             idempotency_key,
@@ -273,6 +287,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ConnectorList,
             idempotency_key,
@@ -308,6 +323,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ConnectorConfigure,
             idempotency_key,
@@ -344,6 +360,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ConnectorTest,
             idempotency_key,
@@ -402,6 +419,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ApprovalDecide,
             idempotency_key,
@@ -432,6 +450,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::CancelRequest,
             idempotency_key,
@@ -459,6 +478,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::CancelRequest,
             idempotency_key,
@@ -491,6 +511,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ReplayEvents,
             idempotency_key,
@@ -520,6 +541,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ReplayEvents,
             idempotency_key,
@@ -546,6 +568,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::Brief,
             idempotency_key,
@@ -568,6 +591,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::NetworkDiagnostics,
             idempotency_key,
@@ -602,6 +626,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ModelInfer,
             idempotency_key,
@@ -639,6 +664,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::FlowRun,
             idempotency_key,
@@ -714,6 +740,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::WaitForResult,
             idempotency_key,
@@ -743,6 +770,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::WaitForResult,
             idempotency_key,
@@ -774,6 +802,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::GetResult,
             idempotency_key,
@@ -801,6 +830,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::GetResult,
             idempotency_key,
@@ -827,6 +857,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::InspectEvidence,
             idempotency_key,
@@ -857,6 +888,7 @@ impl RequestEnvelope {
             caller_id,
             authentication: None,
             approval_id: None,
+            project_root: None,
             project_id,
             capability: Capability::ReadEvidence,
             idempotency_key,
@@ -880,6 +912,14 @@ impl RequestEnvelope {
     #[must_use]
     pub fn with_approval(mut self, approval_id: ApprovalId) -> Self {
         self.approval_id = Some(approval_id);
+        self
+    }
+
+    /// Attaches the caller's canonical project root so the daemon can learn a
+    /// human-readable location for this project, once validated.
+    #[must_use]
+    pub fn with_project_root(mut self, project_root: FlowProjectRoot) -> Self {
+        self.project_root = Some(project_root);
         self
     }
 
@@ -2006,6 +2046,10 @@ pub struct ProjectUsageSummary {
     pub project_id: String,
     pub events: u64,
     pub last_event_ms: u64,
+    /// The project's remembered canonical root, when the daemon has learned
+    /// one from a validated request. Absent for projects the daemon has only
+    /// ever seen by ID.
+    pub root: Option<String>,
 }
 
 /// Bounded oldest-first slice of the daemon's in-memory diagnostic log.
@@ -2044,6 +2088,10 @@ pub struct ActivityEventSummary {
     pub decision: String,
     pub outcome: String,
     pub occurred_at_ms: u64,
+    /// The project's remembered canonical root, when the daemon has learned
+    /// one from a validated request. Absent for projects the daemon has only
+    /// ever seen by ID.
+    pub project_root: Option<String>,
 }
 
 /// The complete caller registry, including revoked callers.

@@ -113,6 +113,12 @@ export interface ControlCenterView {
   fixture: boolean;
 }
 
+// A project root PAM reports may be POSIX or Windows; either way, the last
+// path segment is the display-worthy part.
+export function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
 export function runState(raw: string): RunState {
   switch (raw) {
     case "queued":

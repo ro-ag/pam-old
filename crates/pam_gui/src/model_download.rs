@@ -189,8 +189,9 @@ impl ModelDownloadManager {
             received
         };
         tokio::spawn(async move {
+            let seed_received = Arc::clone(&received);
             let outcome = match make_transport(received) {
-                Ok(transport) => run_download(&transport, preset, &home).await,
+                Ok(transport) => run_download(&transport, preset, &home, seed_received).await,
                 Err(error) => Err(error.into()),
             };
             self.finish(preset, outcome);
@@ -223,6 +224,7 @@ async fn run_download<T: DownloadTransport>(
     transport: &T,
     preset: ModelPreset,
     home: &Path,
+    received: Arc<AtomicU64>,
 ) -> Result<RegisteredModel, ModelDownloadFailure> {
     let key = parse_model_key(preset.model).map_err(|failure| ModelDownloadFailure {
         detail: failure.detail,
@@ -238,6 +240,7 @@ async fn run_download<T: DownloadTransport>(
     )?;
     let consent = LicenseConsent::accept(&descriptor);
     let destination = default_model_path(home, &descriptor.key, &descriptor.filename)?;
+    seed_resume_offset(&destination, &received);
     let registered_at_ms = now_ms()?;
     let request = DownloadRequest {
         descriptor,
@@ -252,6 +255,27 @@ async fn run_download<T: DownloadTransport>(
     };
     let registered = download_https(transport, request).await?;
     persist(registered).await
+}
+
+/// Seeds the progress counter with bytes already on disk from an earlier,
+/// interrupted attempt, so a resumed download reports its true completion
+/// rather than restarting the visible percentage at zero.
+///
+/// Mirrors `pam_model::acquisition::AcquisitionPaths`' own `.part` naming
+/// convention rather than exposing it from that crate, since the resume
+/// offset `download_https` computes internally never crosses its public API.
+/// ponytail: re-stats a file `download_https` will also inspect; if a future
+/// resume ever discards this partial (stale/corrupt checkpoint), the bar can
+/// briefly overshoot 100% until the download finishes and `finish()`
+/// overwrites it with the real size.
+fn seed_resume_offset(destination: &Path, received: &AtomicU64) {
+    let Some(filename) = destination.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let partial = destination.with_file_name(format!(".{filename}.pam-model.part"));
+    if let Ok(metadata) = std::fs::metadata(partial) {
+        received.store(metadata.len(), Ordering::Relaxed);
+    }
 }
 
 fn now_ms() -> Result<u64, ModelDownloadFailure> {

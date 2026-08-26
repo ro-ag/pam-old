@@ -811,6 +811,7 @@ async fn handle_incoming(
         .await;
         return Ok(());
     }
+    learn_project_root(&request, &store).await;
     if let (
         Capability::ApprovalDecide,
         RequestPayload::ApprovalDecide {
@@ -2431,6 +2432,7 @@ fn project_usage_summary(project: ProjectUsage) -> ProjectUsageSummary {
         project_id: project.project_id,
         events: project.events,
         last_event_ms: project.last_event_ms,
+        root: project.root,
     }
 }
 
@@ -2512,6 +2514,7 @@ pub(super) fn protocol_activity_event(record: AuditEventRecord) -> ActivityEvent
         decision: record.decision,
         outcome: record.outcome,
         occurred_at_ms: record.occurred_at_ms,
+        project_root: record.project_root,
     }
 }
 
@@ -4137,6 +4140,33 @@ fn brief_truth(brief: &BriefResult) -> OperationTruth {
 
 fn brief_item_is_bounded(item: &pam_protocol::BriefItem) -> bool {
     item.text.len() <= MAX_BRIEF_TEXT_BYTES && item.evidence.len() <= MAX_BRIEF_EVIDENCE_HANDLES
+}
+
+/// Opportunistically remembers the caller's project root so caller histories
+/// can later label this project by location instead of its opaque ID.
+///
+/// Best-effort and silent: an absent, invalid, or mismatched root never fails
+/// the request it rode in on. Validated exactly like a flow run's project
+/// root (canonical, absolute, and discovering back to this exact project ID)
+/// before ever reaching durable state.
+async fn learn_project_root(request: &RequestEnvelope, store: &Store) {
+    if request.project_id.is_daemon_scope() {
+        return;
+    }
+    let Some(project_root) = &request.project_root else {
+        return;
+    };
+    let Ok(canonical_root) =
+        verify_flow_project_root(Path::new(project_root.as_str()), &request.project_id)
+    else {
+        return;
+    };
+    let Some(root) = canonical_root.to_str() else {
+        return;
+    };
+    let _ = store
+        .remember_project_root(request.project_id.clone(), root.to_owned())
+        .await;
 }
 
 async fn send_store_failure(

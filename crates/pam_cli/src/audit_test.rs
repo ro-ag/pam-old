@@ -23,6 +23,7 @@ fn audit_export_is_deterministic_versioned_ascii_ndjson() {
             redacted_detail: "line\n\"[REDACTED]\"".to_owned(),
             occurred_at_ms: 100,
             retain_until_ms: 200,
+            project_root: None,
         }],
     };
 

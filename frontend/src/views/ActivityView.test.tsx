@@ -86,6 +86,17 @@ describe("ActivityView", () => {
     expect(screen.getByText(/gui:pam-desktop · 11111111…/)).toBeInTheDocument();
   });
 
+  it("labels a project outside the catalog by its remembered root, and only truncates the id when rootless", async () => {
+    const props = await activityProps();
+    render(<ActivityView {...props} />);
+
+    const rooted = await screen.findByText(/cli:daemon-only-rooted · scratch-agent/);
+    expect(rooted).toHaveAttribute("title", "/work/scratch-agent");
+
+    const rootless = screen.getByText(/cli:daemon-only-rootless · 77777777…/);
+    expect(rootless).not.toHaveAttribute("title");
+  });
+
   it("renders the exact empty feed without inventing events", async () => {
     const props = await activityProps("empty");
     render(<ActivityView {...props} />);

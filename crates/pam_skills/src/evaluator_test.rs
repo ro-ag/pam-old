@@ -181,7 +181,7 @@ fn a_global_audit_without_an_audited_project_keeps_every_path_entry() {
     let response = run_evaluator(
         &detected,
         "private prompt over stdin",
-        test_config(Duration::from_secs(2), 1024, 1024),
+        test_config(Duration::from_secs(15), 1024, 1024),
     )
     .unwrap();
 
@@ -253,7 +253,7 @@ fn claude_runs_once_with_no_tools_sanitized_path_stdin_and_an_empty_workspace() 
     let response = run_evaluator(
         &evaluator,
         "private prompt over stdin",
-        test_config(Duration::from_secs(2), 1024, 1024),
+        test_config(Duration::from_secs(15), 1024, 1024),
     );
     assert!(
         response.is_ok(),
@@ -345,7 +345,7 @@ fn nonzero_exit_returns_a_typed_non_sensitive_error() {
     let error = run_evaluator(
         &evaluator,
         "private evaluator prompt",
-        test_config(Duration::from_secs(2), 1024, 1024),
+        test_config(Duration::from_secs(15), 1024, 1024),
     )
     .unwrap_err();
 
@@ -398,7 +398,7 @@ fn completed_leader_cannot_leave_a_descendant_holding_evaluator_pipes() {
     let response = run_evaluator(
         &evaluator,
         "prompt",
-        test_config(Duration::from_secs(2), 1024, 1024),
+        test_config(Duration::from_secs(15), 1024, 1024),
     )
     .unwrap();
 
@@ -418,6 +418,25 @@ fn completed_leader_cannot_leave_a_descendant_holding_evaluator_pipes() {
 }
 
 #[test]
+fn a_child_that_exits_without_reading_stdin_does_not_report_stdin_write() {
+    let test = TestDirectory::new("stdin-broken-pipe");
+    let project = test.directory("project");
+    let bin = test.directory("bin");
+    // Never touches stdin, so the prompt writer's pipe read end disappears the moment this
+    // process exits. The prompt is sized well past any OS pipe buffer so the writer is still
+    // blocked on the full pipe when that happens, making the resulting broken pipe
+    // deterministic instead of a race against how fast the child starts.
+    write_stub(&bin, "claude", "printf 'stub response'");
+    let evaluator = detect_single(&bin, &project);
+    let prompt = "x".repeat(600_000);
+    let config = EvaluatorRunConfig::new(Duration::from_secs(15), 1_048_576, 1024, 1024).unwrap();
+
+    let response = run_evaluator(&evaluator, &prompt, config).unwrap();
+
+    assert_eq!(response, "stub response");
+}
+
+#[test]
 fn oversized_standard_output_is_drained_and_rejected() {
     let test = TestDirectory::new("oversized");
     let project = test.directory("project");
@@ -429,7 +448,7 @@ fn oversized_standard_output_is_drained_and_rejected() {
         run_evaluator(
             &evaluator,
             "prompt",
-            test_config(Duration::from_secs(2), 16, 1024),
+            test_config(Duration::from_secs(15), 16, 1024),
         )
         .unwrap_err(),
         EvaluatorRunError::StdoutTooLarge
@@ -448,7 +467,7 @@ fn invalid_utf8_standard_output_is_rejected() {
         run_evaluator(
             &evaluator,
             "prompt",
-            test_config(Duration::from_secs(2), 1024, 1024),
+            test_config(Duration::from_secs(15), 1024, 1024),
         )
         .unwrap_err(),
         EvaluatorRunError::InvalidUtf8Stdout

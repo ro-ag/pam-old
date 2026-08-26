@@ -5,8 +5,14 @@ use pam_platform::{
     CallerKind, IdentityError, NativeSecretBackend, ProjectIdentity, SecretLocator, SecretStore,
     SecretStoreError, SecretStoreErrorKind, caller_id, discover_project,
 };
-use pam_protocol::{ExpectedTargetKind, ModelMessage, ProtocolContractError, RequestEnvelope};
-use std::{error::Error, fmt, path::Path};
+use pam_protocol::{
+    ExpectedTargetKind, FlowProjectRoot, ModelMessage, ProtocolContractError, RequestEnvelope,
+};
+use std::{
+    error::Error,
+    fmt,
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -15,6 +21,11 @@ pub(crate) struct RequestContext {
     project_id: ProjectId,
     credential: CallerCredential,
     approval_id: Option<ApprovalId>,
+    /// The canonical root this context discovered its project from, when it
+    /// discovered one on the filesystem rather than being given a bare
+    /// project ID. Attached to outgoing requests so the daemon can learn a
+    /// human-readable location for this project; see [`Self::authenticate`].
+    project_root: Option<PathBuf>,
 }
 
 impl RequestContext {
@@ -36,6 +47,7 @@ impl RequestContext {
             project_id: project.id().clone(),
             credential,
             approval_id,
+            project_root: Some(project.root().to_path_buf()),
         })
     }
 
@@ -50,6 +62,7 @@ impl RequestContext {
             project_id,
             credential: CallerCredential::new("test-caller-credential"),
             approval_id,
+            project_root: None,
         }
     }
 
@@ -241,8 +254,15 @@ impl RequestContext {
 
     fn authenticate(&self, request: RequestEnvelope) -> RequestEnvelope {
         let request = request.authenticated(self.credential.clone());
-        match &self.approval_id {
+        let request = match &self.approval_id {
             Some(approval_id) => request.with_approval(approval_id.clone()),
+            None => request,
+        };
+        match self.project_root.as_deref().and_then(|root| {
+            let root = root.to_str()?;
+            FlowProjectRoot::new(root).ok()
+        }) {
+            Some(root) => request.with_project_root(root),
             None => request,
         }
     }
