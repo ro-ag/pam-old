@@ -679,6 +679,11 @@ async fn app_settings_reports_a_well_formed_default_snapshot() {
     // Settings already persisted, so only the paths' shape is asserted here.
     assert!(std::path::Path::new(&dto.models_dir).is_absolute());
     assert!(std::path::Path::new(&dto.data_dir).is_absolute());
+    assert!(std::path::Path::new(&dto.flows_dir).is_absolute());
+    assert!(
+        std::path::Path::new(&dto.flows_dir).ends_with(".pam/flows"),
+        "the flows dir must name the daemon-global library layout"
+    );
     assert!(std::path::Path::new(&dto.logs_dir).is_absolute());
     assert!(dto.logs_dir.ends_with("logs"));
 }

@@ -47,15 +47,12 @@ struct PersistedSettings {
 }
 
 /// Today's complete Settings snapshot: every location the GUI shows.
-///
-/// There is no `flowsDir`: this branch has no global (project-independent)
-/// flows helper to report a location for — `.pam/flows` lives per-project.
-/// Add the field if a global flows home is introduced later.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AppSettingsSnapshot {
     pub(crate) models_dir: PathBuf,
     pub(crate) models_dir_is_default: bool,
     pub(crate) data_dir: PathBuf,
+    pub(crate) flows_dir: PathBuf,
     pub(crate) logs_dir: PathBuf,
     pub(crate) logs_size_bytes: u64,
 }
@@ -80,6 +77,14 @@ fn settings_path(data_dir: &Path) -> PathBuf {
 
 fn logs_dir_for(data_dir: &Path) -> PathBuf {
     data_dir.join(LOGS_DIR_NAME)
+}
+
+/// The daemon-global flow-definition library: `<root>/.pam/flows` beneath
+/// `pam_platform::flow_library_root()`, which is the same user data
+/// directory `data_dir` already names here (resolved once at the command
+/// boundary, like `home`).
+fn flows_dir_for(data_dir: &Path) -> PathBuf {
+    data_dir.join(".pam").join("flows")
 }
 
 fn default_models_dir(home: &Path) -> PathBuf {
@@ -144,6 +149,7 @@ pub(crate) fn snapshot(data_dir: &Path, home: &Path) -> AppSettingsSnapshot {
     AppSettingsSnapshot {
         models_dir_is_default: models_dir == default_models_dir,
         models_dir,
+        flows_dir: flows_dir_for(data_dir),
         data_dir: data_dir.to_path_buf(),
         logs_size_bytes: logs_size_bytes(&logs_dir),
         logs_dir,
@@ -225,5 +231,8 @@ pub(crate) fn delete_logs(
 /// True when `path` is exactly one of today's known Settings locations — the
 /// only paths PAM will open in the system file manager for `reveal_path`.
 pub(crate) fn is_known_location(snapshot: &AppSettingsSnapshot, path: &Path) -> bool {
-    path == snapshot.models_dir || path == snapshot.data_dir || path == snapshot.logs_dir
+    path == snapshot.models_dir
+        || path == snapshot.data_dir
+        || path == snapshot.flows_dir
+        || path == snapshot.logs_dir
 }

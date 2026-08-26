@@ -888,14 +888,16 @@ pub struct HostMemoryDto {
 /// [`Self::host_memory`] — it works under the daemon authority with zero
 /// active projects.
 ///
-/// There is no `flowsDir`: this branch has no global (project-independent)
-/// flows helper, only the per-project `.pam/flows`.
+/// `flowsDir` is the daemon-global flow-definition library
+/// (`<flow_library_root>/.pam/flows`), the same on-disk catalog the Flows
+/// view and the CLI open.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppSettingsDto {
     pub models_dir: String,
     pub models_dir_is_default: bool,
     pub data_dir: String,
+    pub flows_dir: String,
     pub logs_dir: String,
     pub logs_size_bytes: u64,
 }
@@ -2109,7 +2111,7 @@ impl DesktopCore {
     ///
     /// Returns a bounded error when the fence is not the exact daemon
     /// authority, its operation UUID was replayed, or `path` does not match
-    /// the models, data, or logs directory.
+    /// the models, data, flows, or logs directory.
     pub async fn reveal_path(&self, fence: CommandFence, path: String) -> DesktopResult<()> {
         let _command = self.command_gate.lock().await;
         self.begin_daemon(&fence).await?;
@@ -3635,6 +3637,7 @@ fn app_settings_dto(snapshot: &settings::AppSettingsSnapshot) -> AppSettingsDto 
         models_dir: snapshot.models_dir.to_string_lossy().into_owned(),
         models_dir_is_default: snapshot.models_dir_is_default,
         data_dir: snapshot.data_dir.to_string_lossy().into_owned(),
+        flows_dir: snapshot.flows_dir.to_string_lossy().into_owned(),
         logs_dir: snapshot.logs_dir.to_string_lossy().into_owned(),
         logs_size_bytes: snapshot.logs_size_bytes,
     }

@@ -18,9 +18,10 @@ describe("SettingsView", () => {
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(await screen.findByText("/Users/fixture/llm")).toBeInTheDocument();
     expect(screen.getByText("/Users/fixture/Library/Application Support/dev.PAM.PAM")).toBeInTheDocument();
+    expect(screen.getByText("/Users/fixture/Library/Application Support/dev.PAM.PAM/.pam/flows")).toBeInTheDocument();
     expect(screen.getByText("/Users/fixture/Library/Application Support/dev.PAM.PAM/logs")).toBeInTheDocument();
     expect(screen.getByText(/on disk today/)).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Reveal" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Reveal" })).toHaveLength(4);
   });
 
   it("round-trips a custom models directory through settingsUpdate", async () => {
