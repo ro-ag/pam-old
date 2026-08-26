@@ -252,7 +252,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           bundle="target/$TARGET/release/bundle"
           binary="target/$TARGET/release/pam"
           mapfile -t appimages < <(find "$bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print)
@@ -306,9 +306,11 @@ jobs:
           )
           verify_payload() {
             local root="$1"
-            # Single-binary product: the payload ships exactly one executable.
+            # Single-binary product; the AppImage additionally carries the
+            # xdg-open helper that linuxdeploy's gtk plugin bundles for
+            # tauri-plugin-opener. Nothing else belongs in the payload.
             mapfile -t binaries < <(find "$root/usr/bin" -maxdepth 1 -type f -printf '%f\n' | sort)
-            [[ "${binaries[*]}" == "pam" ]]
+            [[ "${binaries[*]}" == "pam" || "${binaries[*]}" == "pam xdg-open" ]]
             machine="$(readelf -h "$root/usr/bin/pam" | awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2 }')"
             [[ "$machine" == "$expected_machine" ]]
             verify_helper_contract "$root/usr/bin/pam"
