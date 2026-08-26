@@ -4,6 +4,21 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-26
+
+### Added
+
+- Settings shows the global flow library's on-disk location as a fourth
+  storage entry — revealable in Finder like the model, data, and log
+  directories.
+
+### Fixed
+
+- The Flows view's Visual mode now works without an active project:
+  parsing a flow document into the graph and composing it back to TOML
+  run under the daemon authority, matching the rest of the global flow
+  library.
+
 ## [0.7.0] - 2026-08-26
 
 ### Added
