@@ -528,6 +528,34 @@ describe("model runtime panel", () => {
     expect(props.onModelImported).toHaveBeenCalledTimes(1);
   }, 10_000);
 
+  it("cancels a running download, keeps the partial bytes, and offers resume", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
+    await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
+
+    // Cancel mid-flight (the fixture advances 40% per ~800ms poll).
+    expect(await within(panel).findByText(/40%/)).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+    expect(
+      await within(panel).findByText(/Download cancelled — .* kept on disk/, {}, { timeout: 2_000 }),
+    ).toBeInTheDocument();
+    const resume = within(panel).getByRole("button", { name: "Resume download" });
+    expect(props.onModelImported).not.toHaveBeenCalled();
+
+    // Resuming picks up from the kept bytes and completes.
+    await userEvent.click(resume);
+    expect(
+      await within(panel).findByText("Downloaded and registered.", {}, { timeout: 4_000 }),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
   it("shows a retry after a failed preset download", async () => {
     const props = await controlCenterProps("model-none");
     vi.spyOn(props.bridge, "modelDownloadStatus")

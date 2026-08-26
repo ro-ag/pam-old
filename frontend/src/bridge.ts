@@ -167,6 +167,8 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     modelDownloadStatus: (fence) =>
       invokeCommand<ModelDownloadStatusDto>("model_download_status", request(flatFence(fence))),
+    modelDownloadCancel: (fence) =>
+      invokeCommand<ModelDownloadDto>("model_download_cancel", request(flatFence(fence))),
     hostMemory: (fence) =>
       invokeCommand<HostMemoryDto>("host_memory", request(flatFence(fence))),
     appSettings: (fence) =>

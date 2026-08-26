@@ -729,7 +729,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     presetId: string;
     receivedBytes: number;
     totalBytes: number;
-    status: "running" | "complete" | "failed";
+    status: "running" | "complete" | "failed" | "cancelled";
     failure: ModelFailureDto | null;
   } | null = null;
   // "model-download-fail" fails the first attempt (mirroring a dropped
@@ -1057,7 +1057,21 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         };
       }
       downloadAttempts += 1;
-      download = { presetId, receivedBytes: 0, totalBytes: preset.expectedSizeBytes, status: "running", failure: null };
+      // Restarting a cancelled download resumes from the kept partial bytes,
+      // mirroring the daemon's on-disk resume.
+      const resumeBytes = download?.status === "cancelled" && download.presetId === presetId ? download.receivedBytes : 0;
+      download = { presetId, receivedBytes: resumeBytes, totalBytes: preset.expectedSizeBytes, status: "running", failure: null };
+      return { status: "ok" };
+    },
+    async modelDownloadCancel(_fence): Promise<ModelDownloadDto> {
+      if (download?.status !== "running") {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "download_not_running", detail: "No model download is running.", recovery: "Start a download before cancelling one." },
+        };
+      }
+      download.status = "cancelled";
+      download.failure = null;
       return { status: "ok" };
     },
     async modelDownloadStatus(_fence): Promise<ModelDownloadStatusDto> {

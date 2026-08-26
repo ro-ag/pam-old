@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -75,6 +75,9 @@ pub(crate) enum ModelDownloadStatusKind {
     Running,
     Complete,
     Failed,
+    /// Stopped on user request; the partial file stays on disk, so starting
+    /// the same preset again resumes where the transfer left off.
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,6 +104,7 @@ impl ModelDownloadSnapshot {
 struct ManagerState {
     snapshot: ModelDownloadSnapshot,
     received: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
 }
 
 /// Single-flight background download runner, polled for progress.
@@ -114,6 +118,7 @@ impl ModelDownloadManager {
             state: Mutex::new(ManagerState {
                 snapshot: ModelDownloadSnapshot::idle(),
                 received: Arc::new(AtomicU64::new(0)),
+                cancel: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -155,12 +160,32 @@ impl ModelDownloadManager {
             |_| home.join("llm"),
             |data_dir| settings::effective_models_dir(&data_dir, &home),
         );
-        self.start_with(preset, models_root, |received| {
+        self.start_with(preset, models_root, |received, cancel| {
             ReqwestDownloadTransport::secure().map(|transport| CountingTransport {
                 inner: transport,
                 received,
+                cancel,
             })
         })
+    }
+
+    /// Requests cancellation of the running download. The transfer stops at
+    /// the next chunk boundary with its partial file synced to disk, so a
+    /// later start of the same preset resumes instead of restarting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelDownloadFailure`] when no download is running.
+    pub(crate) fn cancel(&self) -> Result<(), ModelDownloadFailure> {
+        let state = self.state.lock().unwrap();
+        if state.snapshot.status != ModelDownloadStatusKind::Running {
+            return Err(ModelDownloadFailure::new(
+                "No model download is running.",
+                "Start a download before cancelling one.",
+            ));
+        }
+        state.cancel.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Starts a download into a caller-supplied models root (destination
@@ -176,9 +201,9 @@ impl ModelDownloadManager {
     ) -> Result<(), ModelDownloadFailure>
     where
         T: DownloadTransport + 'static,
-        F: FnOnce(Arc<AtomicU64>) -> Result<T, ModelError> + Send + 'static,
+        F: FnOnce(Arc<AtomicU64>, Arc<AtomicBool>) -> Result<T, ModelError> + Send + 'static,
     {
-        let received = {
+        let (received, cancel) = {
             let mut state = self.state.lock().unwrap();
             if state.snapshot.status == ModelDownloadStatusKind::Running {
                 return Err(ModelDownloadFailure::new(
@@ -187,7 +212,9 @@ impl ModelDownloadManager {
                 ));
             }
             let received = Arc::new(AtomicU64::new(0));
+            let cancel = Arc::new(AtomicBool::new(false));
             state.received = Arc::clone(&received);
+            state.cancel = Arc::clone(&cancel);
             state.snapshot = ModelDownloadSnapshot {
                 status: ModelDownloadStatusKind::Running,
                 preset_id: Some(preset.id.to_owned()),
@@ -195,11 +222,11 @@ impl ModelDownloadManager {
                 total_bytes: preset.expected_size_bytes,
                 failure: None,
             };
-            received
+            (received, cancel)
         };
         tokio::spawn(async move {
             let seed_received = Arc::clone(&received);
-            let outcome = match make_transport(received) {
+            let outcome = match make_transport(received, cancel) {
                 Ok(transport) => {
                     run_download(&transport, preset, &models_root, seed_received).await
                 }
@@ -217,6 +244,16 @@ impl ModelDownloadManager {
                 status: ModelDownloadStatusKind::Complete,
                 preset_id: Some(preset.id.to_owned()),
                 received_bytes: registered.size_bytes,
+                total_bytes: preset.expected_size_bytes,
+                failure: None,
+            },
+            // A requested cancel surfaces as the transfer error it forced;
+            // report it as Cancelled, not Failed. A download that completed
+            // before the flag was seen stays Complete above — truthfully.
+            Err(_) if state.cancel.load(Ordering::Relaxed) => ModelDownloadSnapshot {
+                status: ModelDownloadStatusKind::Cancelled,
+                preset_id: Some(preset.id.to_owned()),
+                received_bytes: state.received.load(Ordering::Relaxed),
                 total_bytes: preset.expected_size_bytes,
                 failure: None,
             },
@@ -331,8 +368,9 @@ async fn persist(registered: RegisteredModel) -> Result<RegisteredModel, ModelDo
 /// Delegates to an inner transport, adding each response chunk's length into
 /// a shared counter so a caller can poll download progress.
 pub(crate) struct CountingTransport<T> {
-    inner: T,
-    received: Arc<AtomicU64>,
+    pub(crate) inner: T,
+    pub(crate) received: Arc<AtomicU64>,
+    pub(crate) cancel: Arc<AtomicBool>,
 }
 
 impl<T: DownloadTransport> DownloadTransport for CountingTransport<T> {
@@ -343,11 +381,13 @@ impl<T: DownloadTransport> DownloadTransport for CountingTransport<T> {
         request: TransferRequest,
     ) -> impl Future<Output = Result<Self::Response, ModelError>> + Send {
         let received = Arc::clone(&self.received);
+        let cancel = Arc::clone(&self.cancel);
         let sent = self.inner.send(request);
         async move {
             Ok(CountingResponse {
                 response: sent.await?,
                 received,
+                cancel,
             })
         }
     }
@@ -356,12 +396,17 @@ impl<T: DownloadTransport> DownloadTransport for CountingTransport<T> {
 pub(crate) struct CountingResponse<R> {
     response: R,
     received: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl<R> CountingResponse<R> {
     #[cfg(test)]
     pub(crate) fn new(response: R, received: Arc<AtomicU64>) -> Self {
-        Self { response, received }
+        Self {
+            response,
+            received,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -392,8 +437,15 @@ impl<R: DownloadResponse> DownloadResponse for CountingResponse<R> {
 
     fn next_chunk(&mut self) -> impl Future<Output = Result<Option<Vec<u8>>, ModelError>> + Send {
         let received = Arc::clone(&self.received);
+        let cancel = Arc::clone(&self.cancel);
         let next = self.response.next_chunk();
         async move {
+            // A requested cancel forces the transfer-error path, which syncs
+            // and keeps the partial file for resume; `finish` reports it as
+            // Cancelled rather than Failed.
+            if cancel.load(Ordering::Relaxed) {
+                return Err(ModelError::TransferInterrupted);
+            }
             let chunk = next.await?;
             if let Some(chunk) = &chunk {
                 let chunk_bytes = u64::try_from(chunk.len()).unwrap_or(u64::MAX);

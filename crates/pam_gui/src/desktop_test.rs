@@ -667,6 +667,17 @@ async fn model_import_status_defaults_to_idle() {
 }
 
 #[tokio::test]
+async fn model_download_cancel_without_a_run_is_unavailable_data_not_an_error() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_download_cancel(daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+
+    assert!(matches!(dto, ModelDownloadDto::Unavailable { .. }));
+}
+
+#[tokio::test]
 async fn model_download_status_defaults_to_idle() {
     let core = DesktopCore::new("/bounded/test");
     let dto = core
@@ -683,6 +694,22 @@ async fn model_download_status_defaults_to_idle() {
             "totalBytes": 0,
             "failure": null
         })
+    );
+}
+
+#[test]
+fn model_download_status_kinds_have_stable_exhaustive_wire_names() {
+    use super::desktop::ModelDownloadStatusKindDto;
+    assert_eq!(
+        serde_json::to_value([
+            ModelDownloadStatusKindDto::Idle,
+            ModelDownloadStatusKindDto::Running,
+            ModelDownloadStatusKindDto::Complete,
+            ModelDownloadStatusKindDto::Failed,
+            ModelDownloadStatusKindDto::Cancelled,
+        ])
+        .unwrap(),
+        serde_json::json!(["idle", "running", "complete", "failed", "cancelled"])
     );
 }
 
@@ -1246,6 +1273,7 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
             .await,
     );
     assert_daemon_replay_conflict(core.model_download_status(fence()).await);
+    assert_daemon_replay_conflict(core.model_download_cancel(fence()).await);
     assert_daemon_replay_conflict(core.host_memory(fence()).await);
     assert_daemon_replay_conflict(core.app_settings(fence()).await);
     assert_daemon_replay_conflict(core.settings_update(fence(), None).await);

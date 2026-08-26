@@ -610,7 +610,7 @@ export type ModelDownloadDto =
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
 export interface ModelDownloadStatusDto {
-  status: "idle" | "running" | "complete" | "failed";
+  status: "idle" | "running" | "complete" | "failed" | "cancelled";
   presetId: string | null;
   receivedBytes: number;
   totalBytes: number;
@@ -701,6 +701,7 @@ export interface PamBridge {
   modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
   modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
   modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;
+  modelDownloadCancel(fence: CommandFence): Promise<ModelDownloadDto>;
   hostMemory(fence: CommandFence): Promise<HostMemoryDto>;
   appSettings(fence: CommandFence): Promise<AppSettingsDto>;
   settingsUpdate(fence: CommandFence, modelsDir: string | null): Promise<AppSettingsDto>;
