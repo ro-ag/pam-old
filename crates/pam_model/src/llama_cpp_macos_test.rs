@@ -31,6 +31,8 @@ fn registered(digest: ContentDigest, size_bytes: u64) -> RegisteredModel {
             version: 3,
             tensor_count: 1,
             metadata_kv_count: 1,
+            architecture: None,
+            model_name: None,
         },
         license: LicenseSnapshot::new(
             "Apache-2.0",

@@ -47,7 +47,9 @@ use crate::{
         MIN_SUPPORTED_HOST_MEMORY_BYTES, ModelDownloadManager, ModelDownloadStatusKind,
         host_memory_total_bytes,
     },
-    model_import::{ModelImportParams, run_model_import},
+    model_import::{
+        MIN_RECOMMENDED_MODEL_BYTES, ModelImportParams, run_model_import, run_model_inspect,
+    },
     model_presets,
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
@@ -773,6 +775,33 @@ pub enum ModelImportDto {
     Ok { model: ModelSummaryDto },
     Blocked { failure: FailureDto },
     Unavailable { failure: FailureDto },
+}
+
+/// Pre-import preview of a candidate GGUF for the Control Center's manual
+/// import flow: identity metadata and the recommended-size floor verdict,
+/// read without hashing the file. Failures use the same bounded envelope as
+/// [`ModelImportDto`] rather than a raw error.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelInspectDto {
+    Ok {
+        file_name: String,
+        size_bytes: u64,
+        architecture: Option<String>,
+        model_name: Option<String>,
+        below_floor: bool,
+        floor_bytes: u64,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
 }
 
 /// One curated, pre-verified downloadable model preset.
@@ -1786,6 +1815,46 @@ impl DesktopCore {
             Err(failure) => ModelImportDto::Unavailable {
                 failure: unavailable_failure(
                     Some("model_import_failed".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                ),
+            },
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Previews a candidate GGUF before import: reads its bounded header and
+    /// identity metadata without hashing, so the Control Center can show the
+    /// architecture, model name, and floor verdict before the user commits.
+    ///
+    /// This is a read-only local check on the user's own filesystem, like
+    /// [`Self::model_import`]; failures are bounded unavailable data, never
+    /// raw internals.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_inspect(
+        &self,
+        fence: CommandFence,
+        path: String,
+    ) -> DesktopResult<ModelInspectDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = match run_model_inspect(PathBuf::from(path)).await {
+            Ok(report) => ModelInspectDto::Ok {
+                file_name: report.file_name,
+                size_bytes: report.size_bytes,
+                architecture: report.architecture,
+                model_name: report.model_name,
+                below_floor: report.below_floor,
+                floor_bytes: MIN_RECOMMENDED_MODEL_BYTES,
+            },
+            Err(failure) => ModelInspectDto::Unavailable {
+                failure: unavailable_failure(
+                    Some("model_inspect_failed".to_owned()),
                     failure.detail,
                     failure.recovery,
                 ),

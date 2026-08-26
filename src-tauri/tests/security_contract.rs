@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "model_status",
     "model_infer",
     "model_import",
+    "model_inspect",
     "model_presets",
     "model_download",
     "model_download_status",
@@ -70,6 +71,10 @@ fn main_window_is_local_and_has_only_bounded_permissions() {
     expected.push(Value::String(
         "core:window:allow-internal-toggle-maximize".to_owned(),
     ));
+    // The manual import flow opens a native file picker for the candidate
+    // GGUF; the dialog plugin's open command is the narrowest permission
+    // that allows it.
+    expected.push(Value::String("dialog:allow-open".to_owned()));
 
     assert_eq!(capability["local"], true);
     assert_eq!(capability["windows"], json!(["main"]));

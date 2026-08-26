@@ -23,8 +23,9 @@ mod path_test;
 mod runtime_test;
 
 pub use acquisition::{
-    DownloadRequest, DownloadResponse, DownloadTransport, ImportRequest, ReqwestDownloadTransport,
-    TransferRequest, download_https, import_existing, revalidate_registered_model,
+    DownloadRequest, DownloadResponse, DownloadTransport, ImportRequest, ModelFileReport,
+    ReqwestDownloadTransport, TransferRequest, download_https, import_existing, inspect_model_file,
+    revalidate_registered_model,
 };
 pub use error::ModelError;
 #[cfg(target_os = "macos")]

@@ -1653,6 +1653,8 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .model-import label.model-import-consent { display: flex; align-items: center; gap: 8px; color: var(--pam-content-secondary); font-size: 12px; }
 .model-import .model-actions { align-items: center; }
 .model-import .model-actions small { color: var(--pam-muted); font-size: 11px; }
+.model-import-path { display: flex; align-items: flex-end; gap: 8px; }
+.model-import-path label { flex: 1; min-width: 0; }
 
 .model-setup { gap: calc(14px * var(--density)); }
 .model-setup-divider { display: flex; align-items: center; gap: 10px; margin: 4px 0; color: var(--pam-muted); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }

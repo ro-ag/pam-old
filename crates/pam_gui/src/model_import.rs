@@ -15,7 +15,7 @@ use std::{
 use pam_core::ContentDigest;
 use pam_model::{
     ImportRequest, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelError, ModelKey,
-    RegisteredModel, import_existing,
+    RegisteredModel, import_existing, inspect_model_file,
 };
 use pam_platform::user_data_dir;
 use pam_store::Store;
@@ -208,4 +208,40 @@ pub(crate) async fn run_model_import(
         result.map_err(|error| ModelImportFailure::new(error.to_string(), store_recovery))?;
     shutdown.map_err(|error| ModelImportFailure::new(error.to_string(), store_recovery))?;
     Ok(registered)
+}
+
+/// One pre-import preview of a candidate GGUF: its identity metadata and
+/// whether it clears PAM's recommended size floor.
+pub(crate) struct ModelInspectReport {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub architecture: Option<String>,
+    pub model_name: Option<String>,
+    pub below_floor: bool,
+}
+
+/// Reads a candidate GGUF's bounded header and identity metadata without
+/// hashing it, so the Control Center can preview a model before importing.
+pub(crate) async fn run_model_inspect(
+    path: PathBuf,
+) -> Result<ModelInspectReport, ModelImportFailure> {
+    let recovery = "Point PAM at a downloaded .gguf file.";
+    let file_name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ModelImportFailure::new("model path must end in a Unicode filename", recovery)
+        })?;
+    let report = tokio::task::spawn_blocking(move || inspect_model_file(&path))
+        .await
+        .map_err(|_| ModelImportFailure::new("PAM could not complete model inspection.", recovery))?
+        .map_err(|error| ModelImportFailure::new(error.to_string(), recovery))?;
+    Ok(ModelInspectReport {
+        file_name,
+        size_bytes: report.size_bytes,
+        architecture: report.metadata.architecture,
+        model_name: report.metadata.model_name,
+        below_floor: report.size_bytes < MIN_RECOMMENDED_MODEL_BYTES,
+    })
 }

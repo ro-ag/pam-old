@@ -41,6 +41,11 @@ const GGUF_MAX_TENSOR_NAME_BYTES: u64 = 127;
 const GGUF_MAX_STRING_BYTES: u64 = 256 * 1024 * 1024;
 const GGUF_MAX_DIMENSIONS: u32 = 4;
 const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024;
+/// Bound on the two identity metadata strings PAM extracts for display
+/// (`general.architecture`, `general.name`): both are short identifiers in
+/// every known GGUF, so a value past this is treated as malformed like any
+/// other oversized bounded read in this header.
+const GGUF_MAX_IDENTITY_STRING_BYTES: u64 = 256;
 
 pub struct ImportRequest {
     pub descriptor: ModelDescriptor,
@@ -221,6 +226,41 @@ pub fn import_existing(request: ImportRequest) -> Result<RegisteredModel, ModelE
         ModelSource::Local,
         request.registered_at_ms,
     ))
+}
+
+/// One pre-import inspection of a candidate GGUF: its size and bounded
+/// header metadata, without hashing.
+pub struct ModelFileReport {
+    pub size_bytes: u64,
+    pub metadata: GgufMetadata,
+}
+
+/// Reads a candidate GGUF's size and bounded header metadata without
+/// hashing it, so the caller can preview a model before committing to the
+/// full verify-and-register path.
+///
+/// # Errors
+///
+/// Returns an error when the path is unsafe or the file is not a regular,
+/// bounded GGUF.
+pub fn inspect_model_file(path: &Path) -> Result<ModelFileReport, ModelError> {
+    validate_absolute_unicode_path(path)?;
+    let (parent, name) = open_parent(path, false)?;
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let mut file = parent
+        .open_with(&name, &options)
+        .map_err(|error| classify_file_open_error(&parent, &name, error))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(ModelError::NotRegularFile);
+    }
+    let size_bytes = metadata.len();
+    let metadata = inspect_gguf(&mut file, size_bytes)?;
+    Ok(ModelFileReport {
+        size_bytes,
+        metadata,
+    })
 }
 
 /// Reopens and revalidates the exact bytes of a registered GGUF.
@@ -706,6 +746,8 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
     let mut metadata_keys = HashSet::new();
     let mut alignment = GGUF_DEFAULT_ALIGNMENT;
     let mut array_items = 0;
+    let mut architecture = None;
+    let mut model_name = None;
     for _ in 0..metadata_kv_count {
         let key = read_gguf_string(file, &mut cursor, file_size, GGUF_MAX_METADATA_KEY_BYTES)?;
         if !valid_metadata_key(&key) || !metadata_keys.insert(key.clone()) {
@@ -720,53 +762,22 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
             if !(8..=GGUF_MAX_ALIGNMENT).contains(&alignment) || !alignment.is_power_of_two() {
                 return Err(ModelError::InvalidGguf);
             }
+        } else if value_type == 8 && (key == b"general.architecture" || key == b"general.name") {
+            let value =
+                read_gguf_string(file, &mut cursor, file_size, GGUF_MAX_IDENTITY_STRING_BYTES)?;
+            let value = String::from_utf8(value).ok();
+            if key == b"general.architecture" {
+                architecture = value;
+            } else {
+                model_name = value;
+            }
         } else {
             skip_metadata_value(file, &mut cursor, file_size, value_type, &mut array_items)?;
         }
         ensure_header_budget(cursor)?;
     }
 
-    let tensor_capacity = usize::try_from(tensor_count).map_err(|_| ModelError::InvalidGguf)?;
-    let mut tensor_names = HashSet::with_capacity(tensor_capacity);
-    let mut tensors = Vec::with_capacity(tensor_capacity);
-    for _ in 0..tensor_count {
-        let name = read_gguf_string(file, &mut cursor, file_size, GGUF_MAX_TENSOR_NAME_BYTES)?;
-        if !valid_tensor_name(&name) || !tensor_names.insert(name) {
-            return Err(ModelError::InvalidGguf);
-        }
-        let dimensions = read_u32(file, &mut cursor, file_size)?;
-        if !(1..=GGUF_MAX_DIMENSIONS).contains(&dimensions) {
-            return Err(ModelError::InvalidGguf);
-        }
-        let first_dimension = read_u64(file, &mut cursor, file_size)?;
-        if first_dimension == 0 {
-            return Err(ModelError::InvalidGguf);
-        }
-        let mut rows = 1_u64;
-        for _ in 1..dimensions {
-            let dimension = read_u64(file, &mut cursor, file_size)?;
-            if dimension == 0 {
-                return Err(ModelError::InvalidGguf);
-            }
-            rows = rows.checked_mul(dimension).ok_or(ModelError::InvalidGguf)?;
-        }
-        let tensor_type = read_u32(file, &mut cursor, file_size)?;
-        let (block_elements, block_bytes) = ggml_type_layout(tensor_type)?;
-        if first_dimension % block_elements != 0 {
-            return Err(ModelError::InvalidGguf);
-        }
-        let length = first_dimension
-            .checked_div(block_elements)
-            .and_then(|blocks| blocks.checked_mul(block_bytes))
-            .and_then(|row_bytes| row_bytes.checked_mul(rows))
-            .filter(|length| *length > 0 && *length <= ModelDescriptor::MAX_SIZE_BYTES)
-            .ok_or(ModelError::InvalidGguf)?;
-        tensors.push(TensorSpan {
-            offset: read_u64(file, &mut cursor, file_size)?,
-            length,
-        });
-        ensure_header_budget(cursor)?;
-    }
+    let mut tensors = read_tensor_spans(file, &mut cursor, file_size, tensor_count)?;
 
     if tensor_count > 0 {
         let data_start = align_up(cursor, alignment).ok_or(ModelError::InvalidGguf)?;
@@ -793,6 +804,8 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
         version,
         tensor_count,
         metadata_kv_count,
+        architecture,
+        model_name,
     })
 }
 
@@ -800,6 +813,56 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
 struct TensorSpan {
     offset: u64,
     length: u64,
+}
+
+fn read_tensor_spans(
+    file: &mut CapFile,
+    cursor: &mut u64,
+    file_size: u64,
+    tensor_count: u64,
+) -> Result<Vec<TensorSpan>, ModelError> {
+    let tensor_capacity = usize::try_from(tensor_count).map_err(|_| ModelError::InvalidGguf)?;
+    let mut tensor_names = HashSet::with_capacity(tensor_capacity);
+    let mut tensors = Vec::with_capacity(tensor_capacity);
+    for _ in 0..tensor_count {
+        let name = read_gguf_string(file, cursor, file_size, GGUF_MAX_TENSOR_NAME_BYTES)?;
+        if !valid_tensor_name(&name) || !tensor_names.insert(name) {
+            return Err(ModelError::InvalidGguf);
+        }
+        let dimensions = read_u32(file, cursor, file_size)?;
+        if !(1..=GGUF_MAX_DIMENSIONS).contains(&dimensions) {
+            return Err(ModelError::InvalidGguf);
+        }
+        let first_dimension = read_u64(file, cursor, file_size)?;
+        if first_dimension == 0 {
+            return Err(ModelError::InvalidGguf);
+        }
+        let mut rows = 1_u64;
+        for _ in 1..dimensions {
+            let dimension = read_u64(file, cursor, file_size)?;
+            if dimension == 0 {
+                return Err(ModelError::InvalidGguf);
+            }
+            rows = rows.checked_mul(dimension).ok_or(ModelError::InvalidGguf)?;
+        }
+        let tensor_type = read_u32(file, cursor, file_size)?;
+        let (block_elements, block_bytes) = ggml_type_layout(tensor_type)?;
+        if first_dimension % block_elements != 0 {
+            return Err(ModelError::InvalidGguf);
+        }
+        let length = first_dimension
+            .checked_div(block_elements)
+            .and_then(|blocks| blocks.checked_mul(block_bytes))
+            .and_then(|row_bytes| row_bytes.checked_mul(rows))
+            .filter(|length| *length > 0 && *length <= ModelDescriptor::MAX_SIZE_BYTES)
+            .ok_or(ModelError::InvalidGguf)?;
+        tensors.push(TensorSpan {
+            offset: read_u64(file, cursor, file_size)?,
+            length,
+        });
+        ensure_header_budget(*cursor)?;
+    }
+    Ok(tensors)
 }
 
 fn ggml_type_layout(tensor_type: u32) -> Result<(u64, u64), ModelError> {

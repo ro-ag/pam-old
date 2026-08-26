@@ -9,6 +9,7 @@ import type {
   DaemonStatsDto,
   HostMemoryDto,
   ModelImportParams,
+  ModelInspectDto,
   ModelPresetDto,
   ModelStatusDto,
   PamBridge,
@@ -549,9 +550,54 @@ function ManualImport({
   const [allowSmall, setAllowSmall] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [importState, setImportState] = useState<ImportState>({ state: "idle" });
+  const [inspect, setInspect] = useState<ModelInspectDto | null>(null);
+  const inspectSequence = useRef(0);
   const busy = importState.state === "running";
   const set = (field: keyof typeof form) => (value: string) =>
     setForm((current) => ({ ...current, [field]: value }));
+
+  // Fires whenever a path lands (browse pick, drag-drop, or blur of a typed
+  // path); prefills identity from what came back, but never overwrites text
+  // the user already typed.
+  const runInspect = useCallback(
+    async (path: string) => {
+      const sequence = ++inspectSequence.current;
+      try {
+        const response = await bridge.modelInspect(withDaemonOperation(), path);
+        if (sequence !== inspectSequence.current) return;
+        setInspect(response);
+        if (response.status === "ok" && response.architecture && response.modelName) {
+          const slug = (value: string) => value.toLowerCase().replace(/[\s_]+/g, "-");
+          const identity = `${slug(response.architecture)}/${slug(response.modelName)}`;
+          setForm((current) => (current.model.trim() ? current : { ...current, model: identity }));
+        }
+      } catch {
+        if (sequence === inspectSequence.current) setInspect(null);
+      }
+    },
+    [bridge],
+  );
+
+  const setPath = (path: string) => {
+    inspectSequence.current += 1; // invalidate any in-flight inspection
+    setInspect(null);
+    setForm((current) => ({ ...current, path }));
+  };
+
+  const browse = async () => {
+    const pluginSpecifier = "@tauri-apps/plugin-dialog";
+    const { open } = (await import(pluginSpecifier)) as {
+      open: (opts: unknown) => Promise<string | string[] | null>;
+    };
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+    });
+    if (typeof selected === "string" && selected) {
+      setPath(selected);
+      void runInspect(selected);
+    }
+  };
 
   // Dropping a GGUF from the file manager fills the path; native shell only.
   useEffect(() => {
@@ -563,7 +609,10 @@ function ManualImport({
         const stop = await getCurrentWebview().onDragDropEvent((event) => {
           if (event.payload.type !== "drop") return;
           const dropped = event.payload.paths.find((path) => path.toLowerCase().endsWith(".gguf"));
-          if (dropped) setForm((current) => ({ ...current, path: dropped }));
+          if (dropped) {
+            setPath(dropped);
+            void runInspect(dropped);
+          }
         });
         if (cancelled) stop();
         else unlisten = stop;
@@ -629,7 +678,53 @@ function ManualImport({
 
   return (
     <form className="model-import" onSubmit={(event) => void submit(event)}>
-      {field("GGUF file path", "path", "/absolute/path/to/model.gguf")}
+      <div className="model-import-path">
+        <label>
+          GGUF file path
+          <input
+            type="text"
+            name="model-import-path"
+            placeholder="/absolute/path/to/model.gguf"
+            value={form.path}
+            disabled={busy}
+            onChange={(event) => setPath(event.target.value)}
+            onBlur={(event) => {
+              const trimmed = event.target.value.trim();
+              if (trimmed) void runInspect(trimmed);
+            }}
+          />
+        </label>
+        {bridge.mode === "native" && (
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            disabled={busy}
+            onClick={() => void browse()}
+          >
+            Browse…
+          </button>
+        )}
+      </div>
+      {inspect?.status === "ok" && (
+        <div className="model-identity">
+          <strong title={inspect.fileName}>{inspect.fileName}</strong>
+          <small>
+            {formatModelSize(inspect.sizeBytes)}
+            {inspect.architecture && inspect.modelName
+              ? ` · ${inspect.architecture} · ${inspect.modelName}`
+              : ""}
+          </small>
+          {inspect.belowFloor && (
+            <p className="model-fit-warn" role="status">
+              Below PAM's recommended minimum of {formatModelSize(inspect.floorBytes)} — override this
+              under Advanced if you want to import it anyway.
+            </p>
+          )}
+        </div>
+      )}
+      {inspect && inspect.status !== "ok" && (
+        <p className="model-note">{inspect.failure.detail}</p>
+      )}
       {field("Model identity", "model", "vendor/name, e.g. qwen/qwen3-4b-instruct-q4")}
       <div className="model-advanced">
         <button
