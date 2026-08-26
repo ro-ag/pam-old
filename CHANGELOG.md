@@ -4,6 +4,18 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-08-26
+
+### Fixed
+
+- GGUF metadata that spells its license in lowercase ("apache-2.0") now
+  prefills the license URL and notice too, not just the identifier.
+- Re-importing a model you already registered no longer fails with
+  "already registered with different metadata": an identical re-import
+  is accepted as-is, and re-importing the same verified file with a new
+  license notice updates your recorded consent. A different file
+  claiming an existing model's identity is still refused.
+
 ## [0.8.2] - 2026-08-26
 
 ### Added
