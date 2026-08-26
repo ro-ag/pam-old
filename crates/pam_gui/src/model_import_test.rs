@@ -4,7 +4,9 @@ use pam_core::ContentDigest;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::model_import::{ModelImportParams, notice_digest, parse_model_key, verify_and_register};
+use crate::model_import::{
+    ModelImportParams, notice_digest, parse_model_key, run_model_inspect, verify_and_register,
+};
 
 struct TestDirectory(PathBuf);
 
@@ -131,4 +133,59 @@ fn reports_a_missing_file_without_raw_internals() {
             .starts_with("PAM could not open the model file")
     );
     assert!(failure.recovery.is_some());
+}
+
+/// A FIFO with no writer would block forever in `open()`; the pre-open
+/// `symlink_metadata` guard must reject it immediately instead of hanging.
+#[cfg(unix)]
+#[test]
+fn rejects_a_fifo_instead_of_blocking_on_open() {
+    let directory = TestDirectory::new("fifo");
+    let path = directory.0.join("model.gguf");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo must be available on macOS and Linux CI");
+    assert!(status.success());
+
+    let failure = verify_and_register(params(path), 1).err().unwrap();
+    assert!(failure.detail.contains("regular file"));
+    assert!(failure.recovery.is_some());
+}
+
+/// A symlink must be rejected even when it points at an otherwise-valid
+/// GGUF: `symlink_metadata` never follows the final component.
+#[cfg(unix)]
+#[test]
+fn rejects_a_symlink_even_to_a_valid_gguf() {
+    let directory = TestDirectory::new("symlink");
+    let target = directory.0.join("real.gguf");
+    fs::write(&target, one_tensor_gguf()).unwrap();
+    let link = directory.0.join("model.gguf");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let failure = verify_and_register(params(link), 1).err().unwrap();
+    assert!(failure.detail.contains("regular file"));
+    assert!(failure.recovery.is_some());
+}
+
+/// `model_inspect` must reject a non-regular-file path fast, before ever
+/// calling into `pam_model::inspect_model_file`.
+#[cfg(unix)]
+#[tokio::test]
+async fn model_inspect_rejects_a_non_regular_file_fast() {
+    let directory = TestDirectory::new("inspect-fifo");
+    let path = directory.0.join("model.gguf");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo must be available on macOS and Linux CI");
+    assert!(status.success());
+
+    let failure = tokio::time::timeout(std::time::Duration::from_secs(5), run_model_inspect(path))
+        .await
+        .expect("must reject before the inspect timeout, let alone hang")
+        .err()
+        .unwrap();
+    assert!(failure.detail.contains("regular file"));
 }

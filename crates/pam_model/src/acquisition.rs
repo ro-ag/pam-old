@@ -41,10 +41,11 @@ const GGUF_MAX_TENSOR_NAME_BYTES: u64 = 127;
 const GGUF_MAX_STRING_BYTES: u64 = 256 * 1024 * 1024;
 const GGUF_MAX_DIMENSIONS: u32 = 4;
 const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024;
-/// Bound on the two identity metadata strings PAM extracts for display
+/// Display cap on the two identity metadata strings PAM extracts for the UI
 /// (`general.architecture`, `general.name`): both are short identifiers in
-/// every known GGUF, so a value past this is treated as malformed like any
-/// other oversized bounded read in this header.
+/// every known GGUF, but neither is required by the format itself, so a
+/// value past this cap is skipped like any other metadata PAM doesn't read
+/// rather than treated as a malformed file — see `read_gguf_identity_string`.
 const GGUF_MAX_IDENTITY_STRING_BYTES: u64 = 256;
 
 pub struct ImportRequest {
@@ -763,9 +764,8 @@ fn inspect_gguf(file: &mut CapFile, file_size: u64) -> Result<GgufMetadata, Mode
                 return Err(ModelError::InvalidGguf);
             }
         } else if value_type == 8 && (key == b"general.architecture" || key == b"general.name") {
-            let value =
-                read_gguf_string(file, &mut cursor, file_size, GGUF_MAX_IDENTITY_STRING_BYTES)?;
-            let value = String::from_utf8(value).ok();
+            let value = read_gguf_identity_string(file, &mut cursor, file_size)?
+                .and_then(|bytes| String::from_utf8(bytes).ok());
             if key == b"general.architecture" {
                 architecture = value;
             } else {
@@ -990,6 +990,33 @@ fn read_gguf_string(
     let mut bytes = vec![0; length];
     read_exact(file, cursor, file_size, &mut bytes)?;
     Ok(bytes)
+}
+
+/// Reads a display-only GGUF identity string (`general.architecture` or
+/// `general.name`), or skips it and returns `None` when it exceeds
+/// [`GGUF_MAX_IDENTITY_STRING_BYTES`].
+///
+/// The length itself is still checked against the file's own structural
+/// string bound (same as [`skip_gguf_string`]) so a corrupt/hostile length
+/// still fails hard — only a well-formed but display-oversized value is
+/// skipped instead of aborting the whole import.
+fn read_gguf_identity_string(
+    file: &mut CapFile,
+    cursor: &mut u64,
+    file_size: u64,
+) -> Result<Option<Vec<u8>>, ModelError> {
+    let length = read_u64(file, cursor, file_size)?;
+    if length == 0 || length > GGUF_MAX_STRING_BYTES {
+        return Err(ModelError::InvalidGguf);
+    }
+    if length > GGUF_MAX_IDENTITY_STRING_BYTES {
+        skip_bytes(file, cursor, file_size, length)?;
+        return Ok(None);
+    }
+    let length = usize::try_from(length).map_err(|_| ModelError::InvalidGguf)?;
+    let mut bytes = vec![0; length];
+    read_exact(file, cursor, file_size, &mut bytes)?;
+    Ok(Some(bytes))
 }
 
 fn skip_gguf_string(

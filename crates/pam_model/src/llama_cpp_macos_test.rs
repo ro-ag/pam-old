@@ -13,6 +13,7 @@ use super::{
     RuntimeKvCachePrecision, RuntimeMemoryPressure, RuntimeMessage, RuntimeMessageRole,
     RuntimeRequest, RuntimeSampling, RuntimeSwapTrend,
 };
+use crate::CALIBRATED_ARTIFACTS;
 use crate::llama_cpp_macos::{
     admit_bytes, bounded_template_size, build_chat_messages, calibrated_contingency,
     calibrated_runtime_profile, final_prefill_sample_slot, fixed_context_params,
@@ -62,6 +63,18 @@ fn calibrated_profile_requires_exact_digest_and_size() {
         )),
         Err(RuntimeError::UnsupportedArtifact)
     ));
+}
+
+#[test]
+fn calibrated_profile_accepts_every_calibrated_artifact() {
+    for artifact in CALIBRATED_ARTIFACTS {
+        let digest = ContentDigest::parse(format!("sha256:{}", artifact.digest)).unwrap();
+        assert!(
+            validate_calibrated_artifact(&registered(digest, artifact.size_bytes)).is_ok(),
+            "{} should be an accepted calibrated artifact",
+            artifact.digest
+        );
+    }
 }
 
 #[test]

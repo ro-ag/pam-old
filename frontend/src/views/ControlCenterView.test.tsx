@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 const openDialog = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 import { withDaemonOperation } from "../bridge";
+import type { ModelStatusDto } from "../domain";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { selectControlCenter, selectDaemonView } from "../selectors";
 import {
@@ -356,7 +357,7 @@ describe("model runtime panel", () => {
     const downloadButton = within(panel).getByRole("button", { name: "Download" });
     expect(downloadButton).toBeDisabled();
 
-    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
     expect(downloadButton).toBeEnabled();
   });
 
@@ -377,9 +378,9 @@ describe("model runtime panel", () => {
     await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — high fidelity/ }));
 
     expect(
-      within(panel).getByText(/Needs ~33\.5 GB memory; this Mac has 25\.8 GB/),
+      within(panel).getByText(/Needs ~31 GB memory; this Mac has 24 GB/),
     ).toBeInTheDocument();
-    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
     expect(within(panel).getByRole("button", { name: "Download" })).toBeDisabled();
   });
 
@@ -390,7 +391,7 @@ describe("model runtime panel", () => {
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
     await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
-    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
     await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
 
     // The fixture bridge advances the download 40% of its total per poll,
@@ -406,20 +407,22 @@ describe("model runtime panel", () => {
   it("shows a retry after a failed preset download", async () => {
     const props = await controlCenterProps("model-none");
     vi.spyOn(props.bridge, "modelDownloadStatus")
-      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-coder-30b-q4ks", receivedBytes: 1_000, totalBytes: 17_456_012_448 })
+      // The mount-time reattach check: nothing running yet.
+      .mockResolvedValueOnce({ status: "idle", presetId: null, receivedBytes: 0, totalBytes: 0, failure: null })
+      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-coder-30b-q4ks", receivedBytes: 1_000, totalBytes: 17_456_012_448, failure: null })
       .mockResolvedValueOnce({
         status: "failed",
         presetId: "qwen3-coder-30b-q4ks",
         receivedBytes: 1_000,
         totalBytes: 17_456_012_448,
-        failure: { code: "connection_reset", detail: "The download connection dropped.", recovery: "Check the network and retry." },
+        failure: { kind: "unavailable", code: "connection_reset", detail: "The download connection dropped.", recovery: "Check the network and retry." },
       });
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
     await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
-    await userEvent.click(within(panel).getAllByLabelText(/I accept this model's license/)[0]);
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
     await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
 
     expect(
@@ -431,6 +434,123 @@ describe("model runtime panel", () => {
     ).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Retry download" })).toBeInTheDocument();
     expect(props.onModelImported).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("reattaches to an in-flight download on mount instead of assuming idle", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelDownloadStatus").mockResolvedValue({
+      status: "running",
+      presetId: "qwen3-coder-30b-q4ks",
+      receivedBytes: 6_000_000_000,
+      totalBytes: 17_456_012_448,
+      failure: null,
+    });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(await within(panel).findByText("qwen/qwen3-coder-30b-a3b-instruct-q4_k_s")).toBeInTheDocument();
+    expect(await within(panel).findByText(/34%/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Downloading…" })).toBeDisabled();
+  });
+
+  it("disables switching presets while a download is running", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
+    await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
+
+    expect(await within(panel).findByRole("button", { name: "Downloading…" })).toBeDisabled();
+    expect(within(panel).getByRole("button", { name: /Qwen3 Coder 30B — minimum/ })).toBeDisabled();
+    expect(
+      within(panel).getByText(/A download is already running — wait for it to finish/),
+    ).toBeInTheDocument();
+  });
+
+  it("clears a stale Verified badge once the loaded model changes", async () => {
+    const props = await controlCenterProps();
+    const { rerender } = render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Verify" }));
+    expect(await within(panel).findByText(/Verified · \d+ ms/)).toBeInTheDocument();
+
+    const restarted: ModelStatusDto = {
+      status: "ok",
+      loaded: { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
+      registered: [],
+    };
+    rerender(<ControlCenterView {...props} modelStatus={restarted} />);
+
+    expect(within(panel).getByText("qwen/qwen3-4b-instruct-q4")).toBeInTheDocument();
+    expect(within(panel).queryByText(/Verified · \d+ ms/)).not.toBeInTheDocument();
+  });
+
+  it("refreshes a stale auto-filled identity when the path changes to a different file", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelInspect")
+      .mockResolvedValueOnce({
+        status: "ok",
+        fileName: "model-a.gguf",
+        sizeBytes: 17_456_012_448,
+        architecture: "qwen3moe",
+        modelName: "Model-A",
+        belowFloor: false,
+        floorBytes: 17_000_000_000,
+      })
+      .mockResolvedValueOnce({
+        status: "ok",
+        fileName: "model-b.gguf",
+        sizeBytes: 18_000_000_000,
+        architecture: "llama",
+        modelName: "Model-B",
+        belowFloor: false,
+        floorBytes: 17_000_000_000,
+      });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/model-a.gguf");
+    await userEvent.tab();
+    expect(await within(panel).findByText("model-a.gguf")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Model identity")).toHaveValue("qwen3moe/model-a");
+
+    await userEvent.clear(within(panel).getByLabelText("GGUF file path"));
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/model-b.gguf");
+    await userEvent.tab();
+
+    expect(await within(panel).findByText("model-b.gguf")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Model identity")).toHaveValue("llama/model-b");
+  });
+
+  it("shows a retry after a failed preset download driven through the fixture bridge", async () => {
+    const props = await controlCenterProps("model-download-fail");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
+    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
+    await userEvent.click(within(panel).getByRole("button", { name: "Download" }));
+
+    expect(
+      await within(panel).findByText(
+        /The download connection dropped\. Check the network and retry\./,
+        {},
+        { timeout: 2_000 },
+      ),
+    ).toBeInTheDocument();
+    const retryButton = within(panel).getByRole("button", { name: "Retry download" });
+    expect(retryButton).toBeInTheDocument();
+
+    // Retrying re-runs the same fixture download, which now succeeds.
+    await userEvent.click(retryButton);
+    expect(
+      await within(panel).findByText("Downloaded and registered.", {}, { timeout: 4_000 }),
+    ).toBeInTheDocument();
   }, 10_000);
 
   it("marks the runtime unreachable while PAM is paused", async () => {

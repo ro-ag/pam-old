@@ -513,7 +513,7 @@ export interface ModelSummaryDto {
 }
 
 export interface ModelFailureDto {
-  kind?: string;
+  kind: "blocked" | "unavailable";
   code: string | null;
   detail: string;
   recovery: string | null;
@@ -593,10 +593,10 @@ export type ModelDownloadDto =
 
 export interface ModelDownloadStatusDto {
   status: "idle" | "running" | "complete" | "failed";
-  presetId?: string;
+  presetId: string | null;
   receivedBytes: number;
   totalBytes: number;
-  failure?: ModelFailureDto;
+  failure: ModelFailureDto | null;
 }
 
 export interface HostMemoryDto {

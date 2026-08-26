@@ -318,7 +318,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       if (sequence === modelRequestSequence.current) setModelStatus(response);
     } catch (error) {
       if (sequence === modelRequestSequence.current) {
-        setModelStatus({ status: "unavailable", failure: { code: null, detail: presentError(error), recovery: null } });
+        setModelStatus({ status: "unavailable", failure: { kind: "unavailable", code: null, detail: presentError(error), recovery: null } });
       }
     }
   }, [bridge]);

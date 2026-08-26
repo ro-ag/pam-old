@@ -9,7 +9,7 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use pam_core::ContentDigest;
@@ -23,6 +23,11 @@ use sha2::{Digest, Sha256};
 
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const METADATA_RECOVERY: &str = "Check the GGUF file and license metadata, then import again.";
+/// `model_import` hashes a multi-GB file twice (once in `hash_file`, once
+/// inside `import_existing`'s re-verification), so the bound is generous.
+const MODEL_IMPORT_TIMEOUT: Duration = Duration::from_mins(15);
+/// `model_inspect` only reads the GGUF header, never the tensor data.
+const MODEL_INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Qwen3-Coder-30B-A3B-Instruct at `Q4_K_S` (~17.5 GB) is the smallest model
 /// PAM's flows were validated on; anything under this floor needs the
 /// explicit Advanced override to register.
@@ -79,8 +84,41 @@ pub(crate) fn notice_digest(notice: &str) -> ContentDigest {
     ContentDigest::from_sha256(Sha256::digest(notice.as_bytes()).into())
 }
 
+/// Rejects a path that is not a plain regular file (FIFO, socket, device, or
+/// symlink) before the caller ever reaches `open(2)`. `open()` on a
+/// writer-less FIFO or a character device like `/dev/zero` blocks or loops
+/// forever, and this runs while the caller holds `DesktopCore::command_gate`
+/// (`desktop.rs`), which serializes every other desktop command — so this
+/// check has to run first, not after a failed/hanging open.
+///
+/// `symlink_metadata` never follows the final path component, so a symlink
+/// (to anything) is caught here as "not a regular file" without ever
+/// resolving it. A missing path, or any other `symlink_metadata` error, is
+/// deliberately *not* turned into a failure here — that's left for the
+/// subsequent `open()` to report with its own familiar not-found/permission
+/// message, so this guard only adds the one check `open()` can't make for
+/// itself.
+///
+/// Residual TOCTOU: the file can still be swapped between this check and the
+/// `open()` that follows. That gap is intentionally left open — the
+/// authoritative gate is `pam_model::import_existing`'s CapFile-hardened
+/// re-verification, which re-checks the actual bytes after this path ever
+/// reaches the store.
+fn reject_non_regular_file(path: &Path, recovery: &str) -> Result<(), ModelImportFailure> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path)
+        && !metadata.is_file()
+    {
+        return Err(ModelImportFailure::new(
+            "the model path must be a regular file, not a symlink, socket, FIFO, or device",
+            recovery,
+        ));
+    }
+    Ok(())
+}
+
 fn hash_file(path: &Path) -> Result<(ContentDigest, u64), ModelImportFailure> {
     let open_recovery = "Point PAM at the downloaded .gguf file, then import again.";
+    reject_non_regular_file(path, open_recovery)?;
     let mut file = File::open(path).map_err(|error| {
         ModelImportFailure::new(
             format!("PAM could not open the model file: {error}"),
@@ -182,15 +220,32 @@ pub(crate) async fn run_model_import(
     params: ModelImportParams,
 ) -> Result<RegisteredModel, ModelImportFailure> {
     let registered_at_ms = now_ms()?;
-    let imported =
-        tokio::task::spawn_blocking(move || verify_and_register(params, registered_at_ms))
-            .await
-            .map_err(|_| {
-                ModelImportFailure::new(
-                    "PAM could not complete model verification.",
-                    "Retry the exact import.",
-                )
-            })??;
+    let blocking =
+        tokio::task::spawn_blocking(move || verify_and_register(params, registered_at_ms));
+    let imported = match tokio::time::timeout(MODEL_IMPORT_TIMEOUT, blocking).await {
+        Ok(Ok(result)) => result?,
+        Ok(Err(_)) => {
+            return Err(ModelImportFailure::new(
+                "PAM could not complete model verification.",
+                "Retry the exact import.",
+            ));
+        }
+        // ponytail: tokio::time::timeout only stops *waiting* — it cannot
+        // cancel a spawn_blocking thread mid-syscall. On expiry the blocking
+        // thread leaks, still parked in open()/read() on the offending path,
+        // until that call eventually returns on its own (or never, for a
+        // writer-less FIFO). Acceptable ceiling: real cancellation of
+        // blocking IO would need the file opened with a cancellable/async
+        // API, which hash_file's plain std::fs doesn't have. This timeout's
+        // job is only to release `command_gate` so the rest of the GUI
+        // keeps working.
+        Err(_) => {
+            return Err(ModelImportFailure::new(
+                "PAM could not complete model verification in time.",
+                "Retry the exact import.",
+            ));
+        }
+    };
     let store_recovery = "Verify the local PAM data store, then import again.";
     let state_path = user_data_dir()
         .map_err(|_| {
@@ -233,10 +288,28 @@ pub(crate) async fn run_model_inspect(
         .ok_or_else(|| {
             ModelImportFailure::new("model path must end in a Unicode filename", recovery)
         })?;
-    let report = tokio::task::spawn_blocking(move || inspect_model_file(&path))
-        .await
-        .map_err(|_| ModelImportFailure::new("PAM could not complete model inspection.", recovery))?
-        .map_err(|error| ModelImportFailure::new(error.to_string(), recovery))?;
+    reject_non_regular_file(&path, recovery)?;
+    let blocking = tokio::task::spawn_blocking(move || inspect_model_file(&path));
+    let report = match tokio::time::timeout(MODEL_INSPECT_TIMEOUT, blocking).await {
+        Ok(Ok(result)) => {
+            result.map_err(|error| ModelImportFailure::new(error.to_string(), recovery))?
+        }
+        Ok(Err(_)) => {
+            return Err(ModelImportFailure::new(
+                "PAM could not complete model inspection.",
+                recovery,
+            ));
+        }
+        // ponytail: see the matching comment in `run_model_import` — the
+        // blocking thread can still leak past this timeout; it only bounds
+        // how long `command_gate` stays held.
+        Err(_) => {
+            return Err(ModelImportFailure::new(
+                "PAM could not complete model inspection in time.",
+                recovery,
+            ));
+        }
+    };
     Ok(ModelInspectReport {
         file_name,
         size_bytes: report.size_bytes,

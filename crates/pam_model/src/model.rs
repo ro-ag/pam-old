@@ -256,6 +256,46 @@ pub struct RegisteredModel {
     pub registered_at_ms: u64,
 }
 
+/// One GGUF artifact PAM's macOS llama.cpp runtime has been calibrated
+/// against: an exact content digest and file size.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalibratedArtifact {
+    /// Lowercase hex SHA-256, without the `sha256:` prefix — matches
+    /// [`ContentDigest::sha256_hex`] and the GUI catalog's own digest field.
+    pub digest: &'static str,
+    pub size_bytes: u64,
+}
+
+/// Single source of truth for every GGUF artifact PAM's runtime can load:
+/// the macOS runtime's load-time gate and the GUI's curated preset catalog
+/// both check membership here, so the two can never drift apart again.
+pub const CALIBRATED_ARTIFACTS: &[CalibratedArtifact] = &[
+    CalibratedArtifact {
+        digest: "56a7d00783419bcb0ae566253c371bcb3678261bb79881a553539f5679864db4",
+        size_bytes: 17_456_012_448,
+    },
+    CalibratedArtifact {
+        digest: "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
+        size_bytes: 18_556_689_568,
+    },
+    CalibratedArtifact {
+        digest: "100b5121d09553fb1af3b873b21fb3ec3da5c306fc5cb09bd338c48e21b10875",
+        size_bytes: 25_092_535_456,
+    },
+];
+
+/// Pure predicate: true when `(digest, size_bytes)` matches a calibrated
+/// artifact exactly. `digest` is the plain lowercase hex SHA-256 (no
+/// `sha256:` prefix). Exposed standalone, without a runtime, so both the
+/// macOS runtime's load gate and the GUI catalog's tests can check the same
+/// membership.
+#[must_use]
+pub fn is_calibrated_artifact(digest: &str, size_bytes: u64) -> bool {
+    CALIBRATED_ARTIFACTS
+        .iter()
+        .any(|artifact| artifact.digest == digest && artifact.size_bytes == size_bytes)
+}
+
 pub(crate) fn valid_segment(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_SEGMENT_BYTES

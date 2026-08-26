@@ -22,12 +22,9 @@ use crate::{
     RuntimeHostAdmission, RuntimeHostSnapshot, RuntimeKvCachePrecision, RuntimeMemoryPressure,
     RuntimeMemoryProjection, RuntimeProfile, RuntimeRequest, RuntimeResponse, RuntimeSampling,
     RuntimeSwapTrend, RuntimeUsage, UnifiedWorkingSetLimit, estimate_memory,
-    revalidate_registered_model,
+    is_calibrated_artifact, revalidate_registered_model,
 };
 
-const CALIBRATED_MODEL_DIGEST: &str =
-    "sha256:56a7d00783419bcb0ae566253c371bcb3678261bb79881a553539f5679864db4";
-const CALIBRATED_MODEL_SIZE_BYTES: u64 = 17_456_012_448;
 const CONTEXT_TOKENS: u32 = 8_192;
 const BATCH_TOKENS: u32 = 512;
 const PHYSICAL_BATCH_TOKENS: u32 = 512;
@@ -310,12 +307,11 @@ pub(crate) fn calibrated_runtime_profile(
 }
 
 pub(crate) fn validate_calibrated_artifact(model: &RegisteredModel) -> Result<(), RuntimeError> {
-    if model.digest.as_str() != CALIBRATED_MODEL_DIGEST
-        || model.size_bytes != CALIBRATED_MODEL_SIZE_BYTES
-    {
-        return Err(RuntimeError::UnsupportedArtifact);
+    if is_calibrated_artifact(model.digest.sha256_hex(), model.size_bytes) {
+        Ok(())
+    } else {
+        Err(RuntimeError::UnsupportedArtifact)
     }
-    Ok(())
 }
 
 pub(crate) fn fixed_model_params() -> LlamaModelParams {
@@ -779,11 +775,11 @@ fn generate_tokens(
 }
 
 #[cfg(test)]
-pub(crate) fn test_calibrated_digest() -> &'static str {
-    CALIBRATED_MODEL_DIGEST
+pub(crate) fn test_calibrated_digest() -> String {
+    format!("sha256:{}", crate::CALIBRATED_ARTIFACTS[0].digest)
 }
 
 #[cfg(test)]
 pub(crate) fn test_calibrated_size() -> u64 {
-    CALIBRATED_MODEL_SIZE_BYTES
+    crate::CALIBRATED_ARTIFACTS[0].size_bytes
 }
