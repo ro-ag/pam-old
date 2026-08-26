@@ -640,6 +640,14 @@ function ManualImport({
   const autoFilledLicenseIdRef = useRef<string | null>(null);
   const autoFilledLicenseUrlRef = useRef<string | null>(null);
   const autoFilledLicenseNoticeRef = useRef<string | null>(null);
+  // Hugging Face license discovery, narrated: runs only when the GGUF's own
+  // metadata declares no license, and quietly steps aside when it finds
+  // nothing — manual entry always works.
+  const [discovery, setDiscovery] = useState<
+    | null
+    | { state: "looking"; query: string }
+    | { state: "found"; repoId: string; licenseId: string }
+  >(null);
   // Reattach to an import the daemon is already hashing: the import manager
   // is single-flight and keeps running even if this component (or the whole
   // view) remounts, so a fresh mount checks in before assuming idle.
@@ -740,10 +748,9 @@ function ManualImport({
         // auto-fillable: if the user already typed a different license ID,
         // filling in the detected file's URL/notice would describe the
         // wrong license, so both stay untouched too.
-        if (response.status === "ok" && response.license) {
-          const licenseId = response.license;
+        const prefillLicense = (licenseId: string, fileName: string) => {
           const knownUrl = KNOWN_SPDX_LICENSES[licenseId];
-          const notice = knownUrl ? `${response.fileName} is distributed under the ${licenseId} license at ${knownUrl}.` : null;
+          const notice = knownUrl ? `${fileName} is distributed under the ${licenseId} license at ${knownUrl}.` : null;
           setForm((current) => {
             const licenseIdStillAutoFilled =
               !current.licenseId.trim() || current.licenseId === autoFilledLicenseIdRef.current;
@@ -763,6 +770,32 @@ function ManualImport({
             }
             return next;
           });
+        };
+        if (response.status === "ok" && response.license) {
+          setDiscovery(null);
+          prefillLicense(response.license, response.fileName);
+        } else if (response.status === "ok") {
+          // The GGUF declares no license: ask Hugging Face, narrated. The
+          // raw tag (e.g. "apache-2.0") maps case-insensitively onto the
+          // known SPDX ids so the URL and notice prefill too.
+          const query = response.modelName ?? response.fileName.replace(/\.gguf$/i, "");
+          setDiscovery({ state: "looking", query });
+          try {
+            const found = await bridge.modelLicenseDiscover(withDaemonOperation(), query);
+            if (sequence !== inspectSequence.current) return;
+            if (found.status === "ok") {
+              const canonical =
+                Object.keys(KNOWN_SPDX_LICENSES).find(
+                  (id) => id.toLowerCase() === found.licenseId.toLowerCase(),
+                ) ?? found.licenseId;
+              setDiscovery({ state: "found", repoId: found.repoId, licenseId: canonical });
+              prefillLicense(canonical, response.fileName);
+            } else {
+              setDiscovery(null);
+            }
+          } catch {
+            if (sequence === inspectSequence.current) setDiscovery(null);
+          }
         }
       } catch {
         if (sequence === inspectSequence.current) setInspect(null);
@@ -774,6 +807,7 @@ function ManualImport({
   const setPath = (path: string) => {
     inspectSequence.current += 1; // invalidate any in-flight inspection
     setInspect(null);
+    setDiscovery(null);
     setForm((current) => ({ ...current, path }));
   };
 
@@ -939,6 +973,17 @@ function ManualImport({
       )}
       {inspect && inspect.status !== "ok" && (
         <p className="model-note">{inspect.failure.detail}</p>
+      )}
+      {discovery?.state === "looking" && (
+        <p className="model-note" role="status">
+          This file declares no license — looking up “{discovery.query}” on Hugging Face…
+        </p>
+      )}
+      {discovery?.state === "found" && (
+        <p className="model-note" role="status">
+          License found on Hugging Face ({discovery.repoId}): {discovery.licenseId}. Review the
+          prefilled details below before accepting.
+        </p>
       )}
       {field("Model identity", "model", "vendor/name, e.g. qwen/qwen3-4b-instruct-q4")}
       <div className="model-advanced">

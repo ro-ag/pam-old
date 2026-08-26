@@ -572,6 +572,12 @@ export interface ModelImportStatusDto {
   failure: ModelFailureDto | null;
 }
 
+// Hugging Face license discovery for a manual import: an enhancement, so a
+// miss is unavailable data and the form falls back to manual entry.
+export type ModelLicenseDiscoveryDto =
+  | { status: "ok"; repoId: string; licenseId: string }
+  | { status: "unavailable"; failure: ModelFailureDto };
+
 export type ModelInspectDto =
   | {
       status: "ok";
@@ -698,6 +704,7 @@ export interface PamBridge {
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
   modelImportStatus(fence: CommandFence): Promise<ModelImportStatusDto>;
   modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
+  modelLicenseDiscover(fence: CommandFence, query: string): Promise<ModelLicenseDiscoveryDto>;
   modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
   modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
   modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;

@@ -22,6 +22,7 @@ pam_platform.workspace = true
 pam_protocol.workspace = true
 pam_skills.workspace = true
 pam_store.workspace = true
+reqwest.workspace = true
 sha2.workspace = true
 
 [lints]

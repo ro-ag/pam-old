@@ -24,6 +24,7 @@
     "allow-model-import",
     "allow-model-import-status",
     "allow-model-inspect",
+    "allow-model-license-discover",
     "allow-model-presets",
     "allow-model-download",
     "allow-model-download-status",

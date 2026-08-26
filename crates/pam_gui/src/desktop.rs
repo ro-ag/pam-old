@@ -43,6 +43,7 @@ use crate::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
     },
+    model_discovery::discover_license,
     model_download::{
         MIN_SUPPORTED_HOST_MEMORY_BYTES, ModelDownloadManager, ModelDownloadStatusKind,
         host_memory_total_bytes,
@@ -845,6 +846,21 @@ pub enum ModelInspectDto {
     Unavailable {
         failure: FailureDto,
     },
+}
+
+/// Hugging Face license discovery for a manual import: given the model name
+/// a GGUF declares, the matching repository and its raw `license:` tag. An
+/// enhancement over manual entry — failures are bounded data, never a hard
+/// error, and the form keeps working without it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelLicenseDiscoveryDto {
+    Ok { repo_id: String, license_id: String },
+    Unavailable { failure: FailureDto },
 }
 
 /// One curated, pre-verified downloadable model preset.
@@ -1983,6 +1999,40 @@ impl DesktopCore {
             Err(failure) => ModelInspectDto::Unavailable {
                 failure: unavailable_failure(
                     Some("model_inspect_failed".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                ),
+            },
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Looks up a model's declared license on the public Hugging Face index,
+    /// to prefill the manual import form when the GGUF metadata omits it.
+    /// One bounded HTTPS search with a short timeout, like the connector
+    /// self-tests; a miss is `Unavailable` data and the form falls back to
+    /// manual entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_license_discover(
+        &self,
+        fence: CommandFence,
+        query: String,
+    ) -> DesktopResult<ModelLicenseDiscoveryDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = match discover_license(&query).await {
+            Ok(discovered) => ModelLicenseDiscoveryDto::Ok {
+                repo_id: bounded_detail(discovered.repo_id),
+                license_id: bounded_detail(discovered.license_id),
+            },
+            Err(failure) => ModelLicenseDiscoveryDto::Unavailable {
+                failure: unavailable_failure(
+                    Some("license_discovery_failed".to_owned()),
                     failure.detail,
                     failure.recovery,
                 ),

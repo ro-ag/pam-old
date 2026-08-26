@@ -182,12 +182,14 @@ describe("Tauri bridge ABI", () => {
     await bridge.modelInfer(fence, "qwen/qwen3-14b-instruct-q4", messages, 512);
     await bridge.modelInfer(fence, "qwen/qwen3-14b-instruct-q4", messages);
     await bridge.modelImportStatus(fence);
+    await bridge.modelLicenseDiscover(fence, "vendor/model");
 
     expect(calls).toEqual([
       ["model_status", { request: fence }],
       ["model_infer", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4", messages, maxOutputTokens: 512 } }],
       ["model_infer", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4", messages } }],
       ["model_import_status", { request: fence }],
+      ["model_license_discover", { request: { ...fence, query: "vendor/model" } }],
     ]);
   });
 
