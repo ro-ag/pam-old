@@ -6,7 +6,7 @@
 //! `model_download` runtime, never a bare user-supplied URL.
 
 use pam_core::ContentDigest;
-use pam_model::{LicenseSnapshot, ModelError};
+use pam_model::{CALIBRATED_ARTIFACTS, LicenseSnapshot, ModelError};
 
 use crate::model_import::notice_digest;
 
@@ -83,8 +83,8 @@ pub const CATALOG: &[ModelPreset] = &[
         model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_s",
         file_name: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
         url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
-        expected_size_bytes: 17_456_012_448,
-        sha256: "56a7d00783419bcb0ae566253c371bcb3678261bb79881a553539f5679864db4",
+        expected_size_bytes: CALIBRATED_ARTIFACTS[0].size_bytes,
+        sha256: CALIBRATED_ARTIFACTS[0].digest,
         license_id: "Apache-2.0",
         license_url: "https://www.apache.org/licenses/LICENSE-2.0",
         license_notice_text: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.",
@@ -97,8 +97,8 @@ pub const CATALOG: &[ModelPreset] = &[
         model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_m",
         file_name: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
         url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-        expected_size_bytes: 18_556_689_568,
-        sha256: "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
+        expected_size_bytes: CALIBRATED_ARTIFACTS[1].size_bytes,
+        sha256: CALIBRATED_ARTIFACTS[1].digest,
         license_id: "Apache-2.0",
         license_url: "https://www.apache.org/licenses/LICENSE-2.0",
         license_notice_text: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.",
@@ -111,8 +111,8 @@ pub const CATALOG: &[ModelPreset] = &[
         model: "qwen/qwen3-coder-30b-a3b-instruct-q6_k",
         file_name: "Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
         url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
-        expected_size_bytes: 25_092_535_456,
-        sha256: "100b5121d09553fb1af3b873b21fb3ec3da5c306fc5cb09bd338c48e21b10875",
+        expected_size_bytes: CALIBRATED_ARTIFACTS[2].size_bytes,
+        sha256: CALIBRATED_ARTIFACTS[2].digest,
         license_id: "Apache-2.0",
         license_url: "https://www.apache.org/licenses/LICENSE-2.0",
         license_notice_text: "Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.",

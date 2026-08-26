@@ -152,6 +152,20 @@ fn inspect_model_file_reports_no_identity_metadata_when_absent() {
 }
 
 #[test]
+fn inspect_model_file_imports_fine_when_general_name_exceeds_the_identity_cap() {
+    let directory = TestDirectory::new("inspect-oversized-identity");
+    let path = directory.0.join("model.gguf");
+    let long_name = "x".repeat(257);
+    let bytes = one_tensor_gguf_with_metadata(&[("general.name", &long_name)]);
+    fs::write(&path, &bytes).unwrap();
+
+    let report = inspect_model_file(&path).unwrap();
+
+    assert_eq!(report.size_bytes, u64::try_from(bytes.len()).unwrap());
+    assert!(report.metadata.model_name.is_none());
+}
+
+#[test]
 fn inspect_model_file_rejects_a_non_gguf_file() {
     let directory = TestDirectory::new("inspect-invalid");
     let path = directory.0.join("model.gguf");

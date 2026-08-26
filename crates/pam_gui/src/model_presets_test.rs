@@ -1,4 +1,4 @@
-use pam_model::ModelSource;
+use pam_model::{ModelSource, is_calibrated_artifact};
 
 use crate::model_import::parse_model_key;
 use crate::model_presets::{CATALOG, find};
@@ -42,6 +42,17 @@ fn catalog_digests_are_valid_lowercase_sha256_hex() {
         );
         // Panics (failing the test) if the digest does not parse.
         let _ = preset.expected_digest();
+    }
+}
+
+#[test]
+fn every_catalog_entry_is_a_calibrated_artifact_the_runtime_can_load() {
+    for preset in CATALOG {
+        assert!(
+            is_calibrated_artifact(preset.sha256, preset.expected_size_bytes),
+            "{} is not in pam_model::CALIBRATED_ARTIFACTS, so the runtime would refuse to load it",
+            preset.id
+        );
     }
 }
 

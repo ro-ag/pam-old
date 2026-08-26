@@ -876,8 +876,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   .access-list article { grid-template-columns: 36px minmax(0, 1fr); }
   .access-list article > div { grid-column: 2; }
   .access-list .state-pill { grid-column: 2; }
-  .project-usage-row { grid-template-columns: minmax(0, 1fr); }
-  .project-usage-meta { justify-items: start; text-align: left; }
   .skill-inventory-list article { grid-template-columns: 36px minmax(0, 1fr); }
   .skill-inventory-list article > div, .skill-inventory-list .state-pill { grid-column: 2; }
   .skill-library-title { align-items: flex-start; }
@@ -937,7 +935,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   --pam-copper: #b0612f;
   --pam-success: #6fbf8e;
   --pam-warning: #cd7f45;
-  --pam-danger: #d4634f;
+  --pam-danger: #bf5238;
   --pam-success-soft: #edf8f1;
   --pam-danger-soft: #fff1f1;
   --pam-on-accent: #e3f9fd;
@@ -1650,7 +1648,7 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .model-import label { display: grid; gap: calc(4px * var(--density)); color: var(--pam-muted); font-size: 11px; }
 .model-import input[type="text"], .model-import input[type="url"], .model-import textarea { min-height: max(28px, calc(32px * var(--density))); padding: 5px 7px; border: 1px solid var(--pam-line); border-radius: 5px; color: var(--pam-text); background: var(--pam-surface-raised); font-size: 11px; }
 .model-import textarea { min-height: 0; resize: vertical; font-family: inherit; }
-.model-import label.model-import-consent { display: flex; align-items: center; gap: 8px; color: var(--pam-content-secondary); font-size: 12px; }
+label.model-import-consent { display: flex; align-items: center; gap: 8px; color: var(--pam-content-secondary); font-size: 12px; }
 .model-import .model-actions { align-items: center; }
 .model-import .model-actions small { color: var(--pam-muted); font-size: 11px; }
 .model-import-path { display: flex; align-items: flex-end; gap: 8px; }
@@ -1708,6 +1706,13 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .project-usage-meta { display: grid; justify-items: end; gap: 2px; text-align: right; }
 .project-usage-meta strong { color: var(--pam-text); font-size: 13px; }
 .project-usage-meta small { color: var(--pam-muted); font-size: 12px; }
+/* Narrow-viewport collapse: must live in (or after) this layer — the
+   unconditional 3-column rule above wins over a same-named rule in an
+   earlier-declared layer regardless of a matching media query. */
+@media (max-width: 520px) {
+  .project-usage-row { grid-template-columns: minmax(0, 1fr); }
+  .project-usage-meta { justify-items: start; text-align: left; }
+}
 
 /* Sidebar brand version, p-track style */
 .brand-identity { display: flex; flex-direction: column; line-height: 1.05; }

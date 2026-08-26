@@ -3403,8 +3403,12 @@ fn activity_days(connection: &Connection, since_ms: u64) -> Result<Vec<ActivityD
     Ok(days)
 }
 
-/// Newest projects served from a single usage scan.
-const MAX_PROJECT_USAGE_ROWS: usize = 64;
+/// Busiest projects served from a single usage scan, ranked by event count.
+/// A fleet past this ceiling still silently drops its coldest projects from
+/// the panel with no truncation signal — if fleets ever grow that large,
+/// thread a `truncated` flag through the protocol the same way
+/// `recent_audit_events` already does, instead of raising this further.
+const MAX_PROJECT_USAGE_ROWS: usize = 512;
 
 fn project_usage(connection: &Connection, since_ms: u64) -> Result<Vec<ProjectUsage>, StoreError> {
     let since = sql_integer(since_ms)?;

@@ -35,8 +35,8 @@ pub use memory::{
     UnifiedWorkingSetLimit, estimate_memory,
 };
 pub use model::{
-    GgufMetadata, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelKey, ModelSource,
-    RegisteredModel,
+    CALIBRATED_ARTIFACTS, CalibratedArtifact, GgufMetadata, LicenseConsent, LicenseSnapshot,
+    ModelDescriptor, ModelKey, ModelSource, RegisteredModel, is_calibrated_artifact,
 };
 pub use path::{default_model_path, validate_model_filename};
 pub use runtime::{

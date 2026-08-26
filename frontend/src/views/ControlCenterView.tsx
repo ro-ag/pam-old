@@ -313,17 +313,43 @@ function PresetDownload({
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const completedRef = useRef(false);
 
+  // Reattach to whatever the daemon is already doing: the download manager
+  // is single-flight and keeps running even if this component (or the whole
+  // view) remounts, so a fresh mount always checks in before assuming idle.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [presetsResponse, memoryResponse] = await Promise.all([
+        const [presetsResponse, memoryResponse, downloadStatus] = await Promise.all([
           bridge.modelPresets(withDaemonOperation()),
           bridge.hostMemory(withDaemonOperation()),
+          bridge.modelDownloadStatus(withDaemonOperation()),
         ]);
         if (cancelled) return;
         setPresets(presetsResponse.presets);
         setHostMemory(memoryResponse);
+        if (downloadStatus.presetId) {
+          setSelectedId(downloadStatus.presetId);
+          setAccepted(true);
+        }
+        if (downloadStatus.status === "running") {
+          setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
+          setPhase("running");
+        } else if (downloadStatus.status === "complete" && downloadStatus.presetId) {
+          setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
+          setPhase("complete");
+          if (!completedRef.current) {
+            completedRef.current = true;
+            onImported();
+          }
+        } else if (downloadStatus.status === "failed" && downloadStatus.presetId) {
+          setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
+          setPhase("failed");
+          setDownloadError(
+            [downloadStatus.failure?.detail, downloadStatus.failure?.recovery].filter(Boolean).join(" ") ||
+              "The download failed partway through.",
+          );
+        }
       } catch (error) {
         if (!cancelled) setLoadError(presentError(error));
       }
@@ -331,6 +357,7 @@ function PresetDownload({
     return () => {
       cancelled = true;
     };
+    // Reattachment only ever happens once, on mount.
   }, [bridge]);
 
   // Poll while a download is running; the daemon tracks one download at a
@@ -413,18 +440,24 @@ function PresetDownload({
               memory or more; this Mac reports {formatHostMemory(hostMemory.totalBytes)}.
             </p>
           )}
-          <DropdownMenu.Root open={pickerOpen} onOpenChange={setPickerOpen}>
+          <DropdownMenu.Root open={pickerOpen && !busy} onOpenChange={(open) => !busy && setPickerOpen(open)}>
             <DropdownMenu.Trigger asChild>
-              <button type="button" className="button button--secondary button--small model-preset-trigger">
+              <button
+                type="button"
+                className="button button--secondary button--small model-preset-trigger"
+                disabled={busy}
+              >
                 {selected ? selected.label : "Choose a model"}
                 <CaretDown size={14} weight="bold" aria-hidden="true" />
               </button>
             </DropdownMenu.Trigger>
+            {busy && <small className="model-note">A download is already running — wait for it to finish before choosing another model.</small>}
             <DropdownMenu.Portal>
               <DropdownMenu.Content className="project-menu-popover model-preset-popover" align="start" sideOffset={8}>
                 <DropdownMenu.RadioGroup
                   value={selectedId ?? ""}
                   onValueChange={(value) => {
+                    if (busy) return;
                     setSelectedId(value);
                     setAccepted(false);
                     setPhase("idle");
@@ -452,7 +485,7 @@ function PresetDownload({
                               ? "Checking this Mac's memory…"
                               : presetFits
                                 ? "Runs on this Mac"
-                                : `Needs ~${formatModelSize(preset.minMemoryBytes)} memory; this Mac has ${formatModelSize(hostMemoryBytes ?? 0)}`}
+                                : `Needs ~${formatHostMemory(preset.minMemoryBytes)} memory; this Mac has ${formatHostMemory(hostMemoryBytes ?? 0)}`}
                           </small>
                         </span>
                         <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
@@ -474,7 +507,7 @@ function PresetDownload({
               <p className="model-note">{selected.licenseNoticeText}</p>
               {fits === false && (
                 <p className="model-fit-warn" role="status">
-                  Needs ~{formatModelSize(selected.minMemoryBytes)} memory; this Mac has {formatModelSize(hostMemoryBytes ?? 0)}.
+                  Needs ~{formatHostMemory(selected.minMemoryBytes)} memory; this Mac has {formatHostMemory(hostMemoryBytes ?? 0)}.
                 </p>
               )}
               <label className="model-import-consent">
@@ -484,7 +517,7 @@ function PresetDownload({
                   disabled={busy}
                   onChange={(event) => setAccepted(event.target.checked)}
                 />
-                I accept this model's license exactly as stated above.
+                I accept the {selected.label} license exactly as stated above.
               </label>
               <div className="model-actions">
                 <button
@@ -553,12 +586,19 @@ function ManualImport({
   const [inspect, setInspect] = useState<ModelInspectDto | null>(null);
   const inspectSequence = useRef(0);
   const busy = importState.state === "running";
-  const set = (field: keyof typeof form) => (value: string) =>
+  // Remembers the last identity runInspect wrote so a later inspection can
+  // tell "still what we auto-filled" apart from "the user edited this" —
+  // any manual edit to the model field clears it.
+  const autoFilledModelRef = useRef<string | null>(null);
+  const set = (field: keyof typeof form) => (value: string) => {
+    if (field === "model") autoFilledModelRef.current = null;
     setForm((current) => ({ ...current, [field]: value }));
+  };
 
   // Fires whenever a path lands (browse pick, drag-drop, or blur of a typed
   // path); prefills identity from what came back, but never overwrites text
-  // the user already typed.
+  // the user already typed — an auto-filled value left over from a previous
+  // path is fair game to refresh, since the user never typed it themselves.
   const runInspect = useCallback(
     async (path: string) => {
       const sequence = ++inspectSequence.current;
@@ -569,7 +609,12 @@ function ManualImport({
         if (response.status === "ok" && response.architecture && response.modelName) {
           const slug = (value: string) => value.toLowerCase().replace(/[\s_]+/g, "-");
           const identity = `${slug(response.architecture)}/${slug(response.modelName)}`;
-          setForm((current) => (current.model.trim() ? current : { ...current, model: identity }));
+          setForm((current) => {
+            const stillAutoFilled = !current.model.trim() || current.model === autoFilledModelRef.current;
+            if (!stillAutoFilled) return current;
+            autoFilledModelRef.current = identity;
+            return { ...current, model: identity };
+          });
         }
       } catch {
         if (sequence === inspectSequence.current) setInspect(null);
@@ -839,6 +884,13 @@ export function ModelPanel({
   const offline = daemon.state === "stopped";
   const loaded = modelStatus?.status === "ok" ? modelStatus.loaded : null;
   const registered = modelStatus?.status === "ok" ? modelStatus.registered : [];
+
+  // A verify result only ever applies to the model it measured; once the
+  // loaded model changes (e.g. a restart with a different one), the stale
+  // pass/fail line must not keep rendering next to the new identity.
+  useEffect(() => {
+    setVerify({ state: "idle" });
+  }, [loaded?.modelId]);
   const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
 
   const runVerify = async (modelId: string) => {

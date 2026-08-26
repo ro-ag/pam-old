@@ -26,6 +26,7 @@ import type {
   HostMemoryDto,
   ModelDownloadDto,
   ModelDownloadStatusDto,
+  ModelFailureDto,
   ModelImportDto,
   ModelInspectDto,
   ModelInferDto,
@@ -255,6 +256,7 @@ export const fixtureScenarios = [
   "model-infer-blocked",
   "model-none",
   "model-on-deck",
+  "model-download-fail",
   "connector-unconfigured",
   "connector-blocked",
 ] as const;
@@ -686,12 +688,23 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   let daemonRunning = scenario !== "offline";
   // The registered catalog and the loaded slot depend on the model scenario;
   // startDaemon(model) moves a registered model into the loaded slot.
-  const modelCatalog = scenario === "model-none" ? [] : registeredModels;
+  const modelCatalog = scenario === "model-none" || scenario === "model-download-fail" ? [] : registeredModels;
   let modelLoaded: ModelSummaryDto | null =
-    scenario === "model-none" || scenario === "model-on-deck" ? null : loadedModel;
+    scenario === "model-none" || scenario === "model-on-deck" || scenario === "model-download-fail"
+      ? null
+      : loadedModel;
   // One download at a time, tracked globally like the real daemon; each poll
   // advances it a fixed step so a fixture-driven UI shows real progress.
-  let download: { presetId: string; receivedBytes: number; totalBytes: number; status: "running" | "complete" } | null = null;
+  let download: {
+    presetId: string;
+    receivedBytes: number;
+    totalBytes: number;
+    status: "running" | "complete" | "failed";
+    failure: ModelFailureDto | null;
+  } | null = null;
+  // "model-download-fail" fails the first attempt (mirroring a dropped
+  // connection) so a retry can then be driven through to a real completion.
+  let downloadAttempts = 0;
   let savedSource = flowSource;
   const connectors: ConnectorSummaryDto[] = [
     scenario === "connector-unconfigured" || scenario === "connector-blocked"
@@ -944,14 +957,23 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           },
         };
       }
-      download = { presetId, receivedBytes: 0, totalBytes: preset.expectedSizeBytes, status: "running" };
+      downloadAttempts += 1;
+      download = { presetId, receivedBytes: 0, totalBytes: preset.expectedSizeBytes, status: "running", failure: null };
       return { status: "ok" };
     },
     async modelDownloadStatus(_fence): Promise<ModelDownloadStatusDto> {
-      if (!download) return { status: "idle", receivedBytes: 0, totalBytes: 0 };
+      if (!download) return { status: "idle", presetId: null, receivedBytes: 0, totalBytes: 0, failure: null };
       if (download.status === "running") {
         download.receivedBytes = Math.min(download.totalBytes, download.receivedBytes + Math.ceil(download.totalBytes * 0.4));
-        if (download.receivedBytes >= download.totalBytes) {
+        if (scenario === "model-download-fail" && downloadAttempts === 1) {
+          download.status = "failed";
+          download.failure = {
+            kind: "unavailable",
+            code: "connection_reset",
+            detail: "The download connection dropped.",
+            recovery: "Check the network and retry.",
+          };
+        } else if (download.receivedBytes >= download.totalBytes) {
           download.status = "complete";
           modelCatalog.push({ modelId: modelPresets.find((preset) => preset.id === download?.presetId)?.model ?? download.presetId, sizeBytes: download.totalBytes });
         }
@@ -961,6 +983,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         presetId: download.presetId,
         receivedBytes: download.receivedBytes,
         totalBytes: download.totalBytes,
+        failure: download.failure,
       });
     },
     async hostMemory(_fence): Promise<HostMemoryDto> {
