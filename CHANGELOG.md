@@ -4,6 +4,17 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-26
+
+### Added
+
+- The manual GGUF import gained a native Browse… button and pre-import
+  inspection: choosing, dropping, or typing a path reads the model's own
+  header — no hashing, no waiting — and shows the file name, size, and the
+  model's declared architecture and name, prefilling the vendor/name
+  identity when the field is empty. Files below the recommended minimum
+  size show the floor warning up front, pointing at the Advanced override.
+
 ## [0.5.1] - 2026-08-25
 
 ### Changed
