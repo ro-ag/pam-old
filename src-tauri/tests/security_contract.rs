@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "model_presets",
     "model_download",
     "model_download_status",
+    "model_download_cancel",
     "host_memory",
     "app_settings",
     "settings_update",

@@ -612,6 +612,14 @@ pub(crate) async fn model_download_status(
 }
 
 #[tauri::command]
+pub(crate) async fn model_download_cancel(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelDownloadDto, DesktopErrorDto> {
+    state.core.model_download_cancel(request.into_fence()).await
+}
+
+#[tauri::command]
 pub(crate) async fn host_memory(
     state: State<'_, DesktopState>,
     request: FencedRequest,

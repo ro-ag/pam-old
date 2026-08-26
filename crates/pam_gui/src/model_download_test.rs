@@ -16,7 +16,8 @@ use uuid::Uuid;
 #[cfg(target_os = "macos")]
 use crate::model_download::host_memory_total_bytes;
 use crate::model_download::{
-    CountingResponse, ModelDownloadManager, ModelDownloadSnapshot, ModelDownloadStatusKind,
+    CountingResponse, CountingTransport, ModelDownloadManager, ModelDownloadSnapshot,
+    ModelDownloadStatusKind,
 };
 use crate::model_presets::ModelPreset;
 
@@ -202,15 +203,16 @@ async fn a_second_start_is_rejected_while_one_download_is_running() {
 
     let started = Arc::clone(&manager).start_with(preset, directory.0.clone(), {
         let holding = holding.clone();
-        move |_received| Ok(holding)
+        move |_received, _cancel| Ok(holding)
     });
     assert!(started.is_ok());
 
     holding.entered.notified().await;
 
-    let rejected = Arc::clone(&manager).start_with(preset, directory.0.clone(), |_received| {
-        Ok(HoldingTransport::new())
-    });
+    let rejected =
+        Arc::clone(&manager).start_with(preset, directory.0.clone(), |_received, _cancel| {
+            Ok(HoldingTransport::new())
+        });
     assert!(rejected.is_err());
     let snapshot_while_running = manager.snapshot();
     assert_eq!(
@@ -236,16 +238,17 @@ async fn a_new_download_can_start_once_the_previous_one_finished() {
     Arc::clone(&manager)
         .start_with(preset, directory.0.clone(), {
             let holding = holding.clone();
-            move |_received| Ok(holding)
+            move |_received, _cancel| Ok(holding)
         })
         .unwrap();
     holding.entered.notified().await;
     holding.release.notify_one();
     wait_for_terminal(&manager).await;
 
-    let restarted = Arc::clone(&manager).start_with(preset, directory.0.clone(), |_received| {
-        Ok(HoldingTransport::new())
-    });
+    let restarted =
+        Arc::clone(&manager).start_with(preset, directory.0.clone(), |_received, _cancel| {
+            Ok(HoldingTransport::new())
+        });
     assert!(restarted.is_ok());
 }
 
@@ -319,7 +322,7 @@ async fn a_resumed_download_seeds_the_counter_from_the_existing_partial_offset()
     // disk — exactly what a resumed download resumes from.
     let interrupted = ModelDownloadManager::new();
     Arc::clone(&interrupted)
-        .start_with(preset, directory.0.clone(), |_received| {
+        .start_with(preset, directory.0.clone(), |_received, _cancel| {
             Ok(InterruptedTransport(std::sync::Mutex::new(Some(
                 InterruptedResponse {
                     etag: "\"stable\"",
@@ -338,7 +341,7 @@ async fn a_resumed_download_seeds_the_counter_from_the_existing_partial_offset()
     Arc::clone(&resumed)
         .start_with(preset, directory.0.clone(), {
             let holding = holding.clone();
-            move |_received| Ok(holding)
+            move |_received, _cancel| Ok(holding)
         })
         .unwrap();
 
@@ -347,6 +350,100 @@ async fn a_resumed_download_seeds_the_counter_from_the_existing_partial_offset()
 
     holding.release.notify_one();
     wait_for_terminal(&resumed).await;
+}
+
+/// A response that never runs out of chunks: only cancellation (or an
+/// oversize refusal) can end this transfer, which is exactly what the
+/// cancel path must handle.
+struct EndlessResponse;
+
+impl DownloadResponse for EndlessResponse {
+    fn status(&self) -> u16 {
+        200
+    }
+
+    fn content_length(&self) -> Option<&str> {
+        None
+    }
+
+    fn content_range(&self) -> Option<&str> {
+        None
+    }
+
+    fn content_encoding(&self) -> Option<&str> {
+        None
+    }
+
+    fn etag(&self) -> Option<&str> {
+        Some("\"stable\"")
+    }
+
+    fn location(&self) -> Option<&str> {
+        None
+    }
+
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, ModelError> {
+        // Pace the chunks so the test body observes progress and cancels
+        // long before the transfer could overshoot the preset size.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        Ok(Some(vec![0; 16]))
+    }
+}
+
+struct EndlessTransport;
+
+impl DownloadTransport for EndlessTransport {
+    type Response = EndlessResponse;
+
+    async fn send(&self, _request: TransferRequest) -> Result<Self::Response, ModelError> {
+        Ok(EndlessResponse)
+    }
+}
+
+#[tokio::test]
+async fn cancel_stops_a_running_download_as_cancelled_not_failed() {
+    let directory = TestDirectory::new("cancel-running");
+    let manager = ModelDownloadManager::new();
+    let preset = tiny_preset();
+
+    Arc::clone(&manager)
+        .start_with(preset, directory.0.clone(), |received, cancel| {
+            Ok(CountingTransport {
+                inner: EndlessTransport,
+                received,
+                cancel,
+            })
+        })
+        .unwrap();
+
+    // Wait until the transfer is demonstrably moving, then cancel it.
+    for _ in 0..200 {
+        if manager.snapshot().received_bytes > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    manager.cancel().unwrap();
+
+    let snapshot = wait_for_terminal(&manager).await;
+    assert_eq!(snapshot.status, ModelDownloadStatusKind::Cancelled);
+    assert_eq!(snapshot.preset_id.as_deref(), Some(preset.id));
+    assert!(snapshot.failure.is_none());
+
+    // A cancelled manager accepts a fresh start.
+    let restarted = Arc::clone(&manager).start_with(preset, directory.0.clone(), {
+        let holding = HoldingTransport::new();
+        move |_received, _cancel| Ok(holding)
+    });
+    assert!(restarted.is_ok());
+}
+
+#[tokio::test]
+async fn cancel_without_a_running_download_is_refused() {
+    let manager = ModelDownloadManager::new();
+    let refused = manager.cancel().unwrap_err();
+    assert_eq!(refused.detail, "No model download is running.");
+    assert_eq!(manager.snapshot().status, ModelDownloadStatusKind::Idle);
 }
 
 #[cfg(target_os = "macos")]

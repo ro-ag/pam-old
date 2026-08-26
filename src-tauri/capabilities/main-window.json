@@ -27,6 +27,7 @@
     "allow-model-presets",
     "allow-model-download",
     "allow-model-download-status",
+    "allow-model-download-cancel",
     "allow-host-memory",
     "allow-app-settings",
     "allow-settings-update",

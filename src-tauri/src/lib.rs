@@ -62,6 +62,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::model_presets,
             commands::model_download,
             commands::model_download_status,
+            commands::model_download_cancel,
             commands::host_memory,
             commands::app_settings,
             commands::settings_update,

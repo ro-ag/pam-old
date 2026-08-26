@@ -277,7 +277,7 @@ type ImportState =
   | { state: "running"; stage: "hashing" | "registering"; hashedBytes: number; totalBytes: number }
   | { state: "fail"; detail: string };
 
-type DownloadPhase = "idle" | "running" | "complete" | "failed";
+type DownloadPhase = "idle" | "running" | "complete" | "failed" | "cancelled";
 
 interface DownloadProgress {
   receivedBytes: number;
@@ -349,6 +349,9 @@ function PresetDownload({
             [downloadStatus.failure?.detail, downloadStatus.failure?.recovery].filter(Boolean).join(" ") ||
               "The download failed partway through.",
           );
+        } else if (downloadStatus.status === "cancelled" && downloadStatus.presetId) {
+          setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
+          setPhase("cancelled");
         }
       } catch (error) {
         if (!cancelled) setLoadError(presentError(error));
@@ -382,6 +385,8 @@ function PresetDownload({
             [status.failure?.detail, status.failure?.recovery].filter(Boolean).join(" ") ||
               "The download failed partway through.",
           );
+        } else if (status.status === "cancelled") {
+          setPhase("cancelled");
         } else if (status.status === "idle") {
           setPhase("idle");
         }
@@ -418,6 +423,19 @@ function PresetDownload({
       }
     } catch (error) {
       setPhase("failed");
+      setDownloadError(presentError(error));
+    }
+  };
+
+  // Cancelling keeps the partial file on disk; the next start of the same
+  // preset resumes from it, so the polled state settles via the daemon.
+  const cancelDownload = async () => {
+    try {
+      const response = await bridge.modelDownloadCancel(withDaemonOperation());
+      if (response.status !== "ok") {
+        setDownloadError([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
       setDownloadError(presentError(error));
     }
   };
@@ -532,8 +550,19 @@ function PresetDownload({
                       ? "Downloaded"
                       : phase === "failed"
                         ? "Retry download"
-                        : "Download"}
+                        : phase === "cancelled"
+                          ? "Resume download"
+                          : "Download"}
                 </button>
+                {busy && (
+                  <button
+                    type="button"
+                    className="button button--secondary button--small"
+                    onClick={() => void cancelDownload()}
+                  >
+                    Cancel
+                  </button>
+                )}
                 {busy && <small>PAM fetches, hashes, and registers this model, all from this screen.</small>}
               </div>
               {phase === "running" && progress && (
@@ -549,6 +578,12 @@ function PresetDownload({
               {phase === "complete" && (
                 <p className="model-verify is-pass" role="status">
                   <Check size={16} aria-hidden="true" /> Downloaded and registered.
+                </p>
+              )}
+              {phase === "cancelled" && progress && (
+                <p className="model-note" role="status">
+                  Download cancelled — {formatModelSize(progress.receivedBytes)} of{" "}
+                  {formatModelSize(progress.totalBytes)} kept on disk. Resume picks up where it left off.
                 </p>
               )}
               {phase === "failed" && downloadError && (

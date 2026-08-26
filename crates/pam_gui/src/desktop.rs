@@ -894,6 +894,7 @@ pub enum ModelDownloadStatusKindDto {
     Running,
     Complete,
     Failed,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2070,6 +2071,7 @@ impl DesktopCore {
                 ModelDownloadStatusKind::Running => ModelDownloadStatusKindDto::Running,
                 ModelDownloadStatusKind::Complete => ModelDownloadStatusKindDto::Complete,
                 ModelDownloadStatusKind::Failed => ModelDownloadStatusKindDto::Failed,
+                ModelDownloadStatusKind::Cancelled => ModelDownloadStatusKindDto::Cancelled,
             },
             preset_id: snapshot.preset_id,
             received_bytes: snapshot.received_bytes,
@@ -2081,6 +2083,35 @@ impl DesktopCore {
                     failure.recovery,
                 )
             }),
+        };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Requests cancellation of the running guided download. The partial file
+    /// stays on disk, so downloading the same preset again resumes. A refusal
+    /// (no download running) comes back as `ModelDownloadDto::Unavailable`,
+    /// not an `Err`; only fence problems do.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_download_cancel(
+        &self,
+        fence: CommandFence,
+    ) -> DesktopResult<ModelDownloadDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let data = match self.downloads.cancel() {
+            Ok(()) => ModelDownloadDto::Ok,
+            Err(failure) => ModelDownloadDto::Unavailable {
+                failure: unavailable_failure(
+                    Some("download_not_running".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                ),
+            },
         };
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
