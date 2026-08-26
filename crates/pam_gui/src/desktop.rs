@@ -500,6 +500,10 @@ pub struct FlowWorkspaceDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FlowWorkspaceDataDto {
     pub definitions: Vec<FlowDefinitionDto>,
+    /// Definition IDs copied into the global library from a legacy
+    /// project-local `.pam/flows` catalog during this load. Always empty
+    /// once a project's legacy flows have all been migrated once.
+    pub migrated: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1035,9 +1039,11 @@ struct ActiveProject {
     generation: GenerationId,
 }
 
+/// The daemon-global flow-definition workspace. Unlike other per-command
+/// state, this carries no project or generation stamp: flow definitions are
+/// authored once against the daemon-global library and are usable from any
+/// project, so the open catalog and its documents outlive project switches.
 struct FlowWorkspaceState {
-    project: ProjectHandle,
-    generation: GenerationId,
     model: FlowEditorModel,
     definitions: HashMap<FlowDefinitionHandle, String>,
     documents: HashMap<FlowDocumentHandle, FlowEditorDocument>,
@@ -1565,25 +1571,51 @@ impl DesktopCore {
         Ok(EvidenceDto { fence, data })
     }
 
-    /// Loads the active project's bounded flow catalog.
+    /// Loads the daemon-global bounded flow catalog.
+    ///
+    /// When invoked with an active project fence, any of that project's
+    /// legacy `.pam/flows` definitions absent from the global library are
+    /// copied in once (idempotent by definition ID; the legacy files are left
+    /// untouched) and reported back as `migrated`.
     ///
     /// # Errors
     ///
     /// Returns a bounded error for stale authority or an unsafe/invalid catalog.
     pub async fn flow_workspace(&self, fence: CommandFence) -> DesktopResult<FlowWorkspaceDto> {
+        let root = pam_platform::flow_library_root().map_err(|_| flow_library_unavailable())?;
+        self.flow_workspace_at(fence, root).await
+    }
+
+    async fn flow_workspace_at(
+        &self,
+        fence: CommandFence,
+        root: PathBuf,
+    ) -> DesktopResult<FlowWorkspaceDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
-        let root = active.catalog.root.clone();
-        let model = tokio::task::spawn_blocking(move || FlowEditorModel::open(root))
-            .await
-            .map_err(|_| {
-                DesktopErrorDto::new(
-                    DesktopErrorKind::Internal,
-                    "PAM could not join the flow catalog worker.",
-                    None,
-                )
-            })?
-            .map_err(|error| flow_error(&error))?;
+        let scope = self.begin_scoped(&fence).await?;
+        let legacy_root = scope.project_root();
+        let (model, migrated) = tokio::task::spawn_blocking(move || {
+            // The global library root is not a project directory a user
+            // creates; it is PAM's own user-data directory, so it may not
+            // exist yet on a fresh install. Unlike a missing project root
+            // (a real error), a missing global root is created on first use.
+            std::fs::create_dir_all(&root).map_err(FlowEditorError::ProjectRoot)?;
+            let mut model = FlowEditorModel::open(root)?;
+            let migrated = match legacy_root {
+                Some(legacy_root) => migrate_legacy_flows(&mut model, &legacy_root)?,
+                None => Vec::new(),
+            };
+            Ok::<_, FlowEditorError>((model, migrated))
+        })
+        .await
+        .map_err(|_| {
+            DesktopErrorDto::new(
+                DesktopErrorKind::Internal,
+                "PAM could not join the flow catalog worker.",
+                None,
+            )
+        })?
+        .map_err(|error| flow_error(&error))?;
         let mut definitions = HashMap::new();
         let mut result = Vec::with_capacity(model.entries().len());
         for entry in model.entries() {
@@ -1595,10 +1627,8 @@ impl DesktopCore {
             });
         }
         let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         state.flow_workspace = Some(FlowWorkspaceState {
-            project: active.catalog.handle.clone(),
-            generation: active.generation.clone(),
             model,
             definitions,
             documents: HashMap::new(),
@@ -1607,6 +1637,7 @@ impl DesktopCore {
             fence,
             data: FlowWorkspaceDataDto {
                 definitions: result,
+                migrated,
             },
         })
     }
@@ -2237,10 +2268,10 @@ impl DesktopCore {
     ) -> DesktopResult<FlowDocumentDto> {
         let _command = self.command_gate.lock().await;
         definition.validate()?;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
-        let workspace = workspace_mut(&mut state, &active)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        let workspace = workspace_mut(&mut state)?;
         let selector = workspace.definitions.get(&definition).ok_or_else(|| {
             DesktopErrorDto::stale("The flow definition handle is no longer current.")
         })?;
@@ -2271,10 +2302,10 @@ impl DesktopCore {
     ) -> DesktopResult<FlowReviewDto> {
         let _command = self.command_gate.lock().await;
         document.validate()?;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
-        let workspace = workspace_mut(&mut state, &active)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        let workspace = workspace_mut(&mut state)?;
         let draft = workspace.documents.get_mut(&document).ok_or_else(|| {
             DesktopErrorDto::stale("The flow document handle is no longer current.")
         })?;
@@ -2307,10 +2338,10 @@ impl DesktopCore {
     ) -> DesktopResult<FlowSaveDto> {
         let _command = self.command_gate.lock().await;
         document.validate()?;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let mut state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
-        let workspace = workspace_mut(&mut state, &active)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        let workspace = workspace_mut(&mut state)?;
         let draft = workspace.documents.get_mut(&document).ok_or_else(|| {
             DesktopErrorDto::stale("The flow document handle is no longer current.")
         })?;
@@ -3519,19 +3550,56 @@ fn evidence_preview_dto(handle: EvidenceHandleDto, preview: EvidencePreview) -> 
     }
 }
 
-fn workspace_mut<'a>(
-    state: &'a mut DesktopState,
-    active: &ActiveProject,
-) -> DesktopResult<&'a mut FlowWorkspaceState> {
-    let workspace = state.flow_workspace.as_mut().ok_or_else(|| {
+fn workspace_mut(state: &mut DesktopState) -> DesktopResult<&mut FlowWorkspaceState> {
+    state.flow_workspace.as_mut().ok_or_else(|| {
         DesktopErrorDto::stale("Load the flow workspace before using a flow handle.")
-    })?;
-    if workspace.project != active.catalog.handle || workspace.generation != active.generation {
-        return Err(DesktopErrorDto::stale(
-            "The flow workspace belongs to a stale project generation.",
-        ));
+    })
+}
+
+fn flow_library_unavailable() -> DesktopErrorDto {
+    DesktopErrorDto::unavailable(
+        "PAM could not resolve the global flow-definition library.",
+        Some("Verify the operating system user data directory, then retry Flows.".to_owned()),
+    )
+}
+
+/// Copies definitions from a legacy project-local `.pam/flows` catalog into
+/// the global flow library, skipping any definition ID the library already
+/// has. Migration is best-effort: an unreadable or missing legacy catalog is
+/// silently treated as nothing to migrate, since it is not this project's
+/// fault that the global library load failed. Legacy files are never
+/// modified or removed.
+fn migrate_legacy_flows(
+    global: &mut FlowEditorModel,
+    legacy_root: &Path,
+) -> Result<Vec<String>, FlowEditorError> {
+    let Ok(legacy) = FlowEditorModel::open(legacy_root) else {
+        return Ok(Vec::new());
+    };
+    let existing_ids: HashSet<&str> = global
+        .entries()
+        .iter()
+        .map(|entry| entry.identity().id())
+        .collect();
+    let sources: Vec<String> = legacy
+        .entries()
+        .iter()
+        .filter(|entry| !existing_ids.contains(entry.identity().id()))
+        .map(|entry| entry.source().to_owned())
+        .collect();
+    drop(existing_ids);
+    let mut migrated = Vec::with_capacity(sources.len());
+    for source in sources {
+        let document = global.new_document(source)?;
+        let interaction = document.prepare_save()?;
+        let mut document = document;
+        let saved = document.commit_save(interaction)?;
+        migrated.push(saved.identity().id().to_owned());
     }
-    Ok(workspace)
+    if !migrated.is_empty() {
+        global.reload()?;
+    }
+    Ok(migrated)
 }
 
 fn identity_dto(identity: &FlowIdentity) -> FlowIdentityDto {
@@ -3971,6 +4039,15 @@ pub(crate) async fn reserve_daemon_for_test(
     fence: &CommandFence,
 ) -> DesktopResult<()> {
     core.begin_daemon(fence).await
+}
+
+#[cfg(test)]
+pub(crate) async fn flow_workspace_at_for_test(
+    core: &DesktopCore,
+    fence: CommandFence,
+    root: PathBuf,
+) -> DesktopResult<FlowWorkspaceDto> {
+    core.flow_workspace_at(fence, root).await
 }
 
 #[cfg(test)]

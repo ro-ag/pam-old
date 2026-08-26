@@ -283,10 +283,14 @@ enum SkillsInstallCommand {
 
 #[derive(Debug, Subcommand)]
 enum FlowCommand {
-    /// Validate and submit a project-local flow definition.
+    /// Validate and submit a definition from the global flow library.
     Run {
-        /// Exact flow ID or `<id>.toml` file name from `.pam/flows`.
+        /// Exact flow ID or `<id>.toml` file name from the global flow library.
         selector: String,
+        /// Project the run is bound to; defaults to cwd discovery. Flow
+        /// definitions are global, but every run still belongs to one project.
+        #[arg(long, value_name = "ABSOLUTE_PATH", value_parser = parse_project_root)]
+        project: Option<PathBuf>,
         /// Durable run ID; generated when omitted.
         #[arg(long, value_parser = parse_flow_run_id)]
         run_id: Option<RequestId>,
@@ -300,9 +304,9 @@ enum FlowCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
-    /// List validated project-local flow definitions.
+    /// List validated definitions from the global flow library.
     List,
-    /// Show one normalized project-local flow definition.
+    /// Show one normalized definition from the global flow library.
     Show { selector: String },
     /// Validate one flow, or every flow when no selector is supplied.
     Validate { selector: Option<String> },
@@ -585,6 +589,7 @@ pub(crate) enum Mode {
     },
     FlowRun {
         selector: String,
+        project: Option<PathBuf>,
         run_id: Option<RequestId>,
         idempotency_key: Option<IdempotencyKey>,
         timeout: Duration,
@@ -1133,12 +1138,14 @@ fn flow_mode(command: FlowCommand) -> Mode {
     match command {
         FlowCommand::Run {
             selector,
+            project,
             run_id,
             idempotency_key,
             timeout,
             approval_id,
         } => Mode::FlowRun {
             selector,
+            project,
             run_id,
             idempotency_key,
             timeout,
@@ -1243,6 +1250,10 @@ fn parse_canonical_entry_id(value: &str) -> Result<CanonicalEntryId, String> {
 
 fn parse_agent_root(value: &str) -> Result<PathBuf, String> {
     parse_bounded_absolute_path(value, "agent root")
+}
+
+fn parse_project_root(value: &str) -> Result<PathBuf, String> {
+    parse_bounded_absolute_path(value, "project root")
 }
 
 fn parse_install_path(value: &str) -> Result<PathBuf, String> {

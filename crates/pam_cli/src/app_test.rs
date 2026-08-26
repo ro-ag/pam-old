@@ -2,17 +2,19 @@ use std::{fs, path::Path};
 
 use crate::{
     app::{
-        FlowResponseKind, audit_export, discover_flow_catalog, flow_recovery_cursor,
-        flow_response_matches, flow_run_retry, model_import, model_import_resource,
-        retention_prune, select_flow,
+        FlowResponseKind, audit_export, flow_recovery_cursor, flow_response_matches,
+        flow_run_retry, migrate_legacy_flows, model_import, model_import_resource, retention_prune,
+        select_flow,
     },
     command::RetentionScopeArg,
+    flow::FlowCatalog,
     render::EXIT_OPERATION_FAILED,
     request::RequestContext,
 };
 
 use pam_core::{CallerId, ContentDigest, IdempotencyKey, RequestId};
 use pam_model::{LicenseSnapshot, ModelDescriptor, ModelKey};
+use pam_platform::discover_project;
 use pam_protocol::{
     CancellationDisposition, CancellationResult, Failure, FailureCode, OperationTruth,
     ReplayResult, ResultBody, ResultPayload,
@@ -20,13 +22,20 @@ use pam_protocol::{
 use uuid::Uuid;
 
 #[test]
-fn flow_commands_resolve_the_outer_project_root_from_a_subdirectory() {
+fn flow_run_binds_the_outer_project_root_from_a_subdirectory_while_the_catalog_stays_global() {
+    // Flow definitions live in the daemon-global library now: the catalog a
+    // run selects from is unrelated to the active project's directory. Only
+    // the *run* is bound to a project (here, the outer root discovered from a
+    // nested subdirectory) — a project-local `.pam/flows` file must not leak
+    // into the global catalog used to resolve the definition.
     let root = std::env::temp_dir().join(format!("pam-cli-root-{}", Uuid::new_v4()));
-    let outer_flows = root.join(".pam/flows");
+    let global = std::env::temp_dir().join(format!("pam-cli-global-{}", Uuid::new_v4()));
+    let legacy_flows = root.join(".pam/flows");
     let nested = root.join("subdirectory/nested");
-    let decoy_flows = nested.join(".pam/flows");
-    fs::create_dir_all(&outer_flows).unwrap();
-    fs::create_dir_all(&decoy_flows).unwrap();
+    let global_flows = global.join(".pam/flows");
+    fs::create_dir_all(&legacy_flows).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    fs::create_dir_all(&global_flows).unwrap();
     let project_id = Uuid::new_v4();
     fs::write(
         root.join(".pam/project.toml"),
@@ -34,25 +43,27 @@ fn flow_commands_resolve_the_outer_project_root_from_a_subdirectory() {
     )
     .unwrap();
     fs::write(
-        outer_flows.join("outer-flow.toml"),
-        super::flow_test::flow_source("outer-flow", "Outer flow"),
+        legacy_flows.join("legacy-flow.toml"),
+        super::flow_test::flow_source("legacy-flow", "Project-local legacy"),
     )
     .unwrap();
     fs::write(
-        decoy_flows.join("decoy-flow.toml"),
-        super::flow_test::flow_source("decoy-flow", "Nested decoy"),
+        global_flows.join("outer-flow.toml"),
+        super::flow_test::flow_source("outer-flow", "Outer flow"),
     )
     .unwrap();
 
-    let (project, catalog) = discover_flow_catalog(&nested).unwrap();
-
+    let project = discover_project(&nested).unwrap();
     assert_eq!(project.root(), fs::canonicalize(&root).unwrap());
     assert_eq!(project.id().as_str(), project_id.to_string());
+
+    let catalog = FlowCatalog::load(&global).unwrap();
     assert_eq!(catalog.entries().len(), 1);
     let selected = select_flow(&catalog, "outer-flow").unwrap();
     assert_eq!(selected.definition.id(), "outer-flow");
-    assert!(catalog.select("decoy-flow").is_err());
+    assert!(catalog.select("legacy-flow").is_err());
     assert!(selected.normalized.contains("id = \"outer-flow\""));
+
     let request = RequestContext::new_for_project(CallerId::from("cli-1"), &project, None)
         .flow_run(
             selected.source,
@@ -69,6 +80,37 @@ fn flow_commands_resolve_the_outer_project_root_from_a_subdirectory() {
     assert!(!format!("{request:?}").contains(project_root.as_str()));
 
     fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(global).unwrap();
+}
+
+#[test]
+fn migrate_legacy_flows_copies_missing_definitions_into_the_global_library_once() {
+    let legacy_root = std::env::temp_dir().join(format!("pam-cli-legacy-{}", Uuid::new_v4()));
+    let global_root = std::env::temp_dir().join(format!("pam-cli-global-{}", Uuid::new_v4()));
+    let legacy_flows = legacy_root.join(".pam/flows");
+    fs::create_dir_all(&legacy_flows).unwrap();
+    fs::create_dir_all(&global_root).unwrap();
+    let source = super::flow_test::flow_source("outer-flow", "Outer flow");
+    fs::write(legacy_flows.join("outer-flow.toml"), &source).unwrap();
+
+    let migrated = migrate_legacy_flows(&global_root, &legacy_root);
+    assert_eq!(migrated, vec!["outer-flow".to_owned()]);
+    let migrated_path = global_root.join(".pam/flows/outer-flow.toml");
+    assert_eq!(fs::read_to_string(&migrated_path).unwrap(), source);
+    // The legacy source is untouched, not moved.
+    assert_eq!(
+        fs::read_to_string(legacy_flows.join("outer-flow.toml")).unwrap(),
+        source
+    );
+
+    let second = migrate_legacy_flows(&global_root, &legacy_root);
+    assert!(
+        second.is_empty(),
+        "migration must be idempotent by definition id, not re-copy on every call"
+    );
+
+    fs::remove_dir_all(legacy_root).unwrap();
+    fs::remove_dir_all(global_root).unwrap();
 }
 
 fn import_descriptor(

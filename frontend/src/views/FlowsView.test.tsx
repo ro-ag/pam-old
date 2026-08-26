@@ -172,3 +172,15 @@ describe("FlowsView visual editor", () => {
     expect(first).toHaveAttribute("aria-pressed", "true");
   });
 });
+
+describe("FlowsView without an active project", () => {
+  it("loads the global flow library under the daemon authority", async () => {
+    const bridge = fixtureBridge();
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
+    render(<FlowsView bridge={bridge} fence={null} onError={vi.fn()} onToast={vi.fn()} />);
+
+    await screen.findByRole("region", { name: "Flow workspace" });
+    expect(screen.getByRole("button", { name: /after-merge-checks/ })).toBeInTheDocument();
+    expect(loadWorkspace.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+  });
+});

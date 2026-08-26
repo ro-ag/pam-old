@@ -717,9 +717,16 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   contextBar={projectContextBar}
                 />
               )}
-              {state.activeView === "flows" && (projectData && state.activeFence
-                ? <FlowsView bridge={bridge} fence={state.activeFence} contextBar={projectContextBar} onError={showToast} onToast={showToast} />
-                : projectPlaceholder("Flows", "Repeatable work, with meaningful feedback."))}
+              {state.activeView === "flows" && (
+                <FlowsView
+                  key={state.activeFence ? `${state.activeFence.projectHandle}:${state.activeFence.generation}` : `flows:daemon:${refreshTick}`}
+                  bridge={bridge}
+                  fence={state.activeFence}
+                  contextBar={projectContextBar}
+                  onError={showToast}
+                  onToast={showToast}
+                />
+              )}
               {state.activeView === "activity" && (
                 <ActivityView
                   key={`activity:${refreshTick}`}

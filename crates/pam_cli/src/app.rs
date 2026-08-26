@@ -1,6 +1,8 @@
 use std::{
+    collections::HashSet,
+    fs,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,7 +16,7 @@ use pam_model::{
 };
 use pam_platform::{
     CallerKind, IdentityError, LocalEndpoint, ProjectIdentity, caller_id, discover_project,
-    discover_project_id, user_data_dir,
+    discover_project_id, flow_library_root, user_data_dir,
 };
 use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, ResourceName, ResourceScope,
@@ -990,16 +992,27 @@ pub(crate) async fn result(request_id: RequestId, approval_id: Option<ApprovalId
 
 pub(crate) async fn flow_run(
     selector: &str,
+    project_override: Option<PathBuf>,
     run_id: Option<RequestId>,
     idempotency_key: Option<IdempotencyKey>,
     timeout: Duration,
     approval_id: Option<ApprovalId>,
 ) -> i32 {
-    let Some((project, catalog)) = discover_flow_catalog(Path::new(".")) else {
+    let Some(catalog) = discover_global_flow_catalog() else {
         return EXIT_OPERATION_FAILED;
     };
     let Some(entry) = select_flow(&catalog, selector) else {
         return EXIT_OPERATION_FAILED;
+    };
+    // The flow definition is daemon-global, but the run it starts is always
+    // bound to one project: the caller's `--project`, or cwd discovery.
+    let project_root = project_override.as_deref().unwrap_or(Path::new("."));
+    let project = match discover_project(project_root) {
+        Ok(project) => project,
+        Err(error) => {
+            report_identity_error(&error);
+            return EXIT_OPERATION_FAILED;
+        }
     };
     let Some(context) = discover_context_for_project(&project, approval_id).await else {
         return EXIT_OPERATION_FAILED;
@@ -1040,8 +1053,25 @@ pub(crate) fn flow_run_retry(
 }
 
 pub(crate) fn flow_list() -> i32 {
-    let Some((_, catalog)) = discover_flow_catalog(Path::new(".")) else {
+    let Some(root) = global_flow_library_root() else {
         return EXIT_OPERATION_FAILED;
+    };
+    // Best-effort, idempotent, no-prompt migration: a cwd project's legacy
+    // `.pam/flows` definitions absent from the global library are copied in
+    // once, leaving the legacy files untouched. Not being inside a project is
+    // not an error here; there is simply nothing to migrate.
+    if let Ok(project) = discover_project(Path::new(".")) {
+        let migrated = migrate_legacy_flows(&root, project.root());
+        if !migrated.is_empty() {
+            eprintln!(
+                "Migrated legacy flow definition(s) into the global library: {}",
+                migrated.join(", ")
+            );
+        }
+    }
+    let catalog = match FlowCatalog::load(&root) {
+        Ok(catalog) => catalog,
+        Err(error) => return report_flow_catalog_error(&error),
     };
     for entry in catalog.entries() {
         println!(
@@ -1056,7 +1086,7 @@ pub(crate) fn flow_list() -> i32 {
 }
 
 pub(crate) fn flow_show(selector: &str) -> i32 {
-    let Some((_, catalog)) = discover_flow_catalog(Path::new(".")) else {
+    let Some(catalog) = discover_global_flow_catalog() else {
         return EXIT_OPERATION_FAILED;
     };
     let Some(entry) = select_flow(&catalog, selector) else {
@@ -1067,7 +1097,7 @@ pub(crate) fn flow_show(selector: &str) -> i32 {
 }
 
 pub(crate) fn flow_validate(selector: Option<&str>) -> i32 {
-    let Some((_, catalog)) = discover_flow_catalog(Path::new(".")) else {
+    let Some(catalog) = discover_global_flow_catalog() else {
         return EXIT_OPERATION_FAILED;
     };
     let entries = if let Some(selector) = selector {
@@ -1166,22 +1196,72 @@ pub(crate) async fn flow_result(run_id: RequestId, approval_id: Option<ApprovalI
     .await
 }
 
-pub(crate) fn discover_flow_catalog(start: &Path) -> Option<(ProjectIdentity, FlowCatalog)> {
-    let project = match discover_project(start) {
-        Ok(project) => project,
+/// Resolves the daemon-global flow-definition library root, creating it if
+/// this is the first time anything has opened it: unlike a project root, the
+/// global root is PAM's own user-data directory rather than something the
+/// user creates, so its absence on a fresh install is not an error.
+pub(crate) fn global_flow_library_root() -> Option<PathBuf> {
+    let root = match flow_library_root() {
+        Ok(root) => root,
         Err(error) => {
             report_identity_error(&error);
             return None;
         }
     };
-    let catalog = match FlowCatalog::load(project.root()) {
-        Ok(catalog) => catalog,
+    if let Err(error) = fs::create_dir_all(&root) {
+        eprintln!("PAM could not create the global flow-definition library directory.");
+        eprintln!("Details: {}", escape_text(&error.to_string()));
+        return None;
+    }
+    Some(root)
+}
+
+pub(crate) fn discover_global_flow_catalog() -> Option<FlowCatalog> {
+    let root = global_flow_library_root()?;
+    match FlowCatalog::load(&root) {
+        Ok(catalog) => Some(catalog),
         Err(error) => {
             report_flow_catalog_error(&error);
-            return None;
+            None
         }
+    }
+}
+
+/// Copies legacy project-local flow definitions absent from the global
+/// library into it, by definition ID. Idempotent: already-migrated
+/// definitions are skipped. Legacy files are read only, never modified or
+/// removed. Best-effort: an unreadable legacy catalog migrates nothing rather
+/// than failing the caller.
+pub(crate) fn migrate_legacy_flows(global_root: &Path, legacy_root: &Path) -> Vec<String> {
+    let Ok(legacy) = FlowCatalog::load(legacy_root) else {
+        return Vec::new();
     };
-    Some((project, catalog))
+    if legacy.entries().is_empty() {
+        return Vec::new();
+    }
+    let existing_ids: HashSet<String> = FlowCatalog::load(global_root)
+        .map(|catalog| {
+            catalog
+                .entries()
+                .iter()
+                .map(|entry| entry.definition.id().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let flows_dir = global_root.join(".pam/flows");
+    let mut migrated = Vec::new();
+    for entry in legacy.entries() {
+        if existing_ids.contains(entry.definition.id()) {
+            continue;
+        }
+        if fs::create_dir_all(&flows_dir).is_err() {
+            continue;
+        }
+        if fs::write(flows_dir.join(&entry.file_name), &entry.source).is_ok() {
+            migrated.push(entry.definition.id().to_owned());
+        }
+    }
+    migrated
 }
 
 pub(crate) fn select_flow(
