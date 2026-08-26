@@ -100,3 +100,12 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-25
 - cost: 5
 - status: watching
+
+## pam-flows-are-global
+- kind: project-way
+- scope: project
+- rule: Flows are GLOBAL named definitions — define once, invoke against any project when asking PAM to do work; never store or present flow definitions per-project (runs stay project-scoped, definitions do not)
+- fix: Flow library = daemon-global (like skills); Flows view shows the global catalog with no project switcher; the project is chosen at invocation time, not at definition time
+- hits: 2026-08-26
+- cost: 20
+- status: watching
