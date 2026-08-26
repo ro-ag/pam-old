@@ -14,7 +14,7 @@ use std::os::unix::process::CommandExt;
 use pam_core::{CallerCredential, CallerId, EvidenceHandle as ProtocolEvidenceHandle, ProjectId};
 use pam_daemon::registered_projects;
 use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, StepCondition};
-use pam_platform::{CallerKind, caller_id, discover_project};
+use pam_platform::{CallerKind, caller_id, discover_project, user_data_dir};
 use pam_protocol::{
     ActivityDaySummary, ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult,
     CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
@@ -56,6 +56,7 @@ use crate::{
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
         run_connector_test, run_model_infer,
     },
+    settings,
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
     skill_inventory::{SkillInventoryDto, SkillInventoryEnvironment, load_skill_inventory},
     skill_library::{
@@ -880,6 +881,23 @@ pub struct HostMemoryDto {
     pub total_bytes: u64,
     /// PAM's supported system minimum: local AI needs a 32 GiB machine.
     pub supported_minimum_bytes: u64,
+}
+
+/// Settings v1: visibility into where PAM keeps things, and the one
+/// persisted preference so far. Global, like [`Self::model_presets`] and
+/// [`Self::host_memory`] — it works under the daemon authority with zero
+/// active projects.
+///
+/// There is no `flowsDir`: this branch has no global (project-independent)
+/// flows helper, only the per-project `.pam/flows`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppSettingsDto {
+    pub models_dir: String,
+    pub models_dir_is_default: bool,
+    pub data_dir: String,
+    pub logs_dir: String,
+    pub logs_size_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2021,6 +2039,90 @@ impl DesktopCore {
         Ok(data)
     }
 
+    /// Reports Settings v1: where models download to, where PAM's local
+    /// data lives, and the daemon's on-disk log location and size.
+    ///
+    /// Daemon-authority only, like [`Self::daemon_health`]: Settings has no
+    /// project-specific behavior, so it never accepts a project fence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the exact daemon
+    /// authority, its operation UUID was replayed, or the home directory or
+    /// PAM's local data directory cannot be resolved.
+    pub async fn app_settings(&self, fence: CommandFence) -> DesktopResult<AppSettingsDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        settings_snapshot().map(|snapshot| app_settings_dto(&snapshot))
+    }
+
+    /// Persists (or clears, with `models_dir: None`) the one Settings v1
+    /// preference: a custom models download directory. A future download
+    /// reads it fresh at start, so no in-memory cache needs invalidating.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the exact daemon
+    /// authority, its operation UUID was replayed, or `models_dir` is
+    /// relative, escapes with `..`, or names a directory PAM cannot create.
+    pub async fn settings_update(
+        &self,
+        fence: CommandFence,
+        models_dir: Option<String>,
+    ) -> DesktopResult<AppSettingsDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let data_dir = settings_data_dir()?;
+        let home = settings::resolve_home()
+            .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
+        settings::update_models_dir(&data_dir, &home, models_dir)
+            .map(|snapshot| app_settings_dto(&snapshot))
+            .map_err(|failure| DesktopErrorDto::invalid_input(failure.detail))
+    }
+
+    /// Deletes the on-disk daemon log files, if any exist. Never touches the
+    /// durable state store; the debug console keeps reading the daemon's
+    /// in-memory ring buffer regardless.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the exact daemon
+    /// authority, its operation UUID was replayed, or a log file exists but
+    /// cannot be removed.
+    pub async fn logs_delete(&self, fence: CommandFence) -> DesktopResult<AppSettingsDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let data_dir = settings_data_dir()?;
+        let home = settings::resolve_home()
+            .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
+        settings::delete_logs(&data_dir, &home)
+            .map(|snapshot| app_settings_dto(&snapshot))
+            .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))
+    }
+
+    /// Validates that `path` is exactly one of today's Settings locations.
+    /// The actual "open in Finder" side effect is Tauri-specific and lives in
+    /// the desktop shell; this only guards against revealing an arbitrary
+    /// filesystem path chosen by the frontend.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the exact daemon
+    /// authority, its operation UUID was replayed, or `path` does not match
+    /// the models, data, or logs directory.
+    pub async fn reveal_path(&self, fence: CommandFence, path: String) -> DesktopResult<()> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let snapshot = settings_snapshot()?;
+        if settings::is_known_location(&snapshot, Path::new(&path)) {
+            Ok(())
+        } else {
+            Err(DesktopErrorDto::invalid_input(
+                "This path is not a PAM Settings location.",
+            ))
+        }
+    }
+
     /// Loads the complete connector registry without any credential material.
     ///
     /// `connector.list` is a baseline read: an explicit policy deny is
@@ -2499,7 +2601,7 @@ fn default_daemon_executable() -> PathBuf {
 /// Best-effort append capture for the spawned daemon's stderr, next to the
 /// daemon's own rotating log. Falls back to discarding when unavailable.
 fn daemon_stderr_capture() -> Stdio {
-    let Ok(data_dir) = pam_platform::user_data_dir() else {
+    let Ok(data_dir) = user_data_dir() else {
         return Stdio::null();
     };
     let logs = data_dir.join("logs");
@@ -3505,6 +3607,32 @@ fn unavailable_failure(
         code,
         detail: bounded_detail(detail.into()),
         recovery: recovery.map(bounded_detail),
+    }
+}
+
+fn settings_data_dir() -> DesktopResult<PathBuf> {
+    user_data_dir().map_err(|error| {
+        DesktopErrorDto::unavailable(
+            "PAM could not resolve its local data directory.",
+            Some(error.to_string()),
+        )
+    })
+}
+
+fn settings_snapshot() -> DesktopResult<settings::AppSettingsSnapshot> {
+    let data_dir = settings_data_dir()?;
+    let home = settings::resolve_home()
+        .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
+    Ok(settings::snapshot(&data_dir, &home))
+}
+
+fn app_settings_dto(snapshot: &settings::AppSettingsSnapshot) -> AppSettingsDto {
+    AppSettingsDto {
+        models_dir: snapshot.models_dir.to_string_lossy().into_owned(),
+        models_dir_is_default: snapshot.models_dir_is_default,
+        data_dir: snapshot.data_dir.to_string_lossy().into_owned(),
+        logs_dir: snapshot.logs_dir.to_string_lossy().into_owned(),
+        logs_size_bytes: snapshot.logs_size_bytes,
     }
 }
 

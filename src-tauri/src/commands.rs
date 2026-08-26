@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use pam_gui::{
-    ActivityDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto,
-    CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
-    ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto, DaemonLogsDto, DaemonStatsDto,
-    DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
-    FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
-    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
-    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelInferDto, ModelInspectDto,
-    ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
-    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    ActivityDto, AppSettingsDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle,
+    BootstrapDto, CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto,
+    ConnectorConfigureParams, ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto,
+    DaemonLogsDto, DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind, EvidenceDto,
+    EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle,
+    FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto,
+    HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
+    ModelInferDto, ModelInspectDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId,
+    ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
+    SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -230,6 +231,31 @@ pub(crate) struct ModelDownloadRequest {
     #[serde(deserialize_with = "canonical_uuid")]
     operation_id: OperationId,
     preset_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SettingsUpdateRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    #[serde(default)]
+    models_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RevealPathRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -583,6 +609,67 @@ pub(crate) async fn host_memory(
     request: FencedRequest,
 ) -> Result<HostMemoryDto, DesktopErrorDto> {
     state.core.host_memory(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn app_settings(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<AppSettingsDto, DesktopErrorDto> {
+    state.core.app_settings(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn settings_update(
+    state: State<'_, DesktopState>,
+    request: SettingsUpdateRequest,
+) -> Result<AppSettingsDto, DesktopErrorDto> {
+    state
+        .core
+        .settings_update(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.models_dir,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn logs_delete(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<AppSettingsDto, DesktopErrorDto> {
+    state.core.logs_delete(request.into_fence()).await
+}
+
+/// Validates `request.path` against PAM's own Settings locations, then opens
+/// it in the system file manager. Deliberately not the opener plugin's own
+/// `reveal_item_in_dir` IPC command: the frontend never gets a permission to
+/// reveal an arbitrary path, only this validated one.
+#[tauri::command]
+pub(crate) async fn reveal_path(
+    state: State<'_, DesktopState>,
+    request: RevealPathRequest,
+) -> Result<(), DesktopErrorDto> {
+    state
+        .core
+        .reveal_path(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.path.clone(),
+        )
+        .await?;
+    tauri_plugin_opener::reveal_item_in_dir(&request.path).map_err(|error| DesktopErrorDto {
+        kind: DesktopErrorKind::Unavailable,
+        message: error.to_string(),
+        recovery: None,
+    })
 }
 
 #[tauri::command]

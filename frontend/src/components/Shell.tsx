@@ -4,6 +4,7 @@ import {
   CaretDown,
   Check,
   Circle,
+  Gear,
   GitBranch,
   LockSimple,
   MagnifyingGlass,
@@ -348,6 +349,17 @@ export function Sidebar({
             </button>
           )}
         </div>
+        <button
+          type="button"
+          className={`nav-item ${activeView === "settings" ? "is-active" : ""}`}
+          aria-current={activeView === "settings" ? "page" : undefined}
+          aria-label="Settings"
+          title={collapsed ? "Settings" : undefined}
+          onClick={() => onNavigate("settings")}
+        >
+          <Gear size={19} weight={activeView === "settings" ? "bold" : "regular"} aria-hidden="true" />
+          {!collapsed && <span>Settings</span>}
+        </button>
         <div className="utility-nav">
           <button type="button" aria-label="Documentation unavailable in this preview" title="Documentation unavailable in this preview" disabled><BookOpen size={19} /></button>
         </div>

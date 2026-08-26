@@ -18,13 +18,13 @@ use std::{
 use directories::BaseDirs;
 use pam_model::{
     DownloadRequest, DownloadResponse, DownloadTransport, LicenseConsent, ModelDescriptor,
-    ModelError, RegisteredModel, ReqwestDownloadTransport, TransferRequest, default_model_path,
-    download_https,
+    ModelError, RegisteredModel, ReqwestDownloadTransport, TransferRequest, download_https,
+    model_path_under,
 };
 use pam_platform::user_data_dir;
 use pam_store::Store;
 
-use crate::{model_import::parse_model_key, model_presets::ModelPreset};
+use crate::{model_import::parse_model_key, model_presets::ModelPreset, settings};
 
 /// ponytail: Hugging Face's download redirect lands on a region-sharded CDN
 /// host (observed `us.aws.cdn.hf.co` from this network today; HF documents
@@ -148,7 +148,14 @@ impl ModelDownloadManager {
                     "Verify the operating system user profile, then retry.",
                 )
             })?;
-        self.start_with(preset, home, |received| {
+        // Settings' persisted custom models directory, when one is set,
+        // otherwise the default `<home>/llm`. A Settings read glitch falls
+        // back to the default rather than failing the download.
+        let models_root = user_data_dir().map_or_else(
+            |_| home.join("llm"),
+            |data_dir| settings::effective_models_dir(&data_dir, &home),
+        );
+        self.start_with(preset, models_root, |received| {
             ReqwestDownloadTransport::secure().map(|transport| CountingTransport {
                 inner: transport,
                 received,
@@ -156,13 +163,15 @@ impl ModelDownloadManager {
         })
     }
 
-    /// Starts a download using a caller-supplied home directory and transport
+    /// Starts a download into a caller-supplied models root (destination
+    /// becomes `<root>/<vendor>/<filename>`) using the given transport
     /// factory. Kept generic so tests can point at a scratch directory and
-    /// inject a fake transport instead of the real home and HTTPS.
+    /// inject a fake transport instead of the real Settings-resolved root
+    /// and HTTPS.
     pub(crate) fn start_with<T, F>(
         self: Arc<Self>,
         preset: ModelPreset,
-        home: PathBuf,
+        models_root: PathBuf,
         make_transport: F,
     ) -> Result<(), ModelDownloadFailure>
     where
@@ -191,7 +200,9 @@ impl ModelDownloadManager {
         tokio::spawn(async move {
             let seed_received = Arc::clone(&received);
             let outcome = match make_transport(received) {
-                Ok(transport) => run_download(&transport, preset, &home, seed_received).await,
+                Ok(transport) => {
+                    run_download(&transport, preset, &models_root, seed_received).await
+                }
                 Err(error) => Err(error.into()),
             };
             self.finish(preset, outcome);
@@ -223,7 +234,7 @@ impl ModelDownloadManager {
 async fn run_download<T: DownloadTransport>(
     transport: &T,
     preset: ModelPreset,
-    home: &Path,
+    models_root: &Path,
     received: Arc<AtomicU64>,
 ) -> Result<RegisteredModel, ModelDownloadFailure> {
     let key = parse_model_key(preset.model).map_err(|failure| ModelDownloadFailure {
@@ -239,7 +250,7 @@ async fn run_download<T: DownloadTransport>(
         license,
     )?;
     let consent = LicenseConsent::accept(&descriptor);
-    let destination = default_model_path(home, &descriptor.key, &descriptor.filename)?;
+    let destination = model_path_under(models_root, &descriptor.key, &descriptor.filename)?;
     seed_resume_offset(&destination, &received);
     let registered_at_ms = now_ms()?;
     let request = DownloadRequest {

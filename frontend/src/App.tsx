@@ -46,6 +46,7 @@ import { ConsoleView } from "./views/ConsoleView";
 import { ControlCenterView } from "./views/ControlCenterView";
 import { FlowsView } from "./views/FlowsView";
 import { AccessView } from "./views/ProjectViews";
+import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
 import { appReducer, initialState, presentError } from "./state";
 import {
@@ -407,7 +408,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                     ? "console"
                     : event.key === "7"
                       ? "callers"
-                      : null;
+                      : event.key === "8"
+                        ? "settings"
+                        : null;
         if (view) { event.preventDefault(); dispatch({ type: "navigate", view }); }
         if (event.key.toLowerCase() === "r") { event.preventDefault(); refresh(); }
       }
@@ -590,6 +593,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
     { id: "view-console", label: "Open Console", description: "Show the daemon's diagnostic log for debugging.", shortcut: "⌘6" },
     { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘7" },
+    { id: "view-settings", label: "Open Settings", description: "Show where PAM keeps things, and clear its logs.", shortcut: "⌘8" },
     ...(projectActive
       ? [{ id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." }]
       : []),
@@ -615,7 +619,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                 ? "console"
                 : id === "view-callers"
                   ? "callers"
-                  : null;
+                  : id === "view-settings"
+                    ? "settings"
+                    : null;
     if (view) {
       dispatch({ type: "navigate", view });
       closeActiveOverlay();
@@ -757,6 +763,13 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               )}
               {state.activeView === "callers" && (
                 <ConnectionsView key={`connections:${refreshTick}`} bridge={bridge} />
+              )}
+              {state.activeView === "settings" && (
+                <SettingsView
+                  key={`settings:${refreshTick}`}
+                  bridge={bridge}
+                  onOpenConsole={() => dispatch({ type: "navigate", view: "console" })}
+                />
               )}
             </motion.div>
           </AnimatePresence>

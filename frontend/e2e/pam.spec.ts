@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-type ViewName = "control-center" | "access" | "skills" | "flows" | "activity" | "callers";
+type ViewName = "control-center" | "access" | "skills" | "flows" | "activity" | "callers" | "settings";
 
 const responsiveWidths = [1_180, 960, 780, 600, 320] as const;
 const runtimeErrors = new WeakMap<Page, string[]>();
@@ -423,6 +423,22 @@ test.describe("selectable theme families and variants", () => {
     await expect(page.getByRole("menuitemradio", { name: /^Viña del Mar/ })).toBeChecked();
     await expect(page.getByRole("menuitemradio", { name: /^Dark/ })).toBeChecked();
     await expect(page).toHaveScreenshot("theme-menu-vina-dark-1180x800.png");
+  });
+});
+
+test.describe("Settings view", () => {
+  test("renders Storage and Logs in light and dark", async ({ page }) => {
+    await page.setViewportSize({ width: 1_180, height: 800 });
+    await openFixture(page, "solved", "settings");
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Where PAM keeps things" })).toBeVisible();
+    await expect(page).toHaveScreenshot("settings-light-1180x800.png");
+
+    await page.evaluate(() => localStorage.setItem("pam-theme-mode", "dark"));
+    await page.reload();
+    await page.locator(".app-shell").waitFor();
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await expect(page).toHaveScreenshot("settings-dark-1180x800.png");
   });
 });
 

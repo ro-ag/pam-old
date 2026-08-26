@@ -1,4 +1,4 @@
-export type ViewId = "control-center" | "access" | "skills" | "flows" | "activity" | "console" | "callers";
+export type ViewId = "control-center" | "access" | "skills" | "flows" | "activity" | "console" | "callers" | "settings";
 export type ApprovalDecision = "approve" | "deny";
 export type BridgeMode = "native" | "fixture";
 
@@ -611,6 +611,18 @@ export interface HostMemoryDto {
   supportedMinimumBytes: number;
 }
 
+// Settings v1 is global: it never carries a project fence or a failure
+// union. `logsDir`/`logsSizeBytes` describe the daemon's real on-disk log
+// files; there is no `flowsDir` because this build has no global (project-
+// independent) flows helper to report a location for.
+export interface AppSettingsDto {
+  modelsDir: string;
+  modelsDirIsDefault: boolean;
+  dataDir: string;
+  logsDir: string;
+  logsSizeBytes: number;
+}
+
 export interface CallerDto {
   callerId: string;
   registeredAtMs: number;
@@ -676,6 +688,10 @@ export interface PamBridge {
   modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
   modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;
   hostMemory(fence: CommandFence): Promise<HostMemoryDto>;
+  appSettings(fence: CommandFence): Promise<AppSettingsDto>;
+  settingsUpdate(fence: CommandFence, modelsDir: string | null): Promise<AppSettingsDto>;
+  logsDelete(fence: CommandFence): Promise<AppSettingsDto>;
+  revealPath(fence: CommandFence, path: string): Promise<void>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
   startDaemon(fence: CommandFence, model?: string): Promise<SnapshotDto | null>;

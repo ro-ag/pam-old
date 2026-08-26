@@ -16,12 +16,12 @@ use super::{
     access_config::{AccessConfigState, map_diagnostics_for_test},
     current::{CurrentState, EvidencePreview, pending_approval_for_test},
     desktop::{
-        AccessConfigDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto, CommandFence,
-        ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind, DesktopResult,
-        EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowDefinitionHandle,
-        FlowDocumentHandle, FlowGraphDto, GenerationId, HealthDto, ModelDownloadDto,
-        ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
-        active_core_at_for_test, active_core_for_test, activity_dto_for_test,
+        AccessConfigDto, AppSettingsDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto,
+        CommandFence, ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind,
+        DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto,
+        FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId, HealthDto,
+        ModelDownloadDto, ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto,
+        access_dto_for_test, active_core_at_for_test, active_core_for_test, activity_dto_for_test,
         approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
         clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
@@ -666,6 +666,38 @@ async fn model_download_status_defaults_to_idle() {
 }
 
 #[tokio::test]
+async fn app_settings_reports_a_well_formed_default_snapshot() {
+    // Reads the real user data and home directories (like the macOS host
+    // memory probe test), but never writes: safe to run anywhere.
+    let core = DesktopCore::new("/bounded/test");
+    let dto: AppSettingsDto = core
+        .app_settings(daemon_fence(OperationId::new()))
+        .await
+        .unwrap();
+
+    // `models_dir_is_default` depends on whatever this machine's real PAM
+    // Settings already persisted, so only the paths' shape is asserted here.
+    assert!(std::path::Path::new(&dto.models_dir).is_absolute());
+    assert!(std::path::Path::new(&dto.data_dir).is_absolute());
+    assert!(std::path::Path::new(&dto.logs_dir).is_absolute());
+    assert!(dto.logs_dir.ends_with("logs"));
+}
+
+#[tokio::test]
+async fn reveal_path_rejects_a_path_that_is_not_a_known_settings_location() {
+    let core = DesktopCore::new("/bounded/test");
+    let error = core
+        .reveal_path(
+            daemon_fence(OperationId::new()),
+            "/definitely/not/a/settings/path".to_owned(),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind, DesktopErrorKind::InvalidInput);
+}
+
+#[tokio::test]
 async fn model_inspect_reports_identity_metadata_and_the_floor_verdict() {
     let core = DesktopCore::new("/bounded/test");
     let directory =
@@ -1174,6 +1206,13 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     );
     assert_daemon_replay_conflict(core.model_download_status(fence()).await);
     assert_daemon_replay_conflict(core.host_memory(fence()).await);
+    assert_daemon_replay_conflict(core.app_settings(fence()).await);
+    assert_daemon_replay_conflict(core.settings_update(fence(), None).await);
+    assert_daemon_replay_conflict(core.logs_delete(fence()).await);
+    assert_daemon_replay_conflict(
+        core.reveal_path(fence(), "/not/a/settings/path".to_owned())
+            .await,
+    );
 }
 
 #[tokio::test]

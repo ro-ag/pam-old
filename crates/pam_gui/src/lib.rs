@@ -9,6 +9,7 @@ mod model_download;
 mod model_import;
 mod model_presets;
 mod observatory;
+mod settings;
 mod skill_audit;
 mod skill_inventory;
 mod skill_library;
@@ -32,6 +33,8 @@ mod model_presets_test;
 #[cfg(test)]
 mod observatory_test;
 #[cfg(test)]
+mod settings_test;
+#[cfg(test)]
 mod skill_audit_test;
 #[cfg(test)]
 mod skill_inventory_test;
@@ -39,22 +42,22 @@ mod skill_inventory_test;
 mod skill_library_test;
 
 pub use desktop::{
-    AccessConfigDto, ActivityDayDto, ActivityDto, ActivityEventDto, ApprovalDecisionDispositionDto,
-    ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle, BootstrapDto, CallerDto,
-    CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto, ConnectorConfigureParams,
-    ConnectorSummaryDto, ConnectorTestDto, ConnectorsDto, CurrentDto, DaemonLogEntryDto,
-    DaemonLogsDto, DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind, DesktopResult,
-    EvidenceDataDto, EvidenceDto, EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto,
-    FlowDefinitionDto, FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto,
-    FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
-    FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
-    FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelDownloadStatusKindDto,
-    ModelImportDto, ModelInferDto, ModelInspectDto, ModelMessageDto, ModelPresetDto,
-    ModelPresetsDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId,
-    OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, ProjectUsageDto,
-    RequestSummaryDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, TimelineFactDto,
-    TimelineKindDto,
+    AccessConfigDto, ActivityDayDto, ActivityDto, ActivityEventDto, AppSettingsDto,
+    ApprovalDecisionDispositionDto, ApprovalDecisionDto, ApprovalDecisionResponseDto,
+    ApprovalHandle, BootstrapDto, CallerDto, CallersDto, CatalogDto, CommandFence,
+    ConnectorConfigureDto, ConnectorConfigureParams, ConnectorSummaryDto, ConnectorTestDto,
+    ConnectorsDto, CurrentDto, DaemonLogEntryDto, DaemonLogsDto, DaemonStatsDto, DesktopCore,
+    DesktopErrorDto, DesktopErrorKind, DesktopResult, EvidenceDataDto, EvidenceDto,
+    EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowDefinitionDto,
+    FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto, FlowDocumentHandle, FlowDryRunDto,
+    FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto, FlowReviewDataDto, FlowReviewDto,
+    FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto, FlowVersionDiffLineDto, FlowWorkspaceDataDto,
+    FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
+    ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelImportDto, ModelInferDto,
+    ModelInspectDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
+    ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto,
+    ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto,
+    SnapshotDto, SnapshotFence, TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential
