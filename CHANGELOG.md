@@ -4,6 +4,16 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-08-26
+
+### Added
+
+- When an imported GGUF declares no license in its own metadata, PAM asks
+  the public Hugging Face index for the matching model and prefills the
+  license identifier, URL, and notice from what the repository declares —
+  narrated in the form, and falling back quietly to manual entry when
+  offline or unmatched. Accepting the license stays yours.
+
 ## [0.8.1] - 2026-08-26
 
 ### Added
