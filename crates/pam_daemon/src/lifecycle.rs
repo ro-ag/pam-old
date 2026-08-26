@@ -3049,6 +3049,7 @@ pub(super) fn protocol_caller_summary(registration: CallerRegistration) -> Calle
         caller_id: registration.caller_id,
         registered_at_ms: registration.registered_at_ms,
         revoked_at_ms: registration.revoked_at_ms,
+        kind: registration.kind,
     }
 }
 

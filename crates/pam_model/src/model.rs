@@ -226,6 +226,10 @@ pub struct GgufMetadata {
     /// `general.name`, when present as a bounded GGUF string. Same identity-only
     /// exclusion from equality as `architecture`.
     pub model_name: Option<String>,
+    /// `general.license`, when present as a bounded GGUF string (typically an
+    /// SPDX identifier). Same identity-only exclusion from equality as
+    /// `architecture`.
+    pub license: Option<String>,
 }
 
 impl GgufMetadata {

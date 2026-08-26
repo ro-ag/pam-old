@@ -2108,6 +2108,10 @@ pub struct CallerSummary {
     pub caller_id: CallerId,
     pub registered_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
+    /// Self-declared local caller surface (`cli`, `gui`, `coding-agent`, or
+    /// `local-application`). `None` for callers registered before this field
+    /// existed.
+    pub kind: Option<String>,
 }
 
 /// Snapshot of the daemon's model surface.

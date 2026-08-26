@@ -147,6 +147,7 @@ fn caller_list_is_authenticated_policy_named_and_free_of_credential_fields() {
             caller_id: CallerId::from("caller-1"),
             registered_at_ms: 1,
             revoked_at_ms: None,
+            kind: Some("cli".to_owned()),
         }],
     });
     let encoded = rmp_serde::to_vec_named(&result).unwrap();

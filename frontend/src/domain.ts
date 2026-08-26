@@ -564,6 +564,7 @@ export type ModelInspectDto =
       sizeBytes: number;
       architecture: string | null;
       modelName: string | null;
+      license: string | null;
       belowFloor: boolean;
       floorBytes: number;
     }
@@ -611,6 +612,9 @@ export interface CallerDto {
   callerId: string;
   registeredAtMs: number;
   revokedAtMs: number | null;
+  /** Self-declared local caller surface ("cli", "gui", "coding-agent", or
+   * "local-application"); null for callers registered before this field existed. */
+  kind: string | null;
 }
 
 export type CallersDto =

@@ -272,6 +272,7 @@ pub(crate) struct ModelInspectReport {
     pub size_bytes: u64,
     pub architecture: Option<String>,
     pub model_name: Option<String>,
+    pub license: Option<String>,
     pub below_floor: bool,
 }
 
@@ -315,6 +316,7 @@ pub(crate) async fn run_model_inspect(
         size_bytes: report.size_bytes,
         architecture: report.metadata.architecture,
         model_name: report.metadata.model_name,
+        license: report.metadata.license,
         below_floor: report.size_bytes < MIN_RECOMMENDED_MODEL_BYTES,
     })
 }

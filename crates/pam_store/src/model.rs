@@ -134,6 +134,10 @@ pub struct CallerRegistration {
     pub caller_id: CallerId,
     pub registered_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
+    /// Self-declared local caller surface (`cli`, `gui`, `coding-agent`, or
+    /// `local-application`), when the registering process supplied one.
+    /// `None` for rows registered before this field existed.
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

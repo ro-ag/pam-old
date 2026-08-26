@@ -276,6 +276,44 @@ describe("model runtime panel", () => {
     );
   });
 
+  it("prefills the license from a known SPDX id in the GGUF header, without opening Advanced", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/licensed.gguf");
+    await userEvent.tab();
+    await within(panel).findByText("licensed.gguf");
+
+    expect(
+      within(panel).getByRole("button", { name: /Advanced — license details/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+    expect(within(panel).getByLabelText("License identifier")).toHaveValue("Apache-2.0");
+    expect(within(panel).getByLabelText("License URL")).toHaveValue(
+      "https://www.apache.org/licenses/LICENSE-2.0",
+    );
+    expect(within(panel).getByLabelText("License notice")).toHaveValue(
+      "licensed.gguf is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.",
+    );
+  });
+
+  it("never overwrites a license identifier the user already typed", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+    await userEvent.type(within(panel).getByLabelText("License identifier"), "MIT");
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/licensed.gguf");
+    await userEvent.tab();
+    await within(panel).findByText("licensed.gguf");
+
+    expect(within(panel).getByLabelText("License identifier")).toHaveValue("MIT");
+    expect(within(panel).getByLabelText("License URL")).toHaveValue("");
+  });
+
   it("warns when the inspected file falls below PAM's recommended floor", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);
@@ -525,6 +563,7 @@ describe("model runtime panel", () => {
         sizeBytes: 17_456_012_448,
         architecture: "qwen3moe",
         modelName: "Model-A",
+        license: null,
         belowFloor: false,
         floorBytes: 17_000_000_000,
       })
@@ -534,6 +573,7 @@ describe("model runtime panel", () => {
         sizeBytes: 18_000_000_000,
         architecture: "llama",
         modelName: "Model-B",
+        license: null,
         belowFloor: false,
         floorBytes: 17_000_000_000,
       });
@@ -594,8 +634,8 @@ describe("caller request aggregation", () => {
   it("counts events per caller and keeps quiet registered callers", () => {
     const rows = aggregateCallerRequests(
       [
-        { callerId: "gui:desktop", registeredAtMs: 1, revokedAtMs: null },
-        { callerId: "cli:quiet", registeredAtMs: 2, revokedAtMs: 3 },
+        { callerId: "gui:desktop", registeredAtMs: 1, revokedAtMs: null, kind: "gui" },
+        { callerId: "cli:quiet", registeredAtMs: 2, revokedAtMs: 3, kind: null },
       ],
       [
         { sequence: 2, projectId: null, callerId: "gui:desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 5, projectRoot: null },
@@ -603,9 +643,9 @@ describe("caller request aggregation", () => {
       ],
     );
     expect(rows).toEqual([
-      { callerId: "cli:unregistered", requests: 1, revoked: false },
-      { callerId: "gui:desktop", requests: 1, revoked: false },
-      { callerId: "cli:quiet", requests: 0, revoked: true },
+      { callerId: "cli:unregistered", requests: 1, revoked: false, kind: null },
+      { callerId: "gui:desktop", requests: 1, revoked: false, kind: "gui" },
+      { callerId: "cli:quiet", requests: 0, revoked: true, kind: null },
     ]);
   });
 });
