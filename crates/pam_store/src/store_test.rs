@@ -5164,6 +5164,50 @@ async fn audit_rejects_control_and_format_characters_in_every_text_field() {
 }
 
 #[tokio::test]
+async fn reimporting_the_same_artifact_is_idempotent_and_may_renew_consent() {
+    let (directory, path) = database_path("model-reimport");
+    let store = Store::open(&path).unwrap();
+    let model = registered_model(&directory.join("user-owned.gguf"));
+    store.put_model(model.clone()).await.unwrap();
+
+    // Registration time is provenance, not identity: a later otherwise
+    // identical re-import keeps the original record.
+    let later = RegisteredModel {
+        registered_at_ms: model.registered_at_ms + 5_000,
+        ..model.clone()
+    };
+    assert_eq!(store.put_model(later).await.unwrap(), model);
+
+    // The same verified artifact re-imported under a new license snapshot is
+    // a deliberate re-consent: the consent columns update in place.
+    let renewed = RegisteredModel {
+        license: LicenseSnapshot::new(
+            "Apache-2.0",
+            "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            ContentDigest::from_sha256([9; 32]),
+        )
+        .unwrap(),
+        registered_at_ms: model.registered_at_ms + 9_000,
+        ..model.clone()
+    };
+    assert_eq!(store.put_model(renewed.clone()).await.unwrap(), renewed);
+    assert_eq!(store.model(model.key.clone()).await.unwrap(), renewed);
+
+    // A different artifact claiming the same identity still conflicts, even
+    // with matching license fields.
+    let moved = RegisteredModel {
+        path: directory.join("elsewhere.gguf"),
+        ..renewed
+    };
+    assert!(matches!(
+        store.put_model(moved).await,
+        Err(StoreError::ModelConflict(model_id)) if model_id == model.key.id()
+    ));
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
 async fn model_registry_persists_metadata_only_and_rejects_conflicts() {
     let (directory, path) = database_path("model-registry");
     let store = Store::open(&path).unwrap();

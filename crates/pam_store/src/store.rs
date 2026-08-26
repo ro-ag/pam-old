@@ -783,8 +783,10 @@ impl Store {
 
     /// Registers verified model metadata without copying weight bytes into PAM state.
     ///
-    /// An identical record is idempotent. The same model identity or path is never
-    /// replaced implicitly with different metadata.
+    /// An identical record is idempotent (registration time aside). Re-importing
+    /// the exact same verified artifact under a new license snapshot updates the
+    /// consent columns — a deliberate re-consent. A different artifact claiming
+    /// the same model identity or path is never replaced implicitly.
     ///
     /// # Errors
     ///
@@ -2356,10 +2358,40 @@ fn put_model(
         .map(decode_model)
         .transpose()?;
     if let Some(existing) = existing {
-        if existing == model {
+        // Registration time is provenance, not identity: an otherwise
+        // identical re-import is idempotent and keeps the original record.
+        let same_artifact = existing.key == model.key
+            && existing.path == model.path
+            && existing.digest == model.digest
+            && existing.size_bytes == model.size_bytes
+            && existing.gguf == model.gguf
+            && existing.source == model.source;
+        if same_artifact && existing.license == model.license {
             return Ok(existing);
         }
-        return Err(StoreError::ModelConflict(model.key.id()));
+        // The exact same verified artifact re-imported under a new license
+        // snapshot is a deliberate re-consent (the caller re-hashed the file
+        // and the user accepted the new notice): update the consent columns.
+        // A different artifact claiming this identity or path stays a
+        // conflict — never replaced implicitly.
+        if !same_artifact {
+            return Err(StoreError::ModelConflict(model.key.id()));
+        }
+        transaction.execute(
+            "UPDATE models SET
+                 license_id = ?2, license_url = ?3, license_digest = ?4,
+                 registered_at_ms = ?5
+             WHERE model_id = ?1",
+            params![
+                model_id,
+                model.license.identifier(),
+                model.license.notice_url(),
+                model.license.notice_digest().as_str(),
+                sql_integer(model.registered_at_ms)?,
+            ],
+        )?;
+        transaction.commit()?;
+        return Ok(model);
     }
     let (source_kind, source_identity) = model_source_columns(&model.source)?;
     transaction.execute(
