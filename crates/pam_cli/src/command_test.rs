@@ -432,6 +432,7 @@ fn flow_subcommands_select_all_runtime_modes_in_the_public_namespace() {
         .mode(),
         Mode::FlowRun {
             selector: "after-merge".to_owned(),
+            project: None,
             run_id: Some(RequestId::from("run-1")),
             idempotency_key: Some(IdempotencyKey::from("stable-1")),
             timeout: Duration::from_mins(5),
@@ -505,6 +506,30 @@ fn flow_subcommands_select_all_runtime_modes_in_the_public_namespace() {
 }
 
 #[test]
+fn flow_run_binds_an_explicit_bounded_project_root_to_the_daemon_global_definition() {
+    assert_eq!(
+        Cli::try_parse_from([
+            "pam",
+            "flow",
+            "run",
+            "after-merge",
+            "--project",
+            "/bounded/project"
+        ])
+        .unwrap()
+        .mode(),
+        Mode::FlowRun {
+            selector: "after-merge".to_owned(),
+            project: Some(PathBuf::from("/bounded/project")),
+            run_id: None,
+            idempotency_key: None,
+            timeout: Duration::from_secs(30),
+            approval_id: None,
+        }
+    );
+}
+
+#[test]
 fn flow_commands_reject_missing_or_unsafe_bounded_arguments() {
     for arguments in [
         vec!["pam", "flow", "run"],
@@ -519,6 +544,7 @@ fn flow_commands_reject_missing_or_unsafe_bounded_arguments() {
         vec!["pam", "flow", "run", "x", "--idempotency-key", "bad;key"],
         vec!["pam", "flow", "run", "x", "--idempotency-key", "$(bad)"],
         vec!["pam", "flow", "run", "x", "--idempotency-key", "-bad"],
+        vec!["pam", "flow", "run", "x", "--project", "relative/project"],
         vec![
             "pam",
             "flow",

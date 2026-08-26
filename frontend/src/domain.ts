@@ -141,6 +141,9 @@ export interface FlowDefinitionDto {
 
 export interface FlowWorkspaceDataDto {
   definitions: FlowDefinitionDto[];
+  /** Definition IDs copied into the global library from a legacy project
+   * `.pam/flows` catalog during this load. Empty once migrated. */
+  migrated: string[];
 }
 
 export type FlowWorkspaceDto = FencedResponse<FlowWorkspaceDataDto>;

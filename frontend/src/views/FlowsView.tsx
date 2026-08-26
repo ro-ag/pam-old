@@ -7,9 +7,9 @@ import {
   SidebarSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
-import { sameFence, withOperation } from "../bridge";
+import { sameFence, withDaemonOperation, withOperation } from "../bridge";
 import type {
   CommandFence,
   FlowDefinitionJson,
@@ -39,13 +39,17 @@ const freshHistory = (): DefinitionHistory => ({ past: [], future: [], lastEditM
 
 export interface FlowsViewProps {
   bridge: PamBridge;
-  fence: CommandFence;
+  fence: CommandFence | null;
   contextBar?: ReactNode;
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }
 
-export function FlowsView({ bridge, fence, contextBar, onError, onToast }: FlowsViewProps) {
+// Flow definitions are a daemon-global library: without an active project
+// this view still works, speaking to the daemon authority. When a project is
+// active, its fence is used as before — flow-catalog commands accept either.
+export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToast }: FlowsViewProps) {
+  const fence = useMemo(() => fenceProp ?? withDaemonOperation(), [fenceProp]);
   const [workspace, setWorkspace] = useState<FlowWorkspaceDataDto | null>(null);
   const [selected, setSelected] = useState<FlowDocumentDataDto | null>(null);
   const [draft, setDraft] = useState("");
@@ -111,6 +115,9 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
         return;
       }
       setWorkspace(response.data);
+      if (response.data.migrated.length > 0) {
+        onToast(`Migrated ${response.data.migrated.length === 1 ? "1 flow" : `${response.data.migrated.length} flows`} into the shared library`);
+      }
     } catch (error) {
       if (isCurrentRequest(sequence, requestFence)) setLoadError(presentError(error));
     } finally {
@@ -330,7 +337,7 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
       }
       setSelected((current) => current?.handle === documentHandle ? { ...current, identity: response.data.identity, source: normalizedSource } : current);
       setDraft(normalizedSource);
-      setWorkspace((current) => current && ({ definitions: current.definitions.map((definition) => definition.identity.id === response.data.identity.id ? { ...definition, identity: response.data.identity } : definition) }));
+      setWorkspace((current) => current && ({ ...current, definitions: current.definitions.map((definition) => definition.identity.id === response.data.identity.id ? { ...definition, identity: response.data.identity } : definition) }));
       setReview(null);
       setReviewedSource(null);
       onToast(response.data.durabilityConfirmed && response.data.cleanupComplete ? "Flow saved durably inside the project boundary" : "Flow saved; durability confirmation is incomplete");
@@ -345,7 +352,7 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
 
   return (
     <main className="canvas" id="main-content">
-      <header className="project-header compact"><div><h1>Flows</h1><p>Repeatable work, with meaningful feedback.</p></div>{contextBar}</header>
+      <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke PAM.</p></div>{contextBar}</header>
       {loadError && !workspace ? (
         <section className="panel loading-panel is-error" role="alert">
           <WarningCircle size={25} />
@@ -357,7 +364,7 @@ export function FlowsView({ bridge, fence, contextBar, onError, onToast }: Flows
       ) : (
         <section className={`flow-workspace ${catalogHidden ? "is-catalog-hidden" : ""}`} aria-label="Flow workspace">
           <aside className="flow-catalog" hidden={catalogHidden}>
-            <div className="panel-title"><div><span className="eyebrow">Project catalog</span><h2>Definitions</h2></div><FileText size={20} /></div>
+            <div className="panel-title"><div><span className="eyebrow">Flow library</span><h2>Definitions</h2></div><FileText size={20} /></div>
             <div className="flow-list">
               {workspace.definitions.map((flow) => (
                 <button type="button" className={selected?.identity?.id === flow.identity.id ? "is-active" : ""} aria-pressed={selected?.identity?.id === flow.identity.id} key={flow.handle} onClick={() => void open(flow.handle)}>

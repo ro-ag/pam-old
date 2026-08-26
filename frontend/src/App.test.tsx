@@ -1043,16 +1043,29 @@ describe("global-first workspace", () => {
     render(<App bridge={fixtureBridge("global-only")} />);
     await screen.findByRole("heading", { name: "Control center" });
 
-    for (const [button, heading] of [["Access", "Access"], ["Flows", "Flows"]] as const) {
-      await user.click(screen.getByRole("button", { name: button }));
-      expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
-    }
+    await user.click(screen.getByRole("button", { name: "Access" }));
+    expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
 
-    // Skills is global first: it serves the daemon scope instead of the hint.
+    // Skills and Flows are global first: flow definitions live in one shared
+    // library, so both serve the daemon scope instead of the hint.
     await user.click(screen.getByRole("button", { name: "Skills" }));
     expect(await screen.findByRole("heading", { name: "Skill inventory" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Flows" }));
+    expect(await screen.findByRole("region", { name: "Flow workspace" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
+  });
+
+  it("serves Flows under the daemon authority with zero projects", async () => {
+    const bridge = fixtureBridge("global-only");
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
+    render(<App bridge={bridge} initialView="flows" />);
+
+    expect(await screen.findByRole("region", { name: "Flow workspace" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /after-merge-checks/ })).toBeInTheDocument();
+    expect(loadWorkspace.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 
   it("serves Skills under the daemon authority and picks a project for assignment", async () => {

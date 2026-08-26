@@ -218,6 +218,20 @@ pub fn user_data_dir() -> Result<PathBuf, IdentityError> {
         })
 }
 
+/// Returns the durable root PAM's daemon-global flow-definition library opens
+/// beneath. Flow definitions live at `<root>/.pam/flows`, the same relative
+/// layout a project's local catalog used before flow definitions became
+/// global; only the root changes. Shared by the GUI and CLI so both open the
+/// exact same on-disk library.
+///
+/// # Errors
+///
+/// Returns an error when the operating system does not expose a user data
+/// directory for the current process.
+pub fn flow_library_root() -> Result<PathBuf, IdentityError> {
+    user_data_dir()
+}
+
 pub(crate) fn caller_id_in(data_dir: &Path, kind: CallerKind) -> Result<CallerId, IdentityError> {
     caller_id_in_with_publication(data_dir, kind, PublicationMode::PreferHardLink)
 }

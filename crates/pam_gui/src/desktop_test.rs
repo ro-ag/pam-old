@@ -18,19 +18,20 @@ use super::{
     desktop::{
         AccessConfigDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto, CommandFence,
         ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind, DesktopResult,
-        EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowGraphDto, GenerationId,
-        HealthDto, ModelDownloadDto, ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto,
-        access_dto_for_test, active_core_for_test, activity_dto_for_test,
+        EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowDefinitionHandle,
+        FlowDocumentHandle, FlowGraphDto, GenerationId, HealthDto, ModelDownloadDto,
+        ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto, access_dto_for_test,
+        active_core_at_for_test, active_core_for_test, activity_dto_for_test,
         approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
         clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
         connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
         daemon_start_cwd_for_test, evidence_dto_for_test, failure_kind_for_test,
-        flow_compose_data_for_test, flow_graph_data_for_test, gui_registration_current_for_test,
-        manage_skill_library_without_io_for_test, model_infer_dto_for_test,
-        model_status_dto_for_test, post_save_reload_error_for_test, registration_contract_for_test,
-        registration_failure_detail, reserve_daemon_for_test, reserve_for_test,
-        switch_authority_for_test,
+        flow_compose_data_for_test, flow_graph_data_for_test, flow_workspace_at_for_test,
+        gui_registration_current_for_test, manage_skill_library_without_io_for_test,
+        model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
+        registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
+        reserve_for_test, switch_authority_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -983,6 +984,85 @@ fn oversized_flow_documents_are_invalid_in_both_directions() {
     ));
 }
 
+struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "pam-gui-desktop-{label}-{}-{sequence}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn flow_workspace_migrates_legacy_project_flows_into_the_global_library_once() {
+    // OWNER DECISION (pam-flows-are-global): flow definitions are daemon-
+    // global; a project's pre-existing `.pam/flows` files must be copied into
+    // the global library exactly once, without touching the legacy files.
+    let legacy = ScratchDir::new("legacy-project");
+    let global = ScratchDir::new("global-library");
+    let legacy_flows = legacy.path().join(".pam/flows");
+    std::fs::create_dir_all(&legacy_flows).unwrap();
+    let legacy_source = repo_flow_source();
+    std::fs::write(legacy_flows.join("after-merge-checks.toml"), &legacy_source).unwrap();
+
+    let project = ProjectHandle::new();
+    let generation = GenerationId::new();
+    let core = active_core_at_for_test(&project, generation.clone(), legacy.path());
+    let fence = || CommandFence::new(project.clone(), generation.clone(), OperationId::new());
+
+    let first = flow_workspace_at_for_test(&core, fence(), global.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(first.data.migrated, vec!["after-merge-checks".to_owned()]);
+    assert_eq!(first.data.definitions.len(), 1);
+    let migrated_path = global.path().join(".pam/flows/after-merge-checks.toml");
+    assert!(migrated_path.is_file());
+    // The legacy source is untouched, not moved.
+    assert_eq!(
+        std::fs::read_to_string(legacy_flows.join("after-merge-checks.toml")).unwrap(),
+        legacy_source
+    );
+
+    let second = flow_workspace_at_for_test(&core, fence(), global.path().to_path_buf())
+        .await
+        .unwrap();
+    assert!(
+        second.data.migrated.is_empty(),
+        "migration must be idempotent by definition id, not re-copy on every load"
+    );
+    assert_eq!(second.data.definitions.len(), 1);
+}
+
+#[tokio::test]
+async fn flow_workspace_skips_migration_without_an_active_project() {
+    let global = ScratchDir::new("global-library-daemon-only");
+    let core = DesktopCore::new("/bounded/test");
+    let fence = daemon_fence(OperationId::new());
+
+    let loaded = flow_workspace_at_for_test(&core, fence, global.path().to_path_buf())
+        .await
+        .unwrap();
+
+    assert!(loaded.data.migrated.is_empty());
+    assert!(loaded.data.definitions.is_empty());
+}
+
 fn daemon_fence(operation: OperationId) -> CommandFence {
     CommandFence::new(
         ProjectHandle::parse("daemon").unwrap(),
@@ -1159,6 +1239,31 @@ async fn skill_commands_accept_the_daemon_authority_without_a_project() {
             operation_id: operation.clone(),
         })
         .await,
+    );
+}
+
+#[tokio::test]
+async fn flow_commands_accept_the_daemon_authority_without_a_project() {
+    // Flow definitions are daemon-global: a replayed daemon operation
+    // conflicts before any catalog I/O, which proves each flow command routes
+    // through the daemon authority instead of the active-project fence (a
+    // project-fenced path would fail with "No project is active" instead).
+    let core = DesktopCore::new("/bounded/test");
+    let operation = OperationId::new();
+    reserve_daemon_for_test(&core, &daemon_fence(operation.clone()))
+        .await
+        .unwrap();
+    let fence = || daemon_fence(operation.clone());
+
+    assert_daemon_replay_conflict(core.flow_workspace(fence()).await);
+    assert_daemon_replay_conflict(core.open_flow(fence(), FlowDefinitionHandle::new()).await);
+    assert_daemon_replay_conflict(
+        core.validate_flow(fence(), FlowDocumentHandle::new(), String::new())
+            .await,
+    );
+    assert_daemon_replay_conflict(
+        core.save_flow(fence(), FlowDocumentHandle::new(), String::new())
+            .await,
     );
 }
 

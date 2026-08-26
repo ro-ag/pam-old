@@ -111,7 +111,13 @@ impl FlowCatalogEntry {
     }
 }
 
-/// Rust-side state for a project-local flow editor.
+/// Rust-side state for the daemon-global flow-definition library editor.
+///
+/// `project_root` names the directory this catalog is rooted at; since flow
+/// definitions moved to a daemon-global library, callers pass the global
+/// flow-library root (see `pam_platform::flow_library_root`) here rather than
+/// a project directory. The on-disk layout beneath that root — a `.pam/flows`
+/// directory of `<id>.toml` files plus an advisory save lock — is unchanged.
 pub struct FlowEditorModel {
     project_root: PathBuf,
     project_directory: Arc<Dir>,
@@ -129,7 +135,9 @@ impl fmt::Debug for FlowEditorModel {
 }
 
 impl FlowEditorModel {
-    /// Opens a project and loads its bounded direct `.pam/flows` catalog.
+    /// Opens the flow-library root and loads its bounded direct `.pam/flows`
+    /// catalog beneath it (the daemon-global library root in production;
+    /// tests may still root this at an arbitrary directory).
     ///
     /// Missing catalog directories represent an empty catalog. Existing
     /// directories and definition files must not be symbolic links.

@@ -67,11 +67,22 @@ async fn run_async() -> i32 {
         } => app::result(request_id, approval_id).await,
         Mode::FlowRun {
             selector,
+            project,
             run_id,
             idempotency_key,
             timeout,
             approval_id,
-        } => app::flow_run(&selector, run_id, idempotency_key, timeout, approval_id).await,
+        } => {
+            app::flow_run(
+                &selector,
+                project,
+                run_id,
+                idempotency_key,
+                timeout,
+                approval_id,
+            )
+            .await
+        }
         Mode::FlowList => app::flow_list(),
         Mode::FlowShow { selector } => app::flow_show(&selector),
         Mode::FlowValidate { selector } => app::flow_validate(selector.as_deref()),

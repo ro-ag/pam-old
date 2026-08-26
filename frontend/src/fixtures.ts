@@ -759,6 +759,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       { handle: definitionHandle, identity },
       { handle: secondDefinitionHandle, identity: { fileName: "release-confidence.toml", id: "release-confidence", revision: 3, digest: "sha256:fixture-release" } },
     ],
+    migrated: [],
   });
   const document = (): FlowDocumentDataDto => ({ handle: documentHandle, identity, source: savedSource });
 
