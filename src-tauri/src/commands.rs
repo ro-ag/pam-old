@@ -8,9 +8,9 @@ use pam_gui::{
     EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle,
     FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto,
     HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
-    ModelInferDto, ModelInspectDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId,
-    ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
-    SnapshotDto,
+    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelMessageDto, ModelPresetsDto,
+    ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
+    SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -549,6 +549,14 @@ pub(crate) async fn model_import(
             },
         )
         .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_import_status(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelImportStatusDto, DesktopErrorDto> {
+    state.core.model_import_status(request.into_fence()).await
 }
 
 #[tauri::command]

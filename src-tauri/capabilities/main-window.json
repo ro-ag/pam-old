@@ -22,6 +22,7 @@
     "allow-model-status",
     "allow-model-infer",
     "allow-model-import",
+    "allow-model-import-status",
     "allow-model-inspect",
     "allow-model-presets",
     "allow-model-download",

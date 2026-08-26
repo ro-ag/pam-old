@@ -1,11 +1,13 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use pam_core::ContentDigest;
 use sha2::{Digest, Sha256};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::model_import::{
-    ModelImportParams, notice_digest, parse_model_key, run_model_inspect, verify_and_register,
+    ImportProgress, ModelImportManager, ModelImportParams, ModelImportSnapshot, ModelImportStage,
+    ModelImportStatusKind, notice_digest, parse_model_key, run_model_inspect, verify_and_register,
 };
 
 struct TestDirectory(PathBuf);
@@ -60,11 +62,11 @@ fn rejects_models_under_the_recommended_floor_without_the_override() {
     fs::write(&path, one_tensor_gguf()).unwrap();
     let mut small = params(path.clone());
     small.allow_small = false;
-    let failure = verify_and_register(small, 1).unwrap_err();
+    let failure = verify_and_register(small, 1, &ImportProgress::default()).unwrap_err();
     assert!(failure.detail.contains("recommended minimum"));
     assert!(failure.recovery.as_deref().unwrap().contains("Advanced"));
     // The same file registers once the override is granted.
-    assert!(verify_and_register(params(path), 1).is_ok());
+    assert!(verify_and_register(params(path), 1, &ImportProgress::default()).is_ok());
 }
 
 #[test]
@@ -92,9 +94,10 @@ fn computes_the_descriptor_itself_and_registers_the_gguf_in_place() {
     let path = directory.0.join("model.gguf");
     fs::write(&path, &bytes).unwrap();
 
-    let registered = verify_and_register(params(path.clone()), 7).unwrap_or_else(|failure| {
-        panic!("import failed: {}", failure.detail);
-    });
+    let registered = verify_and_register(params(path.clone()), 7, &ImportProgress::default())
+        .unwrap_or_else(|failure| {
+            panic!("import failed: {}", failure.detail);
+        });
 
     assert_eq!(registered.key.id(), "vendor/model");
     assert_eq!(registered.path, path);
@@ -116,7 +119,9 @@ fn rejects_a_non_gguf_file_with_a_bounded_failure() {
     let path = directory.0.join("model.gguf");
     fs::write(&path, b"not a gguf at all").unwrap();
 
-    let failure = verify_and_register(params(path), 7).err().unwrap();
+    let failure = verify_and_register(params(path), 7, &ImportProgress::default())
+        .err()
+        .unwrap();
     assert!(!failure.detail.is_empty());
     assert!(failure.recovery.is_some());
 }
@@ -124,9 +129,13 @@ fn rejects_a_non_gguf_file_with_a_bounded_failure() {
 #[test]
 fn reports_a_missing_file_without_raw_internals() {
     let directory = TestDirectory::new("missing");
-    let failure = verify_and_register(params(directory.0.join("model.gguf")), 7)
-        .err()
-        .unwrap();
+    let failure = verify_and_register(
+        params(directory.0.join("model.gguf")),
+        7,
+        &ImportProgress::default(),
+    )
+    .err()
+    .unwrap();
     assert!(
         failure
             .detail
@@ -148,7 +157,9 @@ fn rejects_a_fifo_instead_of_blocking_on_open() {
         .expect("mkfifo must be available on macOS and Linux CI");
     assert!(status.success());
 
-    let failure = verify_and_register(params(path), 1).err().unwrap();
+    let failure = verify_and_register(params(path), 1, &ImportProgress::default())
+        .err()
+        .unwrap();
     assert!(failure.detail.contains("regular file"));
     assert!(failure.recovery.is_some());
 }
@@ -164,9 +175,151 @@ fn rejects_a_symlink_even_to_a_valid_gguf() {
     let link = directory.0.join("model.gguf");
     std::os::unix::fs::symlink(&target, &link).unwrap();
 
-    let failure = verify_and_register(params(link), 1).err().unwrap();
+    let failure = verify_and_register(params(link), 1, &ImportProgress::default())
+        .err()
+        .unwrap();
     assert!(failure.detail.contains("regular file"));
     assert!(failure.recovery.is_some());
+}
+
+#[test]
+fn hashing_advances_the_progress_counter_to_the_file_size() {
+    let directory = TestDirectory::new("progress");
+    let bytes = one_tensor_gguf();
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, &bytes).unwrap();
+
+    let progress = ImportProgress::default();
+    verify_and_register(params(path), 1, &progress).unwrap();
+
+    // Only the GUI-owned first hash reports into the counter;
+    // `import_existing`'s internal re-hash never touches it.
+    assert_eq!(progress.hashed_bytes(), u64::try_from(bytes.len()).unwrap());
+}
+
+async fn wait_for_terminal(manager: &Arc<ModelImportManager>) -> ModelImportSnapshot {
+    for _ in 0..200 {
+        let snapshot = manager.snapshot();
+        if snapshot.status != ModelImportStatusKind::Running {
+            return snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("import manager never reached a terminal state");
+}
+
+#[tokio::test]
+async fn a_fresh_import_manager_is_idle() {
+    let manager = ModelImportManager::new();
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.status, ModelImportStatusKind::Idle);
+    assert_eq!(snapshot.model, None);
+    assert_eq!(snapshot.stage, None);
+    assert_eq!(snapshot.hashed_bytes, 0);
+    assert_eq!(snapshot.total_bytes, 0);
+    assert!(snapshot.failure.is_none());
+}
+
+#[tokio::test]
+async fn an_import_reports_live_stages_and_progress_through_to_complete() {
+    let directory = TestDirectory::new("manager-complete");
+    let bytes = one_tensor_gguf();
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, &bytes).unwrap();
+    let size = u64::try_from(bytes.len()).unwrap();
+    // A real registration result for the injected runner to hand back.
+    let registered =
+        verify_and_register(params(path.clone()), 7, &ImportProgress::default()).unwrap();
+
+    let manager = ModelImportManager::new();
+    let step_done = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    Arc::clone(&manager)
+        .start_with(params(path), {
+            let step_done = Arc::clone(&step_done);
+            let release = Arc::clone(&release);
+            move |_params, progress| async move {
+                progress.add_hashed(48);
+                step_done.notify_one();
+                release.notified().await;
+                progress.begin_registering();
+                step_done.notify_one();
+                release.notified().await;
+                Ok(registered)
+            }
+        })
+        .unwrap();
+
+    step_done.notified().await;
+    let hashing = manager.snapshot();
+    assert_eq!(hashing.status, ModelImportStatusKind::Running);
+    assert_eq!(hashing.model.as_deref(), Some("vendor/model"));
+    assert_eq!(hashing.stage, Some(ModelImportStage::Hashing));
+    assert_eq!(hashing.hashed_bytes, 48);
+    assert_eq!(hashing.total_bytes, size);
+
+    release.notify_one();
+    step_done.notified().await;
+    assert_eq!(
+        manager.snapshot().stage,
+        Some(ModelImportStage::Registering)
+    );
+
+    release.notify_one();
+    let complete = wait_for_terminal(&manager).await;
+    assert_eq!(complete.status, ModelImportStatusKind::Complete);
+    assert_eq!(complete.model.as_deref(), Some("vendor/model"));
+    assert_eq!(complete.stage, None);
+    assert_eq!(complete.hashed_bytes, size);
+    assert_eq!(complete.total_bytes, size);
+    assert!(complete.failure.is_none());
+}
+
+#[tokio::test]
+async fn a_second_import_is_rejected_while_one_runs_and_a_failure_frees_the_slot() {
+    let directory = TestDirectory::new("manager-single-flight");
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, one_tensor_gguf()).unwrap();
+
+    let manager = ModelImportManager::new();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    Arc::clone(&manager)
+        .start_with(params(path.clone()), {
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            move |params, _progress| async move {
+                entered.notify_one();
+                release.notified().await;
+                verify_and_register(params, 1, &ImportProgress::default())
+            }
+        })
+        .unwrap();
+    entered.notified().await;
+
+    let rejected = Arc::clone(&manager)
+        .start_with(params(path.clone()), |params, _progress| async move {
+            verify_and_register(params, 1, &ImportProgress::default())
+        })
+        .unwrap_err();
+    assert!(rejected.detail.contains("already running"));
+
+    // Failing the run frees the single-flight slot for a fresh start.
+    fs::remove_file(&path).unwrap();
+    release.notify_one();
+    let failed = wait_for_terminal(&manager).await;
+    assert_eq!(failed.status, ModelImportStatusKind::Failed);
+    assert_eq!(failed.model.as_deref(), Some("vendor/model"));
+    assert!(failed.failure.is_some());
+
+    fs::write(&path, one_tensor_gguf()).unwrap();
+    Arc::clone(&manager)
+        .start_with(params(path), |params, _progress| async move {
+            verify_and_register(params, 1, &ImportProgress::default())
+        })
+        .unwrap();
+    let restarted = wait_for_terminal(&manager).await;
+    assert_eq!(restarted.status, ModelImportStatusKind::Complete);
 }
 
 /// `model_inspect` must reject a non-regular-file path fast, before ever
@@ -182,7 +335,7 @@ async fn model_inspect_rejects_a_non_regular_file_fast() {
         .expect("mkfifo must be available on macOS and Linux CI");
     assert!(status.success());
 
-    let failure = tokio::time::timeout(std::time::Duration::from_secs(5), run_model_inspect(path))
+    let failure = tokio::time::timeout(Duration::from_secs(5), run_model_inspect(path))
         .await
         .expect("must reject before the inspect timeout, let alone hang")
         .err()

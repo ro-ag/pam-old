@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -235,7 +235,66 @@ describe("model runtime panel", () => {
     );
 
     await userEvent.click(importButton);
-    expect(props.onModelImported).toHaveBeenCalled();
+
+    // The import runs in the background and is polled: hashing progress
+    // first, then the indeterminate registering stage, then completion. The
+    // fixture advances the hash 40% of its total per ~800ms poll, so later
+    // assertions need a longer wait window.
+    expect(await within(panel).findByText(/Hashing .* · 40%/)).toBeInTheDocument();
+    expect(
+      await within(panel).findByText("Registering — verifying the copy…", {}, { timeout: 3_000 }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(props.onModelImported).toHaveBeenCalled(), { timeout: 3_000 });
+  }, 10_000);
+
+  it("reattaches to an in-flight import on mount instead of assuming idle", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelImportStatus").mockResolvedValue({
+      status: "running",
+      model: "vendor/model",
+      stage: "hashing",
+      hashedBytes: 6_000_000_000,
+      totalBytes: 18_000_000_000,
+      failure: null,
+    });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(
+      await within(panel).findByRole("button", { name: "Verifying and registering…" }),
+    ).toBeDisabled();
+    expect(await within(panel).findByText(/Hashing .* · 33%/)).toBeInTheDocument();
+  });
+
+  it("surfaces a failure reported by the import status poll", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelImportStatus")
+      // The mount-time reattach check: nothing running yet.
+      .mockResolvedValueOnce({ status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, failure: null })
+      .mockResolvedValue({
+        status: "failed",
+        model: "qwen/qwen3-4b-instruct-q4",
+        stage: null,
+        hashedBytes: 1_000,
+        totalBytes: 4_600_000_000,
+        failure: { kind: "unavailable", code: "model_import_failed", detail: "The GGUF digest changed on disk.", recovery: "Import the file again." },
+      });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/qwen3-4b-instruct-q4.gguf");
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
+    await userEvent.type(within(panel).getByLabelText("License identifier"), "Apache-2.0");
+    await userEvent.type(within(panel).getByLabelText("License URL"), "https://example.com/license");
+    await userEvent.type(within(panel).getByLabelText("License notice"), "Apache License 2.0");
+    await userEvent.click(within(panel).getByLabelText(/I accept this model's license/));
+    await userEvent.click(within(panel).getByRole("button", { name: "Import model" }));
+
+    expect(
+      await within(panel).findByText(/The GGUF digest changed on disk\. Import the file again\./),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).not.toHaveBeenCalled();
   });
 
   it("surfaces a bounded import failure inside the panel", async () => {

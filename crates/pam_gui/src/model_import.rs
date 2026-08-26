@@ -7,8 +7,13 @@
 
 use std::{
     fs::File,
+    future::Future,
     io::Read,
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -48,7 +53,7 @@ pub struct ModelImportParams {
 }
 
 /// A bounded, user-facing import failure.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ModelImportFailure {
     pub detail: String,
     pub recovery: Option<String>,
@@ -66,6 +71,194 @@ impl ModelImportFailure {
 impl From<ModelError> for ModelImportFailure {
     fn from(error: ModelError) -> Self {
         Self::new(error.to_string(), METADATA_RECOVERY)
+    }
+}
+
+/// Live progress for one import run, shared between the blocking hash thread
+/// and the polled snapshot.
+#[derive(Debug, Default)]
+pub(crate) struct ImportProgress {
+    hashed_bytes: AtomicU64,
+    registering: AtomicBool,
+}
+
+impl ImportProgress {
+    /// Test-only hook: production hashing reports through the raw counter
+    /// `hash_file` receives.
+    #[cfg(test)]
+    pub(crate) fn add_hashed(&self, bytes: u64) {
+        self.hashed_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Marks the hand-off into `import_existing`, whose internal re-hash
+    /// reports no progress: the run becomes indeterminate from here.
+    pub(crate) fn begin_registering(&self) {
+        self.registering.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn hashed_bytes(&self) -> u64 {
+        self.hashed_bytes.load(Ordering::Relaxed)
+    }
+}
+
+/// The import manager's current, polled state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ModelImportStatusKind {
+    Idle,
+    Running,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ModelImportStage {
+    /// The GUI-owned first hash, with a live byte counter.
+    Hashing,
+    /// `pam_model::import_existing`'s own re-verification: indeterminate.
+    Registering,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModelImportSnapshot {
+    pub(crate) status: ModelImportStatusKind,
+    pub(crate) model: Option<String>,
+    pub(crate) stage: Option<ModelImportStage>,
+    pub(crate) hashed_bytes: u64,
+    pub(crate) total_bytes: u64,
+    pub(crate) failure: Option<ModelImportFailure>,
+}
+
+impl ModelImportSnapshot {
+    fn idle() -> Self {
+        Self {
+            status: ModelImportStatusKind::Idle,
+            model: None,
+            stage: None,
+            hashed_bytes: 0,
+            total_bytes: 0,
+            failure: None,
+        }
+    }
+}
+
+struct ImportManagerState {
+    snapshot: ModelImportSnapshot,
+    progress: Arc<ImportProgress>,
+}
+
+/// Single-flight background import runner, polled for progress — the same
+/// shape as `ModelDownloadManager`, so a multi-GB hash never runs under
+/// `DesktopCore::command_gate`.
+pub(crate) struct ModelImportManager {
+    state: Mutex<ImportManagerState>,
+}
+
+impl ModelImportManager {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(ImportManagerState {
+                snapshot: ModelImportSnapshot::idle(),
+                progress: Arc::new(ImportProgress::default()),
+            }),
+        })
+    }
+
+    /// The current status. While an import is running, `hashed_bytes` and
+    /// `stage` reflect the live counters rather than the values at start.
+    pub(crate) fn snapshot(&self) -> ModelImportSnapshot {
+        let state = self.state.lock().unwrap();
+        let mut snapshot = state.snapshot.clone();
+        if snapshot.status == ModelImportStatusKind::Running {
+            snapshot.hashed_bytes = state.progress.hashed_bytes();
+            snapshot.stage = Some(if state.progress.registering.load(Ordering::Relaxed) {
+                ModelImportStage::Registering
+            } else {
+                ModelImportStage::Hashing
+            });
+        }
+        snapshot
+    }
+
+    /// Starts one real background import.
+    ///
+    /// Takes an owned `Arc` (rather than `&self`) because `self: &Arc<Self>`
+    /// is not a valid receiver type in stable Rust; the caller clones the
+    /// `Arc` it already holds, which is a cheap refcount bump.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelImportFailure`] when another import is already running.
+    pub(crate) fn start(
+        self: Arc<Self>,
+        params: ModelImportParams,
+    ) -> Result<(), ModelImportFailure> {
+        self.start_with(params, run_model_import)
+    }
+
+    /// Starts an import using the given runner. Kept generic so tests can
+    /// observe a run mid-flight and finish it without touching the real
+    /// user data store.
+    pub(crate) fn start_with<F, Fut>(
+        self: Arc<Self>,
+        params: ModelImportParams,
+        run: F,
+    ) -> Result<(), ModelImportFailure>
+    where
+        F: FnOnce(ModelImportParams, Arc<ImportProgress>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<RegisteredModel, ModelImportFailure>> + Send + 'static,
+    {
+        // Advisory denominator for the progress bar; the authoritative size
+        // check still happens inside the run. A stat failure here becomes an
+        // indeterminate bar, not a refused import.
+        let total_bytes = std::fs::metadata(&params.path).map_or(0, |metadata| metadata.len());
+        let progress = {
+            let mut state = self.state.lock().unwrap();
+            if state.snapshot.status == ModelImportStatusKind::Running {
+                return Err(ModelImportFailure::new(
+                    "A model import is already running.",
+                    "Wait for the current import to finish, then retry.",
+                ));
+            }
+            let progress = Arc::new(ImportProgress::default());
+            state.progress = Arc::clone(&progress);
+            state.snapshot = ModelImportSnapshot {
+                status: ModelImportStatusKind::Running,
+                model: Some(params.model.clone()),
+                stage: Some(ModelImportStage::Hashing),
+                hashed_bytes: 0,
+                total_bytes,
+                failure: None,
+            };
+            progress
+        };
+        let model = params.model.clone();
+        tokio::spawn(async move {
+            let outcome = run(params, Arc::clone(&progress)).await;
+            self.finish(model, outcome);
+        });
+        Ok(())
+    }
+
+    fn finish(&self, model: String, outcome: Result<RegisteredModel, ModelImportFailure>) {
+        let mut state = self.state.lock().unwrap();
+        state.snapshot = match outcome {
+            Ok(registered) => ModelImportSnapshot {
+                status: ModelImportStatusKind::Complete,
+                model: Some(registered.key.id()),
+                stage: None,
+                hashed_bytes: registered.size_bytes,
+                total_bytes: registered.size_bytes,
+                failure: None,
+            },
+            Err(failure) => ModelImportSnapshot {
+                status: ModelImportStatusKind::Failed,
+                model: Some(model),
+                stage: None,
+                hashed_bytes: state.progress.hashed_bytes(),
+                total_bytes: state.snapshot.total_bytes,
+                failure: Some(failure),
+            },
+        };
     }
 }
 
@@ -87,9 +280,11 @@ pub(crate) fn notice_digest(notice: &str) -> ContentDigest {
 /// Rejects a path that is not a plain regular file (FIFO, socket, device, or
 /// symlink) before the caller ever reaches `open(2)`. `open()` on a
 /// writer-less FIFO or a character device like `/dev/zero` blocks or loops
-/// forever, and this runs while the caller holds `DesktopCore::command_gate`
-/// (`desktop.rs`), which serializes every other desktop command — so this
-/// check has to run first, not after a failed/hanging open.
+/// forever, and `model_inspect` runs this while the caller holds
+/// `DesktopCore::command_gate` (`desktop.rs`), which serializes every other
+/// desktop command — so this check has to run first, not after a
+/// failed/hanging open. Imports run off the gate, but a hung open would
+/// still wedge the single-flight import slot for its full timeout.
 ///
 /// `symlink_metadata` never follows the final path component, so a symlink
 /// (to anything) is caught here as "not a regular file" without ever
@@ -116,7 +311,10 @@ fn reject_non_regular_file(path: &Path, recovery: &str) -> Result<(), ModelImpor
     Ok(())
 }
 
-fn hash_file(path: &Path) -> Result<(ContentDigest, u64), ModelImportFailure> {
+fn hash_file(
+    path: &Path,
+    progress: &AtomicU64,
+) -> Result<(ContentDigest, u64), ModelImportFailure> {
     let open_recovery = "Point PAM at the downloaded .gguf file, then import again.";
     reject_non_regular_file(path, open_recovery)?;
     let mut file = File::open(path).map_err(|error| {
@@ -139,6 +337,7 @@ fn hash_file(path: &Path) -> Result<(ContentDigest, u64), ModelImportFailure> {
             break;
         }
         size += read as u64;
+        progress.fetch_add(read as u64, Ordering::Relaxed);
         hasher.update(&buffer[..read]);
     }
     Ok((ContentDigest::from_sha256(hasher.finalize().into()), size))
@@ -152,6 +351,7 @@ fn hash_file(path: &Path) -> Result<(ContentDigest, u64), ModelImportFailure> {
 pub(crate) fn verify_and_register(
     params: ModelImportParams,
     registered_at_ms: u64,
+    progress: &ImportProgress,
 ) -> Result<RegisteredModel, ModelImportFailure> {
     let key = parse_model_key(&params.model)?;
     let filename = params
@@ -165,7 +365,7 @@ pub(crate) fn verify_and_register(
             )
         })?
         .to_owned();
-    let (digest, size_bytes) = hash_file(&params.path)?;
+    let (digest, size_bytes) = hash_file(&params.path, &progress.hashed_bytes)?;
     if size_bytes < MIN_RECOMMENDED_MODEL_BYTES && !params.allow_small {
         let size_gb = size_bytes / 100_000_000;
         let floor_gb = MIN_RECOMMENDED_MODEL_BYTES / 100_000_000;
@@ -187,6 +387,7 @@ pub(crate) fn verify_and_register(
     )?;
     let descriptor = ModelDescriptor::new(key, filename, digest, size_bytes, license)?;
     let consent = LicenseConsent::accept(&descriptor);
+    progress.begin_registering();
     import_existing(ImportRequest {
         descriptor,
         consent,
@@ -218,10 +419,12 @@ fn now_ms() -> Result<u64, ModelImportFailure> {
 /// Runs one complete import and persists the registration durably.
 pub(crate) async fn run_model_import(
     params: ModelImportParams,
+    progress: Arc<ImportProgress>,
 ) -> Result<RegisteredModel, ModelImportFailure> {
     let registered_at_ms = now_ms()?;
-    let blocking =
-        tokio::task::spawn_blocking(move || verify_and_register(params, registered_at_ms));
+    let blocking = tokio::task::spawn_blocking(move || {
+        verify_and_register(params, registered_at_ms, &progress)
+    });
     let imported = match tokio::time::timeout(MODEL_IMPORT_TIMEOUT, blocking).await {
         Ok(Ok(result)) => result?,
         Ok(Err(_)) => {
@@ -237,8 +440,8 @@ pub(crate) async fn run_model_import(
         // writer-less FIFO). Acceptable ceiling: real cancellation of
         // blocking IO would need the file opened with a cancellable/async
         // API, which hash_file's plain std::fs doesn't have. This timeout's
-        // job is only to release `command_gate` so the rest of the GUI
-        // keeps working.
+        // job is only to release the single-flight import slot so a new
+        // import can start.
         Err(_) => {
             return Err(ModelImportFailure::new(
                 "PAM could not complete model verification in time.",

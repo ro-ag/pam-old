@@ -28,6 +28,7 @@ import type {
   ModelDownloadStatusDto,
   ModelImportDto,
   ModelImportParams,
+  ModelImportStatusDto,
   ModelInspectDto,
   ModelInferDto,
   ModelPresetsDto,
@@ -150,6 +151,8 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         licenseNoticeText: params.licenseNoticeText,
         allowSmall: params.allowSmall,
       })),
+    modelImportStatus: (fence) =>
+      invokeCommand<ModelImportStatusDto>("model_import_status", request(flatFence(fence))),
     modelInspect: (fence, path) =>
       invokeCommand<ModelInspectDto>("model_inspect", request({
         ...flatFence(fence),
