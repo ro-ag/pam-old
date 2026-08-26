@@ -4,6 +4,18 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-26
+
+### Fixed
+
+- The manual import's Import button no longer sits silently disabled when
+  the license details under Advanced are empty: clicking it opens the
+  disclosure and names exactly what PAM needs.
+- Two rare test-harness races were fixed at the root: a daemon scheduler
+  handle could be polled after completion during teardown (masking the
+  original failure), and the flow editor's save lock now retries briefly
+  instead of failing a same-instant contender.
+
 ## [0.6.0] - 2026-08-26
 
 ### Added
