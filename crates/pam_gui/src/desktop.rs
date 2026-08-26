@@ -634,6 +634,7 @@ pub struct ActivityEventDto {
     pub decision: String,
     pub outcome: String,
     pub occurred_at_ms: u64,
+    pub project_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -688,6 +689,7 @@ pub struct ProjectUsageDto {
     pub project_id: String,
     pub events: u64,
     pub last_event_ms: u64,
+    pub root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -3005,6 +3007,9 @@ fn activity_event_dto(event: ActivityEventSummary) -> ActivityEventDto {
         decision: bounded_detail(event.decision),
         outcome: bounded_detail(event.outcome),
         occurred_at_ms: event.occurred_at_ms,
+        project_root: event
+            .project_root
+            .map(|root| bounded_utf8(root, MAX_PROJECT_PATH_BYTES)),
     }
 }
 
@@ -3077,6 +3082,9 @@ fn project_usage_dto(project: ProjectUsageSummary) -> ProjectUsageDto {
         project_id: project.project_id,
         events: project.events,
         last_event_ms: project.last_event_ms,
+        root: project
+            .root
+            .map(|root| bounded_utf8(root, MAX_PROJECT_PATH_BYTES)),
     }
 }
 

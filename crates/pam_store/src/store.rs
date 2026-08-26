@@ -59,7 +59,7 @@ const STATUS_OPERATION_KIND: &str = "status";
 const LEGACY_STATUS_OPERATION_KIND: &str = "daemon_status";
 const FLOW_CAPABILITY_NAME: &str = "flow.run";
 const EFFECT_APPROVAL_AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
-pub(super) const LATEST_SCHEMA_VERSION: u32 = 14;
+pub(super) const LATEST_SCHEMA_VERSION: u32 = 15;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_initial.sql")),
     (2, include_str!("../migrations/0002_evidence.sql")),
@@ -87,6 +87,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     ),
     (13, include_str!("../migrations/0013_connectors.sql")),
     (14, include_str!("../migrations/0014_activity_days.sql")),
+    (15, include_str!("../migrations/0015_project_roots.sql")),
 ];
 
 type Response<T> = oneshot::Sender<Result<T, StoreError>>;
@@ -1452,6 +1453,33 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Remembers one project's canonical root, so caller histories can label
+    /// it by location instead of its opaque ID.
+    ///
+    /// Idempotent: repeating the same root is a no-op, and a project row is
+    /// created first if this is the first time the daemon has seen this
+    /// project ID. Callers must validate the root against the project ID
+    /// themselves before calling this — the store trusts it as given.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when the root is empty, oversized, contains
+    /// control characters, or durable state is unavailable.
+    pub async fn remember_project_root(
+        &self,
+        project_id: ProjectId,
+        root: String,
+    ) -> Result<(), StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::RememberProjectRoot {
+            project_id,
+            root,
+            response: response_tx,
+        })
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Stores exact evidence bytes behind an immutable semantic handle.
     ///
     /// Exact content is globally deduplicated by SHA-256 while handle lookup remains
@@ -1709,6 +1737,11 @@ enum Command {
     ProjectCurrent {
         project_id: ProjectId,
         response: Response<ProjectCurrent>,
+    },
+    RememberProjectRoot {
+        project_id: ProjectId,
+        root: String,
+        response: Response<()>,
     },
     Shutdown(Response<()>),
 }
@@ -2070,6 +2103,14 @@ fn run_worker(mut connection: Connection, mut commands: tokio_mpsc::Receiver<Com
                 project_id,
                 response,
             } => respond(response, project_current(&mut connection, &project_id)),
+            Command::RememberProjectRoot {
+                project_id,
+                root,
+                response,
+            } => respond(
+                response,
+                remember_project_root(&mut connection, &project_id, &root),
+            ),
             Command::Shutdown(response) => {
                 drop(connection);
                 respond(response, Ok(()));
@@ -3372,6 +3413,7 @@ fn append_audit_event_tx(
         redacted_detail: event.redacted_detail,
         occurred_at_ms: event.occurred_at_ms,
         retain_until_ms: event.retain_until_ms,
+        project_root: None,
     })
 }
 
@@ -3414,9 +3456,11 @@ fn project_usage(connection: &Connection, since_ms: u64) -> Result<Vec<ProjectUs
     let since = sql_integer(since_ms)?;
     // ponytail: full window scan over audit_events, occurred_at index if it ever hurts
     let mut statement = connection.prepare(
-        "SELECT project_id, COUNT(*), MAX(occurred_at_ms) FROM audit_events
-         WHERE occurred_at_ms >= ?1
-         GROUP BY project_id
+        "SELECT audit_events.project_id, COUNT(*), MAX(audit_events.occurred_at_ms), projects.root
+         FROM audit_events
+         LEFT JOIN projects ON projects.project_id = audit_events.project_id
+         WHERE audit_events.occurred_at_ms >= ?1
+         GROUP BY audit_events.project_id
          ORDER BY COUNT(*) DESC
          LIMIT ?2",
     )?;
@@ -3431,6 +3475,7 @@ fn project_usage(connection: &Connection, since_ms: u64) -> Result<Vec<ProjectUs
                     project_id: row.get::<_, String>(0)?,
                     events: row.get::<_, i64>(1)?.max(0).cast_unsigned(),
                     last_event_ms: row.get::<_, i64>(2)?.max(0).cast_unsigned(),
+                    root: row.get(3)?,
                 })
             },
         )?
@@ -3525,22 +3570,52 @@ fn recent_audit_events(
     validate_audit_limit(limit)?;
     let fetch_limit = i64::from(limit) + 1;
     let mut statement = connection.prepare(
-        "SELECT sequence, event_id, project_id, caller_id, action, decision, outcome,
-                redacted_detail, occurred_at_ms, retain_until_ms
+        "SELECT audit_events.sequence, audit_events.event_id, audit_events.project_id,
+                audit_events.caller_id, audit_events.action, audit_events.decision,
+                audit_events.outcome, audit_events.redacted_detail,
+                audit_events.occurred_at_ms, audit_events.retain_until_ms, projects.root
          FROM audit_events
-         ORDER BY sequence DESC
+         LEFT JOIN projects ON projects.project_id = audit_events.project_id
+         ORDER BY audit_events.sequence DESC
          LIMIT ?1",
     )?;
-    let rows = statement.query_map(params![fetch_limit], stored_audit_event)?;
+    let rows = statement.query_map(params![fetch_limit], stored_audit_event_with_root)?;
     let mut events = rows
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .map(StoredAuditEvent::into_record)
+        .map(StoredAuditEventWithRoot::into_record)
         .collect::<Result<Vec<_>, _>>()?;
     let page_length = usize::try_from(limit).expect("u32 fits usize on supported platforms");
     let truncated = events.len() > page_length;
     events.truncate(page_length);
     Ok(RecentAuditEvents { events, truncated })
+}
+
+/// A [`StoredAuditEvent`] joined with the project's remembered root, read
+/// from a query that adds one trailing `projects.root` column to
+/// [`stored_audit_event`]'s ten. Kept separate from [`StoredAuditEvent`]
+/// itself so the dedup-lookup query in `append_audit_event_tx`, which has no
+/// such column, can keep using the plain ten-column mapper unchanged.
+struct StoredAuditEventWithRoot {
+    event: StoredAuditEvent,
+    root: Option<String>,
+}
+
+fn stored_audit_event_with_root(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StoredAuditEventWithRoot> {
+    Ok(StoredAuditEventWithRoot {
+        event: stored_audit_event(row)?,
+        root: row.get(10)?,
+    })
+}
+
+impl StoredAuditEventWithRoot {
+    fn into_record(self) -> Result<AuditEventRecord, StoreError> {
+        let mut record = self.event.into_record()?;
+        record.project_root = self.root;
+        Ok(record)
+    }
 }
 
 struct StoredAuditEvent {
@@ -3584,6 +3659,7 @@ impl StoredAuditEvent {
             redacted_detail: self.redacted_detail,
             occurred_at_ms: unsigned_integer(self.occurred_at_ms)?,
             retain_until_ms: unsigned_integer(self.retain_until_ms)?,
+            project_root: None,
         })
     }
 }
@@ -7295,6 +7371,35 @@ fn project_current(
         active,
         latest_terminal,
     })
+}
+
+/// Largest project root PAM will remember, matching the protocol's own
+/// bound on a flow run's project root (`MAX_FLOW_PROJECT_ROOT_BYTES`).
+const MAX_PROJECT_ROOT_BYTES: usize = 4 * 1024;
+
+fn remember_project_root(
+    connection: &mut Connection,
+    project_id: &ProjectId,
+    root: &str,
+) -> Result<(), StoreError> {
+    if root.is_empty()
+        || root.len() > MAX_PROJECT_ROOT_BYTES
+        || root.chars().any(is_unsafe_audit_character)
+    {
+        return Err(StoreError::InvalidProjectRoot("root"));
+    }
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+        "INSERT INTO projects(project_id) VALUES (?1)
+         ON CONFLICT(project_id) DO NOTHING",
+        [project_id.as_str()],
+    )?;
+    transaction.execute(
+        "UPDATE projects SET root = ?2 WHERE project_id = ?1 AND root IS NOT ?2",
+        params![project_id.as_str(), root],
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 type ProjectRequestRow = (String, String, String, i64, i64, Option<i64>);

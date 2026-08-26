@@ -16,7 +16,7 @@ import type {
   ProjectSummaryDto,
   ProjectUsageDto,
 } from "../domain";
-import type { DaemonView } from "../selectors";
+import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
 import { formatModelSize } from "./ActivityView";
 
@@ -1191,8 +1191,8 @@ export function aggregateProjectUsage(
     const known = catalog.find((project) => project.handle === row.projectId);
     rows.set(row.projectId, {
       projectId: row.projectId,
-      name: known ? known.name : `${row.projectId.slice(0, 8)}…`,
-      location: known ? known.location : null,
+      name: known ? known.name : row.root ? basename(row.root) : `${row.projectId.slice(0, 8)}…`,
+      location: known ? known.location : row.root,
       events: row.events,
       lastEventMs: row.lastEventMs,
     });

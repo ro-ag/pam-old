@@ -1,0 +1,2 @@
+ALTER TABLE projects ADD COLUMN root TEXT
+    CHECK (root IS NULL OR length(CAST(root AS BLOB)) BETWEEN 1 AND 4096);

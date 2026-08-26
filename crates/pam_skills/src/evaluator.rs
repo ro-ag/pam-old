@@ -440,7 +440,16 @@ fn run_evaluator_contained(
     if !status.success() {
         return Err(EvaluatorRunError::NonZeroExit);
     }
-    stdin_result.map_err(|_| EvaluatorRunError::StdinWrite)?;
+    // A successful evaluator may exit without draining stdin (e.g. it answers before the
+    // prompt is fully written). The stdin worker then observes a broken pipe purely because
+    // the child closed its end first, which is benign once the child's own exit is known to
+    // be successful. Only a write failure that is not a broken pipe reflects a genuine
+    // delivery problem.
+    if let Err(error) = stdin_result
+        && error.kind() != io::ErrorKind::BrokenPipe
+    {
+        return Err(EvaluatorRunError::StdinWrite);
+    }
     let stdout = stdout_result.map_err(|_| EvaluatorRunError::StdoutRead)?;
     let stderr = stderr_result.map_err(|_| EvaluatorRunError::StderrRead)?;
     if stdout.oversized {

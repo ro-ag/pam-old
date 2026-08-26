@@ -474,6 +474,7 @@ fn activity_dto_serializes_the_exact_frontend_ok_contract() {
             decision: "allow".to_owned(),
             outcome: "success".to_owned(),
             occurred_at_ms: 123,
+            project_root: Some("/work/project-7".to_owned()),
         }],
         truncated: false,
     }));
@@ -489,7 +490,8 @@ fn activity_dto_serializes_the_exact_frontend_ok_contract() {
                 "action": "daemon.activity",
                 "decision": "allow",
                 "outcome": "success",
-                "occurredAtMs": 123
+                "occurredAtMs": 123,
+                "projectRoot": "/work/project-7"
             }],
             "truncated": false
         })

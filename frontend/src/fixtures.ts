@@ -54,11 +54,19 @@ const projects: ProjectSummaryDto[] = [
   { handle: "33333333-3333-4333-8333-333333333333", name: "docs", location: "/work/docs" },
 ];
 
+// Daemon-only projects: never in the catalog, so the feed and the usage
+// panel must fall back from the catalog name to the remembered root's
+// basename, and only to a truncated ID when the daemon never learned one.
+const DAEMON_ONLY_WITH_ROOT = "66666666-6666-4666-8666-666666666666";
+const DAEMON_ONLY_ROOTLESS = "77777777-7777-4777-8777-777777777777";
+
 const activityEvents: ActivityEventDto[] = [
-  { sequence: 4, projectId: "11111111-1111-4111-8111-111111111111", callerId: "gui:pam-desktop", action: "project.current", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_520_000 },
-  { sequence: 3, projectId: "11111111-1111-4111-8111-111111111111", callerId: "cli:release-agent", action: "flow.save", decision: "approval_required", outcome: null, occurredAtMs: 1_777_001_460_000 },
-  { sequence: 2, projectId: "22222222-2222-4222-8222-222222222222", callerId: "cli:release-agent", action: "project.refresh", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_400_000 },
-  { sequence: 1, projectId: null, callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000 },
+  { sequence: 4, projectId: "11111111-1111-4111-8111-111111111111", callerId: "gui:pam-desktop", action: "project.current", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_520_000, projectRoot: null },
+  { sequence: 3, projectId: "11111111-1111-4111-8111-111111111111", callerId: "cli:release-agent", action: "flow.save", decision: "approval_required", outcome: null, occurredAtMs: 1_777_001_460_000, projectRoot: null },
+  { sequence: 2, projectId: "22222222-2222-4222-8222-222222222222", callerId: "cli:release-agent", action: "project.refresh", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_400_000, projectRoot: null },
+  { sequence: 1, projectId: null, callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000, projectRoot: null },
+  { sequence: 6, projectId: DAEMON_ONLY_WITH_ROOT, callerId: "cli:daemon-only-rooted", action: "agent.sync", decision: "denied", outcome: null, occurredAtMs: 1_777_001_320_000, projectRoot: "/work/scratch-agent" },
+  { sequence: 5, projectId: DAEMON_ONLY_ROOTLESS, callerId: "cli:daemon-only-rootless", action: "agent.deploy", decision: "denied", outcome: null, occurredAtMs: 1_777_001_310_000, projectRoot: null },
 ];
 
 const daemonLogEntries: DaemonLogEntryDto[] = [
@@ -79,8 +87,10 @@ const daemonStatDays: ActivityDayDto[] = Array.from({ length: 140 }, (_, index) 
 // "docs" is deliberately absent: the catalog still lists it, so the Projects
 // panel renders it as a known project with zero usage.
 const projectUsage: ProjectUsageDto[] = [
-  { projectId: "11111111-1111-4111-8111-111111111111", events: 128, lastEventMs: 1_777_001_520_000 },
-  { projectId: "22222222-2222-4222-8222-222222222222", events: 54, lastEventMs: 1_777_001_400_000 },
+  { projectId: "11111111-1111-4111-8111-111111111111", events: 128, lastEventMs: 1_777_001_520_000, root: null },
+  { projectId: "22222222-2222-4222-8222-222222222222", events: 54, lastEventMs: 1_777_001_400_000, root: null },
+  { projectId: DAEMON_ONLY_WITH_ROOT, events: 12, lastEventMs: 1_777_001_320_000, root: "/work/scratch-agent" },
+  { projectId: DAEMON_ONLY_ROOTLESS, events: 5, lastEventMs: 1_777_001_310_000, root: null },
 ];
 
 const registeredCallers: CallerDto[] = [

@@ -476,6 +476,7 @@ export interface ActivityEventDto {
   decision: string;
   outcome: string | null;
   occurredAtMs: number;
+  projectRoot: string | null;
 }
 
 export type ActivityDto =
@@ -501,6 +502,7 @@ export interface ProjectUsageDto {
   projectId: string;
   events: number;
   lastEventMs: number;
+  root: string | null;
 }
 
 export type DaemonStatsDto =

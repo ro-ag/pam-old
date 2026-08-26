@@ -79,6 +79,11 @@ pub struct AuditEventRecord {
     pub redacted_detail: String,
     pub occurred_at_ms: u64,
     pub retain_until_ms: u64,
+    /// The project's remembered canonical root, when the daemon has learned
+    /// one from a validated request. Only populated by
+    /// [`crate::Store::recent_audit_events`]; other readers of this record
+    /// leave it absent.
+    pub project_root: Option<String>,
 }
 
 /// Versioned typed export seam for deterministic protocol serialization.
@@ -119,6 +124,9 @@ pub struct ProjectUsage {
     pub project_id: String,
     pub events: u64,
     pub last_event_ms: u64,
+    /// The project's remembered canonical root, when the daemon has learned
+    /// one from a validated request.
+    pub root: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

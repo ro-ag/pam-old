@@ -4646,6 +4646,76 @@ async fn recent_audit_events_are_newest_first_bounded_and_flag_truncation() {
 }
 
 #[tokio::test]
+async fn remembered_project_roots_surface_in_usage_and_activity_but_stay_rootless_otherwise() {
+    let (directory, path) = database_path("project-root-remember");
+    let store = Store::open(&path).unwrap();
+
+    store
+        .append_audit_event(audit_event("root-1", "project-a", "caller", 10, 100))
+        .await
+        .unwrap();
+    store
+        .append_audit_event(audit_event("root-2", "project-b", "caller", 11, 100))
+        .await
+        .unwrap();
+
+    // A project the daemon has never seen before gets its row created too.
+    store
+        .remember_project_root(ProjectId::from("project-a"), "/work/project-a".to_owned())
+        .await
+        .unwrap();
+
+    let usage = store.project_usage(0).await.unwrap();
+    let by_id = |id: &str| usage.iter().find(|row| row.project_id == id).unwrap();
+    assert_eq!(by_id("project-a").root.as_deref(), Some("/work/project-a"));
+    assert_eq!(by_id("project-b").root, None);
+
+    let recent = store.recent_audit_events(10).await.unwrap();
+    let event_a = recent
+        .events
+        .iter()
+        .find(|event| event.event_id == "root-1")
+        .unwrap();
+    let event_b = recent
+        .events
+        .iter()
+        .find(|event| event.event_id == "root-2")
+        .unwrap();
+    assert_eq!(event_a.project_root.as_deref(), Some("/work/project-a"));
+    assert_eq!(event_b.project_root, None);
+
+    // Repeating the same root, or a rejected root, changes nothing.
+    store
+        .remember_project_root(ProjectId::from("project-a"), "/work/project-a".to_owned())
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .remember_project_root(ProjectId::from("project-a"), String::new())
+            .await,
+        Err(StoreError::InvalidProjectRoot(_))
+    ));
+
+    // A changed root updates in place rather than accumulating history.
+    store
+        .remember_project_root(ProjectId::from("project-a"), "/work/renamed".to_owned())
+        .await
+        .unwrap();
+    let usage = store.project_usage(0).await.unwrap();
+    assert_eq!(
+        usage
+            .iter()
+            .find(|row| row.project_id == "project-a")
+            .unwrap()
+            .root
+            .as_deref(),
+        Some("/work/renamed")
+    );
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
 async fn list_callers_is_newest_first_and_includes_revocations() {
     let (directory, path) = database_path("caller-list");
     let store = Store::open(&path).unwrap();
@@ -7037,11 +7107,13 @@ async fn project_usage_groups_counts_and_orders_by_events_within_window() {
                 project_id: "project-a".to_owned(),
                 events: 2,
                 last_event_ms: DAY_MS + 20,
+                root: None,
             },
             ProjectUsage {
                 project_id: "project-b".to_owned(),
                 events: 1,
                 last_event_ms: DAY_MS + 5,
+                root: None,
             },
         ]
     );

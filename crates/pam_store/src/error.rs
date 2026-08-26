@@ -20,6 +20,7 @@ pub enum StoreError {
     CallerAlreadyRegistered(CallerId),
     AuditEventAlreadyExists,
     InvalidAuditEvent(&'static str),
+    InvalidProjectRoot(&'static str),
     InvalidAuditBatchLimit {
         limit: u32,
         maximum: u32,
@@ -169,6 +170,9 @@ impl fmt::Display for StoreError {
             }
             Self::AuditEventAlreadyExists => formatter.write_str("audit event ID already exists"),
             Self::InvalidAuditEvent(reason) => write!(formatter, "invalid audit event: {reason}"),
+            Self::InvalidProjectRoot(reason) => {
+                write!(formatter, "invalid project root: {reason}")
+            }
             Self::InvalidAuditBatchLimit { .. } => formatter.write_str("invalid audit batch limit"),
             Self::AuditCursorOutOfRange(_) => {
                 formatter.write_str("audit cursor exceeds storage range")
@@ -525,6 +529,7 @@ impl Error for StoreError {
             | Self::CallerAlreadyRegistered(_)
             | Self::AuditEventAlreadyExists
             | Self::InvalidAuditEvent(_)
+            | Self::InvalidProjectRoot(_)
             | Self::InvalidAuditBatchLimit { .. }
             | Self::AuditCursorOutOfRange(_)
             | Self::AuditHighWaterAhead { .. }
