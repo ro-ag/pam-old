@@ -4,6 +4,23 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-08-26
+
+### Added
+
+- Manual GGUF imports show live progress: a hashing bar with real bytes
+  and percent, then a registering stage. The file is verified and
+  registered in place — never copied.
+- A running model download can be cancelled. The partial file stays on
+  disk and the same model resumes right where it left off.
+
+### Fixed
+
+- Importing a model no longer freezes the rest of the app: the multi-GB
+  verification used to hold PAM's command gate for its full duration,
+  which left every other screen (Settings included) stuck loading until
+  the import finished. Verification now runs in the background.
+
 ## [0.8.0] - 2026-08-26
 
 ### Added
