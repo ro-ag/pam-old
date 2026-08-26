@@ -4,6 +4,26 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-26
+
+### Added
+
+- Flows are now a global library: definitions are named once and usable
+  against any project you point PAM at, with the project chosen when a
+  flow runs. Existing project-local flows migrate into the library
+  automatically the first time it loads, and `pam flow run` accepts
+  `--project` (defaulting to the current directory). Only runs remain
+  project-scoped.
+- A Settings view (gear icon, ⌘8) shows where PAM keeps things: the model
+  download directory (now configurable and persisted), the data directory,
+  and the daemon's on-disk logs with their size and a delete action —
+  each revealable in Finder.
+- Caller histories label callers by kind (CLI, GUI, coding agent, local
+  application) with a shortened id instead of a raw UUID.
+- Importing a GGUF that declares its own license prefills the license
+  details — for well-known licenses including the canonical URL and
+  notice — so the Advanced section usually never needs typing.
+
 ## [0.6.1] - 2026-08-26
 
 ### Fixed
