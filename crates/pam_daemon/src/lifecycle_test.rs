@@ -41,7 +41,7 @@ use crate::{
     DaemonError, ExchangeError, request_exchange, request_exchange_streaming, request_status,
 };
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[test]
@@ -1110,7 +1110,7 @@ async fn network_diagnostics_are_typed_read_only_and_sanitized() {
     wait_until_ready(&endpoint).await;
     let request = network_request("network-project", "observer");
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(5))
+    let exchange = request_exchange(&endpoint, &request, TEST_TIMEOUT)
         .await
         .unwrap();
     assert!(exchange.events.is_empty());

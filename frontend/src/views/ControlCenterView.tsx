@@ -675,12 +675,26 @@ function ManualImport({
     };
   }, [bridge]);
 
-  const ready =
-    accepted && Object.values(form).every((value) => value.trim().length > 0);
+  const missingLicenseFields = [
+    form.licenseId.trim() === "" && "license identifier",
+    form.licenseUrl.trim() === "" && "license URL",
+    form.licenseNoticeText.trim() === "" && "license notice",
+  ].filter((field): field is string => Boolean(field));
+  const ready = accepted && form.path.trim() !== "" && form.model.trim() !== "";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!ready || busy) return;
+    // Missing license details are the one silent blocker: reveal them and
+    // say so instead of a dead disabled button.
+    if (missingLicenseFields.length > 0) {
+      setAdvancedOpen(true);
+      setImportState({
+        state: "fail",
+        detail: `Fill in the ${missingLicenseFields.join(", ")} under Advanced — PAM records exactly which license you accept.`,
+      });
+      return;
+    }
     setImportState({ state: "running" });
     const params: ModelImportParams = {
       model: form.model.trim(),
