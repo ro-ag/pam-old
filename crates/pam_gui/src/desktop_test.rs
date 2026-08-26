@@ -1247,13 +1247,13 @@ async fn project_scoped_commands_reject_the_daemon_authority() {
     let reserve = reserve_for_test(&core, &daemon_fence(OperationId::new()))
         .await
         .unwrap_err();
-    let compose = core
-        .flow_compose(daemon_fence(OperationId::new()), String::new())
+    let refresh = core
+        .refresh(daemon_fence(OperationId::new()))
         .await
         .unwrap_err();
 
     assert_eq!(reserve.kind, DesktopErrorKind::Stale);
-    assert_eq!(compose.kind, DesktopErrorKind::Stale);
+    assert_eq!(refresh.kind, DesktopErrorKind::Stale);
 }
 
 #[tokio::test]
@@ -1304,6 +1304,30 @@ async fn flow_commands_accept_the_daemon_authority_without_a_project() {
         core.save_flow(fence(), FlowDocumentHandle::new(), String::new())
             .await,
     );
+    assert_daemon_replay_conflict(core.flow_graph(fence(), String::new()).await);
+    assert_daemon_replay_conflict(core.flow_compose(fence(), String::new()).await);
+}
+
+#[tokio::test]
+async fn flow_graph_and_flow_compose_succeed_under_the_daemon_authority() {
+    // Visual mode edits the daemon-global library without any project: both
+    // local transforms must complete under a fresh daemon fence.
+    let core = DesktopCore::new("/bounded/test");
+
+    let graph = core
+        .flow_graph(daemon_fence(OperationId::new()), repo_flow_source())
+        .await
+        .unwrap();
+    let FlowGraphDto::Ok { definition } = graph else {
+        panic!("expected parsed definition: {graph:?}");
+    };
+
+    let encoded = serde_json::to_string(&definition).unwrap();
+    let composed = core
+        .flow_compose(daemon_fence(OperationId::new()), encoded)
+        .await
+        .unwrap();
+    assert!(matches!(composed, FlowComposeDto::Ok { .. }));
 }
 
 #[tokio::test]
