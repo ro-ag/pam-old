@@ -2218,8 +2218,10 @@ impl DesktopCore {
 
     /// Converts one TOML flow document into its structured definition, locally.
     ///
-    /// Parse and validation failures are classified in the returned DTO; no
-    /// daemon exchange is involved.
+    /// Flow definitions are daemon-global, so this transform also runs under
+    /// the daemon authority without an active project. Parse and validation
+    /// failures are classified in the returned DTO; no daemon exchange is
+    /// involved.
     ///
     /// # Errors
     ///
@@ -2230,17 +2232,19 @@ impl DesktopCore {
         source: String,
     ) -> DesktopResult<FlowGraphDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let data = flow_graph_data(&source);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
     /// Serializes one structured flow definition into normalized TOML, locally.
     ///
-    /// Parse and validation failures are classified in the returned DTO; no
-    /// daemon exchange is involved.
+    /// Flow definitions are daemon-global, so this transform also runs under
+    /// the daemon authority without an active project. Parse and validation
+    /// failures are classified in the returned DTO; no daemon exchange is
+    /// involved.
     ///
     /// # Errors
     ///
@@ -2251,10 +2255,10 @@ impl DesktopCore {
         definition: String,
     ) -> DesktopResult<FlowComposeDto> {
         let _command = self.command_gate.lock().await;
-        let active = self.begin(&fence).await?;
+        let scope = self.begin_scoped(&fence).await?;
         let data = flow_compose_data(&definition);
         let state = self.inner.lock().await;
-        ensure_active_matches(&state, &active, &fence)?;
+        ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
     }
 
