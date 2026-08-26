@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "pam-desktop"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "pam_cli",
  "pam_gui",
@@ -3045,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "pam_cli"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -3069,7 +3069,7 @@ dependencies = [
 
 [[package]]
 name = "pam_compact"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "pam_core",
  "serde",
@@ -3078,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "pam_connectors"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "pam_compact",
  "pam_core",
@@ -3094,7 +3094,7 @@ dependencies = [
 
 [[package]]
 name = "pam_core"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "serde",
  "tokio",
@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "pam_daemon"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -3127,7 +3127,7 @@ dependencies = [
 
 [[package]]
 name = "pam_flow"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -3137,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "pam_gui"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "pam_model"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -3178,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "pam_platform"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "apple-native-keyring-store",
  "directories",
@@ -3199,7 +3199,7 @@ dependencies = [
 
 [[package]]
 name = "pam_policy"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "pam_core",
  "serde",
@@ -3208,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "pam_protocol"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "pam_core",
  "pam_flow",
@@ -3218,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "pam_skills"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -3233,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "pam_store"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
