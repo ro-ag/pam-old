@@ -38,6 +38,7 @@ fn snapshot_defaults_to_home_llm_with_no_persisted_override() {
     assert_eq!(snap.models_dir, dirs.home.join("llm"));
     assert!(snap.models_dir_is_default);
     assert_eq!(snap.data_dir, dirs.data_dir);
+    assert_eq!(snap.flows_dir, dirs.data_dir.join(".pam/flows"));
     assert_eq!(snap.logs_dir, dirs.data_dir.join("logs"));
     assert_eq!(snap.logs_size_bytes, 0);
 }
@@ -122,12 +123,13 @@ fn delete_logs_removes_present_files_and_tolerates_absence() {
 }
 
 #[test]
-fn is_known_location_matches_exactly_the_three_reported_directories() {
+fn is_known_location_matches_exactly_the_four_reported_directories() {
     let dirs = TestDirs::new("known-location");
     let snap = snapshot(&dirs.data_dir, &dirs.home);
 
     assert!(is_known_location(&snap, &snap.models_dir));
     assert!(is_known_location(&snap, &snap.data_dir));
+    assert!(is_known_location(&snap, &snap.flows_dir));
     assert!(is_known_location(&snap, &snap.logs_dir));
     assert!(!is_known_location(&snap, &dirs.home));
 }

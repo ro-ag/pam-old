@@ -1,4 +1,4 @@
-import { ArrowClockwise, FileText, FolderOpen, HardDrive, Trash } from "@phosphor-icons/react";
+import { ArrowClockwise, FileText, FolderOpen, GitBranch, HardDrive, Trash } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
 import type { AppSettingsDto, PamBridge } from "../domain";
@@ -160,6 +160,13 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                 <span className="access-icon" aria-hidden="true"><FolderOpen size={21} /></span>
                 <div><strong>Data</strong><p>{settings.dataDir}</p></div>
                 <button type="button" className="button button--secondary button--small" onClick={() => void reveal(settings.dataDir)}>
+                  Reveal
+                </button>
+              </article>
+              <article>
+                <span className="access-icon" aria-hidden="true"><GitBranch size={21} /></span>
+                <div><strong>Flows</strong><p>{settings.flowsDir}</p></div>
+                <button type="button" className="button button--secondary button--small" onClick={() => void reveal(settings.flowsDir)}>
                   Reveal
                 </button>
               </article>

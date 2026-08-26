@@ -355,6 +355,7 @@ const FIXTURE_SUPPORTED_MINIMUM_BYTES = 34_359_738_368;
 // active project.
 const FIXTURE_DEFAULT_MODELS_DIR = "/Users/fixture/llm";
 const FIXTURE_DATA_DIR = "/Users/fixture/Library/Application Support/dev.PAM.PAM";
+const FIXTURE_FLOWS_DIR = `${FIXTURE_DATA_DIR}/.pam/flows`;
 const FIXTURE_LOGS_DIR = `${FIXTURE_DATA_DIR}/logs`;
 const FIXTURE_LOGS_SIZE_BYTES = 842_318;
 
@@ -739,6 +740,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     modelsDir,
     modelsDirIsDefault: modelsDir === FIXTURE_DEFAULT_MODELS_DIR,
     dataDir: FIXTURE_DATA_DIR,
+    flowsDir: FIXTURE_FLOWS_DIR,
     logsDir: FIXTURE_LOGS_DIR,
     logsSizeBytes,
   });
@@ -1051,7 +1053,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       return clone(appSettingsSnapshot());
     },
     async revealPath(_fence, path): Promise<void> {
-      const known = [modelsDir, FIXTURE_DATA_DIR, FIXTURE_LOGS_DIR];
+      const known = [modelsDir, FIXTURE_DATA_DIR, FIXTURE_FLOWS_DIR, FIXTURE_LOGS_DIR];
       if (!known.includes(path)) throw new Error("This path is not a PAM Settings location.");
     },
     async callerRegistry(_fence): Promise<CallersDto> {

@@ -613,12 +613,13 @@ export interface HostMemoryDto {
 
 // Settings v1 is global: it never carries a project fence or a failure
 // union. `logsDir`/`logsSizeBytes` describe the daemon's real on-disk log
-// files; there is no `flowsDir` because this build has no global (project-
-// independent) flows helper to report a location for.
+// files; `flowsDir` is the daemon-global flow-definition library the Flows
+// view and the CLI open.
 export interface AppSettingsDto {
   modelsDir: string;
   modelsDirIsDefault: boolean;
   dataDir: string;
+  flowsDir: string;
   logsDir: string;
   logsSizeBytes: number;
 }
