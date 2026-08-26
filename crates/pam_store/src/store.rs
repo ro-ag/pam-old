@@ -768,7 +768,7 @@ impl Store {
     pub async fn put_model(&self, model: RegisteredModel) -> Result<RegisteredModel, StoreError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Model(ModelCommand::Put {
-            model,
+            model: Box::new(model),
             response: response_tx,
         }))
         .await?;
@@ -1715,7 +1715,9 @@ enum Command {
 
 enum ModelCommand {
     Put {
-        model: RegisteredModel,
+        // Boxed: GgufMetadata's identity strings make RegisteredModel far
+        // larger than ModelCommand's other variants.
+        model: Box<RegisteredModel>,
         response: Response<RegisteredModel>,
     },
     Get {
@@ -2253,7 +2255,7 @@ fn run_audit_command(connection: &mut Connection, command: AuditCommand) {
 fn run_model_command(connection: &mut Connection, command: ModelCommand) {
     match command {
         ModelCommand::Put { model, response } => {
-            respond(response, put_model(connection, model));
+            respond(response, put_model(connection, *model));
         }
         ModelCommand::Get { key, response } => {
             respond(response, get_model(connection, &key));
@@ -2419,6 +2421,10 @@ fn decode_model(row: StoredModelRow) -> Result<RegisteredModel, StoreError> {
             version: gguf_version,
             tensor_count,
             metadata_kv_count,
+            // Not persisted: identity metadata is a display-only enrichment
+            // recomputed live at revalidation time, and PartialEq ignores it.
+            architecture: None,
+            model_name: None,
         },
         license,
         source,

@@ -21,6 +21,7 @@ pam_cli.workspace = true
 pam_gui.workspace = true
 serde.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 serde_json.workspace = true

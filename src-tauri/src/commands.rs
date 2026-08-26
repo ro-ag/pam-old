@@ -7,9 +7,9 @@ use pam_gui::{
     DesktopCore, DesktopErrorDto, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
     FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
-    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelInferDto, ModelMessageDto,
-    ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto,
-    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelInferDto, ModelInspectDto,
+    ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
+    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -206,6 +206,18 @@ pub(crate) struct ModelImportRequest {
     license_notice_text: String,
     #[serde(default)]
     allow_small: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelInspectRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -509,6 +521,24 @@ pub(crate) async fn model_import(
                 license_notice_text: request.license_notice_text,
                 allow_small: request.allow_small,
             },
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_inspect(
+    state: State<'_, DesktopState>,
+    request: ModelInspectRequest,
+) -> Result<ModelInspectDto, DesktopErrorDto> {
+    state
+        .core
+        .model_inspect(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.path,
         )
         .await
 }

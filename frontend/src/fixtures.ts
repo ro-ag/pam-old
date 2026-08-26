@@ -27,6 +27,7 @@ import type {
   ModelDownloadDto,
   ModelDownloadStatusDto,
   ModelImportDto,
+  ModelInspectDto,
   ModelInferDto,
   ModelPresetDto,
   ModelPresetsDto,
@@ -875,6 +876,40 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       const imported: ModelSummaryDto = { modelId: params.model, sizeBytes: 4_600_000_000 };
       modelCatalog.push(imported);
       return clone({ status: "ok" as const, model: imported });
+    },
+    async modelInspect(_fence, path): Promise<ModelInspectDto> {
+      const fileName = path.split("/").pop() ?? path;
+      if (path.endsWith("tiny.gguf")) {
+        return clone({
+          status: "ok" as const,
+          fileName,
+          sizeBytes: 2_800_000_000,
+          architecture: null,
+          modelName: null,
+          belowFloor: true,
+          floorBytes: 17_000_000_000,
+        });
+      }
+      if (path.endsWith(".gguf")) {
+        return clone({
+          status: "ok" as const,
+          fileName,
+          sizeBytes: 17_456_012_448,
+          architecture: "qwen3moe",
+          modelName: "Qwen3-Coder-30B-A3B-Instruct",
+          belowFloor: false,
+          floorBytes: 17_000_000_000,
+        });
+      }
+      return clone({
+        status: "unavailable" as const,
+        failure: {
+          kind: "unavailable",
+          code: "model_invalid",
+          detail: "Point PAM at a downloaded .gguf file.",
+          recovery: null,
+        },
+      });
     },
     async modelPresets(_fence): Promise<ModelPresetsDto> {
       return clone({ presets: modelPresets });

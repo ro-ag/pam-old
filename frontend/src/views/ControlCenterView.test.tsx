@@ -242,6 +242,65 @@ describe("model runtime panel", () => {
     expect(props.onModelImported).not.toHaveBeenCalled();
   });
 
+  it("inspects a typed path on blur and prefills identity from what came back", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(
+      within(panel).getByLabelText("GGUF file path"),
+      "/models/qwen3-coder-30b-a3b-instruct.gguf",
+    );
+    await userEvent.tab();
+
+    expect(await within(panel).findByText("qwen3-coder-30b-a3b-instruct.gguf")).toBeInTheDocument();
+    expect(within(panel).getByText(/qwen3moe · Qwen3-Coder-30B-A3B-Instruct/)).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Model identity")).toHaveValue(
+      "qwen3moe/qwen3-coder-30b-a3b-instruct",
+    );
+  });
+
+  it("warns when the inspected file falls below PAM's recommended floor", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/tiny.gguf");
+    await userEvent.tab();
+
+    expect(
+      await within(panel).findByText(/Below PAM's recommended minimum of 17\.0 GB/),
+    ).toBeInTheDocument();
+  });
+
+  it("never overwrites a model identity the user already typed", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "custom/my-model");
+    await userEvent.type(
+      within(panel).getByLabelText("GGUF file path"),
+      "/models/qwen3-coder-30b-a3b-instruct.gguf",
+    );
+    await userEvent.tab();
+
+    await within(panel).findByText(/qwen3moe · Qwen3-Coder-30B-A3B-Instruct/);
+    expect(within(panel).getByLabelText("Model identity")).toHaveValue("custom/my-model");
+  });
+
+  it("shows a calm note, not an alert, when inspection can't place the path", async () => {
+    const props = await controlCenterProps("model-none");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/notes.txt");
+    await userEvent.tab();
+
+    const note = await within(panel).findByText(/Point PAM at a downloaded \.gguf file/);
+    expect(note).not.toHaveAttribute("role", "alert");
+  });
+
   it("lists the curated presets from the fixture, with a fit hint per option", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);

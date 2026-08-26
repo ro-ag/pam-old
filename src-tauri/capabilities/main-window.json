@@ -22,6 +22,7 @@
     "allow-model-status",
     "allow-model-infer",
     "allow-model-import",
+    "allow-model-inspect",
     "allow-model-presets",
     "allow-model-download",
     "allow-model-download-status",
@@ -41,6 +42,7 @@
     "allow-daemon-health",
     "core:app:allow-set-app-theme",
     "core:window:allow-start-dragging",
-    "core:window:allow-internal-toggle-maximize"
+    "core:window:allow-internal-toggle-maximize",
+    "dialog:allow-open"
   ]
 }

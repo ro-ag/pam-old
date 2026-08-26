@@ -19,7 +19,7 @@ use super::{
         AccessConfigDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto, CommandFence,
         ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind, DesktopResult,
         EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowGraphDto, GenerationId,
-        HealthDto, ModelDownloadDto, OperationId, ProjectHandle, TimelineKindDto,
+        HealthDto, ModelDownloadDto, ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto,
         access_dto_for_test, active_core_for_test, activity_dto_for_test,
         approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
@@ -657,6 +657,67 @@ async fn model_download_status_defaults_to_idle() {
             "failure": null
         })
     );
+}
+
+#[tokio::test]
+async fn model_inspect_reports_identity_metadata_and_the_floor_verdict() {
+    let core = DesktopCore::new("/bounded/test");
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-inspect-ok-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let directory = directory.canonicalize().unwrap();
+    let path = directory.join("model.gguf");
+    std::fs::write(&path, crate::model_import_test::one_tensor_gguf()).unwrap();
+
+    let dto = core
+        .model_inspect(
+            daemon_fence(OperationId::new()),
+            path.to_str().unwrap().to_owned(),
+        )
+        .await
+        .unwrap();
+
+    match dto {
+        ModelInspectDto::Ok {
+            file_name,
+            architecture,
+            model_name,
+            below_floor,
+            ..
+        } => {
+            assert_eq!(file_name, "model.gguf");
+            assert_eq!(architecture, None);
+            assert_eq!(model_name, None);
+            // The tiny fixture is far below PAM's recommended minimum.
+            assert!(below_floor);
+        }
+        other => panic!("expected ModelInspectDto::Ok, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[tokio::test]
+async fn model_inspect_reports_a_non_gguf_file_as_unavailable_not_an_error() {
+    let core = DesktopCore::new("/bounded/test");
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-inspect-bad-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let directory = directory.canonicalize().unwrap();
+    let path = directory.join("not-a-model.txt");
+    std::fs::write(&path, b"not a gguf file").unwrap();
+
+    let dto = core
+        .model_inspect(
+            daemon_fence(OperationId::new()),
+            path.to_str().unwrap().to_owned(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(dto, ModelInspectDto::Unavailable { .. }));
+
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

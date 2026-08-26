@@ -555,6 +555,18 @@ export type ModelImportDto =
   | { status: "ok"; model: ModelSummaryDto }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+export type ModelInspectDto =
+  | {
+      status: "ok";
+      fileName: string;
+      sizeBytes: number;
+      architecture: string | null;
+      modelName: string | null;
+      belowFloor: boolean;
+      floorBytes: number;
+    }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface ModelPresetDto {
   id: string;
   label: string;
@@ -650,6 +662,7 @@ export interface PamBridge {
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
+  modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
   modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
   modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
   modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;

@@ -214,11 +214,18 @@ impl ModelSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct GgufMetadata {
     pub version: u32,
     pub tensor_count: u64,
     pub metadata_kv_count: u64,
+    /// `general.architecture`, when present as a bounded GGUF string.
+    /// Identity metadata only: excluded from equality, which stays the
+    /// structural revalidation check it always was.
+    pub architecture: Option<String>,
+    /// `general.name`, when present as a bounded GGUF string. Same identity-only
+    /// exclusion from equality as `architecture`.
+    pub model_name: Option<String>,
 }
 
 impl GgufMetadata {
@@ -226,6 +233,16 @@ impl GgufMetadata {
     pub const MAX_TENSOR_COUNT: u64 = 131_072;
     pub const MAX_METADATA_KV_COUNT: u64 = 65_536;
 }
+
+impl PartialEq for GgufMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.tensor_count == other.tensor_count
+            && self.metadata_kv_count == other.metadata_kv_count
+    }
+}
+
+impl Eq for GgufMetadata {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredModel {

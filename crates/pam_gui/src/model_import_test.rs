@@ -22,7 +22,7 @@ impl Drop for TestDirectory {
     }
 }
 
-fn one_tensor_gguf() -> Vec<u8> {
+pub(crate) fn one_tensor_gguf() -> Vec<u8> {
     let mut bytes = b"GGUF".to_vec();
     bytes.extend_from_slice(&3_u32.to_le_bytes());
     bytes.extend_from_slice(&1_u64.to_le_bytes());

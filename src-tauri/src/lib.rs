@@ -26,6 +26,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     tauri::Builder::default()
         .manage(DesktopState::new(core))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
@@ -56,6 +57,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             commands::model_status,
             commands::model_infer,
             commands::model_import,
+            commands::model_inspect,
             commands::model_presets,
             commands::model_download,
             commands::model_download_status,

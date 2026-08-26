@@ -141,6 +141,8 @@ fn registered_model(path: &Path) -> RegisteredModel {
             version: 3,
             tensor_count: 17,
             metadata_kv_count: 29,
+            architecture: None,
+            model_name: None,
         },
         license: LicenseSnapshot::new(
             "Apache-2.0",
@@ -5118,15 +5120,15 @@ async fn model_registry_rejects_invalid_size_and_https_provenance() {
     for gguf in [
         GgufMetadata {
             tensor_count: 0,
-            ..valid.gguf
+            ..valid.gguf.clone()
         },
         GgufMetadata {
             tensor_count: GgufMetadata::MAX_TENSOR_COUNT + 1,
-            ..valid.gguf
+            ..valid.gguf.clone()
         },
         GgufMetadata {
             metadata_kv_count: GgufMetadata::MAX_METADATA_KV_COUNT + 1,
-            ..valid.gguf
+            ..valid.gguf.clone()
         },
     ] {
         let invalid = RegisteredModel {

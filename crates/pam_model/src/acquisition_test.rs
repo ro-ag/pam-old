@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::{
     DownloadRequest, DownloadResponse, DownloadTransport, ImportRequest, LicenseConsent,
     LicenseSnapshot, ModelDescriptor, ModelError, ModelKey, ModelSource, TransferRequest,
-    download_https, import_existing, revalidate_registered_model,
+    download_https, import_existing, inspect_model_file, revalidate_registered_model,
 };
 
 struct TestDirectory(PathBuf);
@@ -87,6 +87,80 @@ fn one_tensor_gguf(tensor_type: u32, first_dimension: u64, payload_bytes: usize)
     }
     bytes.resize(bytes.len() + payload_bytes, 0);
     bytes
+}
+
+fn write_gguf_string(bytes: &mut Vec<u8>, value: &str) {
+    bytes.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+/// One-tensor GGUF fixture like [`one_tensor_gguf`], with the given
+/// `general.*` string metadata KVs written ahead of the tensor.
+fn one_tensor_gguf_with_metadata(metadata: &[(&str, &str)]) -> Vec<u8> {
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend_from_slice(&3_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u64.to_le_bytes());
+    bytes.extend_from_slice(&u64::try_from(metadata.len()).unwrap().to_le_bytes());
+    for (key, value) in metadata {
+        write_gguf_string(&mut bytes, key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        write_gguf_string(&mut bytes, value);
+    }
+    bytes.extend_from_slice(&6_u64.to_le_bytes());
+    bytes.extend_from_slice(b"weight");
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u64.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    while !bytes.len().is_multiple_of(32) {
+        bytes.push(0);
+    }
+    bytes.resize(bytes.len() + 4, 0);
+    bytes
+}
+
+#[test]
+fn inspect_model_file_reports_architecture_and_name_when_present() {
+    let directory = TestDirectory::new("inspect-identity");
+    let path = directory.0.join("model.gguf");
+    let bytes = one_tensor_gguf_with_metadata(&[
+        ("general.architecture", "qwen3"),
+        ("general.name", "Qwen3-Coder-30B-A3B-Instruct"),
+    ]);
+    fs::write(&path, &bytes).unwrap();
+
+    let report = inspect_model_file(&path).unwrap();
+
+    assert_eq!(report.size_bytes, u64::try_from(bytes.len()).unwrap());
+    assert_eq!(report.metadata.architecture.as_deref(), Some("qwen3"));
+    assert_eq!(
+        report.metadata.model_name.as_deref(),
+        Some("Qwen3-Coder-30B-A3B-Instruct")
+    );
+}
+
+#[test]
+fn inspect_model_file_reports_no_identity_metadata_when_absent() {
+    let directory = TestDirectory::new("inspect-no-identity");
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, one_tensor_gguf(0, 1, 4)).unwrap();
+
+    let report = inspect_model_file(&path).unwrap();
+
+    assert!(report.metadata.architecture.is_none());
+    assert!(report.metadata.model_name.is_none());
+}
+
+#[test]
+fn inspect_model_file_rejects_a_non_gguf_file() {
+    let directory = TestDirectory::new("inspect-invalid");
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, b"not a gguf file").unwrap();
+
+    assert!(matches!(
+        inspect_model_file(&path),
+        Err(ModelError::InvalidGguf)
+    ));
 }
 
 #[test]
