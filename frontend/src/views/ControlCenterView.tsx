@@ -585,17 +585,21 @@ function ManualImport({
   };
 
   const browse = async () => {
-    const pluginSpecifier = "@tauri-apps/plugin-dialog";
-    const { open } = (await import(pluginSpecifier)) as {
-      open: (opts: unknown) => Promise<string | string[] | null>;
-    };
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: "GGUF model", extensions: ["gguf"] }],
-    });
-    if (typeof selected === "string" && selected) {
-      setPath(selected);
-      void runInspect(selected);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+      });
+      if (typeof selected === "string" && selected) {
+        setPath(selected);
+        void runInspect(selected);
+      }
+    } catch (error) {
+      setInspect({
+        status: "unavailable",
+        failure: { kind: "unavailable", code: null, detail: presentError(error), recovery: "Type the GGUF path instead." },
+      });
     }
   };
 

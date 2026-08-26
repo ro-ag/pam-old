@@ -1,6 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+// The dialog plugin only exists in the native shell; tests stub the module so
+// the Browse wiring is provable without Tauri.
+const openDialog = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 import { withDaemonOperation } from "../bridge";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { selectControlCenter, selectDaemonView } from "../selectors";
@@ -316,6 +321,26 @@ describe("model runtime panel", () => {
     // curated quant fits it.
     expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(3);
     expect(screen.queryByText(/of memory or more; this Mac reports/)).not.toBeInTheDocument();
+  });
+
+  it("browses for a GGUF through the native dialog and inspects the pick", async () => {
+    const props = await controlCenterProps("model-none");
+    // Browse renders only in the native shell; the fixture bridge stays the
+    // data source while the mode flag flips the button on.
+    Object.defineProperty(props.bridge, "mode", { value: "native" });
+    openDialog.mockResolvedValueOnce("/Users/rodox/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Browse…" }));
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ multiple: false, filters: [{ name: "GGUF model", extensions: ["gguf"] }] }),
+    );
+    expect(await within(panel).findByText("Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("GGUF file path")).toHaveValue(
+      "/Users/rodox/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
+    );
   });
 
   it("gates the preset download button on the license checkbox", async () => {
