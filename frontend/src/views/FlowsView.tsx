@@ -253,6 +253,11 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
     if (!visualActive) return;
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+      // Native text undo wins inside editable fields; the definition history
+      // only answers when the focus is anywhere else.
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return;
       event.preventDefault();
       if (event.shiftKey) redo();
       else undo();

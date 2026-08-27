@@ -1146,6 +1146,7 @@ export function ModelPanel({
   refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
+  const verifySequence = useRef(0);
   const offline = daemon.state === "stopped";
   const loaded = modelStatus?.status === "ok" ? modelStatus.loaded : null;
   const registered = modelStatus?.status === "ok" ? modelStatus.registered : [];
@@ -1154,11 +1155,13 @@ export function ModelPanel({
   // loaded model changes (e.g. a restart with a different one), the stale
   // pass/fail line must not keep rendering next to the new identity.
   useEffect(() => {
+    verifySequence.current += 1;
     setVerify({ state: "idle" });
   }, [loaded?.modelId]);
   const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
 
   const runVerify = async (modelId: string) => {
+    const sequence = ++verifySequence.current;
     setVerify({ state: "running" });
     const startedAt = performance.now();
     try {
@@ -1168,6 +1171,9 @@ export function ModelPanel({
         [{ role: "user", content: "Reply with a single word: ready." }],
         16,
       );
+      // A response that outlived its model (the loaded model changed while
+      // the round-trip was in flight) must not credit the new identity.
+      if (sequence !== verifySequence.current) return;
       const ms = Math.round(performance.now() - startedAt);
       if (response.status === "ok") {
         setVerify({ state: "pass", ms, tokens: response.usage.emittedOutputTokens });
@@ -1178,6 +1184,7 @@ export function ModelPanel({
         });
       }
     } catch (error) {
+      if (sequence !== verifySequence.current) return;
       setVerify({ state: "fail", detail: presentError(error) });
     }
   };

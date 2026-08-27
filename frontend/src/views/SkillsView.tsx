@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { withDaemonOperation } from "../bridge";
 import type { CommandFence, PamBridge, ProjectSummaryDto } from "../domain";
@@ -20,8 +20,12 @@ export interface SkillsViewProps {
 export function SkillsView({ bridge, fence, projects, onSelectProject, contextBar }: SkillsViewProps) {
   const wide = useMediaQuery(WIDE_VIEWPORT_QUERY);
   const authority = useMemo(() => fence ?? withDaemonOperation(), [fence]);
+  // Library mutations (install, adopt, apply) change what the inventory
+  // observes; the tick re-scans it without a full view remount.
+  const [inventoryTick, setInventoryTick] = useState(0);
+  const invalidateInventory = useCallback(() => setInventoryTick((tick) => tick + 1), []);
   const library = (
-    <SkillLibraryPanel bridge={bridge} fence={authority} projects={projects} onSelectProject={onSelectProject} />
+    <SkillLibraryPanel bridge={bridge} fence={authority} projects={projects} onSelectProject={onSelectProject} onMutated={invalidateInventory} />
   );
   return (
     <main className="canvas" id="main-content">
@@ -32,7 +36,7 @@ export function SkillsView({ bridge, fence, projects, onSelectProject, contextBa
       {wide ? (
         <>
           <div className="project-detail wide-split">
-            <SkillInventoryPanel bridge={bridge} fence={authority} />
+            <SkillInventoryPanel bridge={bridge} fence={authority} refreshTick={inventoryTick} />
             {library}
           </div>
           <SkillAuditReportPanel bridge={bridge} fence={authority} />
@@ -45,7 +49,7 @@ export function SkillsView({ bridge, fence, projects, onSelectProject, contextBa
             <Tab id="audit" className="flow-inspector-tab">Audit</Tab>
           </TabList>
           <TabPanel id="inventory" className="project-detail-panel">
-            <SkillInventoryPanel bridge={bridge} fence={authority} />
+            <SkillInventoryPanel bridge={bridge} fence={authority} refreshTick={inventoryTick} />
           </TabPanel>
           <TabPanel id="library" className="project-detail-panel">
             {library}

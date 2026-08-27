@@ -740,3 +740,6 @@ export const MAX_EVIDENCE_TEXT = 4_096;
 export const MAX_FLOW_SOURCE = 128_000;
 export const MAX_CHAT_MESSAGES = 100;
 export const CHAT_MAX_OUTPUT_TOKENS = 512;
+// The model DTOs do not expose a context size, so the chat drawer sends
+// history under this fixed estimated-token budget (reply reserve included).
+export const CHAT_CONTEXT_TOKEN_BUDGET = 4_096;

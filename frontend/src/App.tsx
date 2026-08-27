@@ -155,6 +155,8 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const previousCompactViewportRef = useRef(initialLayout.compactViewport);
   const fenceRef = useRef(state.activeFence);
   fenceRef.current = state.activeFence;
+  const pendingRef = useRef(state.pendingFence);
+  pendingRef.current = state.pendingFence;
   // With no active project the overlays run under the daemon authority, so
   // global surfaces (palette, model chat) stay available with zero projects.
   const overlayAuthority: OverlayAuthority | null = state.activeFence
@@ -337,7 +339,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     void loadDaemonHealth();
     void loadModelStatus();
     setRefreshTick((tick) => tick + 1);
-    if (!fenceRef.current) return;
+    // A project command in flight (activation above all) owns the data
+    // sequence: a refresh here would supersede it and drop its completion.
+    if (!fenceRef.current || pendingRef.current) return;
     const fence = withOperation(fenceRef.current);
     void executeDataCommand(fence, () => bridge.refreshProject(fence), "Project state refreshed");
   }, [bridge, executeDataCommand, loadDaemonHealth, loadModelStatus]);

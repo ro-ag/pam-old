@@ -290,12 +290,15 @@ export interface SkillLibraryPanelProps {
   fence: CommandFence;
   projects?: ProjectSummaryDto[];
   onSelectProject?: (project: ProjectSummaryDto) => void;
+  /** Called after a mutation verifies against refreshed durable state, so
+   * sibling panels (the observed inventory) can invalidate themselves. */
+  onMutated?: () => void;
 }
 
 // The library itself is global: entries, adoption, and installs run under
 // whichever authority the fence carries. Assignment — enable, materialize,
 // drift, resync — exists only for a project, so it is gated in place.
-export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject }: SkillLibraryPanelProps) {
+export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject, onMutated }: SkillLibraryPanelProps) {
   const projectScoped = fence.projectHandle !== DAEMON_AUTHORITY;
   const [entries, setEntries] = useState<SkillLibraryEntryDto[] | null>(null);
   const [selection, setSelection] = useState<SkillLibraryKeyDto | null>(null);
@@ -475,6 +478,7 @@ export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject }: 
       if (action.action !== "load") {
         const verified = await refreshAfterMutation(sequence, requestFence, action, response.data);
         if (!verified) return;
+        onMutated?.();
         if (action.action === "adopt") {
           setAdoptEntryId("");
           setArtifactId("");
@@ -490,7 +494,7 @@ export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject }: 
     } finally {
       if (isCurrentRequest(sequence, requestFence)) setBusy(null);
     }
-  }, [acceptResponse, bridge, isCurrentRequest, refreshAfterMutation]);
+  }, [acceptResponse, bridge, isCurrentRequest, onMutated, refreshAfterMutation]);
 
   const versionOptions = useMemo(() => (
     entries?.find((entry) => entry.entryId === selection?.entryId)?.versions ?? []

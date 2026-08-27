@@ -861,7 +861,7 @@ describe("daemon observatory", () => {
     render(<App bridge={bridge} />);
     await screen.findByRole("heading", { name: "Control center" });
 
-    await user.click(screen.getByRole("button", { name: "Restart PAM" }));
+    await user.click(screen.getByRole("button", { name: "Restart PAM (unloads the loaded model)" }));
 
     expect(calls).toEqual(["stop", "start"]);
     expect(await screen.findByText("PAM restarted")).toBeInTheDocument();
@@ -873,7 +873,7 @@ describe("daemon observatory", () => {
     await screen.findByRole("heading", { name: "Control center" });
     await screen.findByText("PAM is paused, so no requests are being served.");
 
-    expect(screen.queryByRole("button", { name: "Restart PAM" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Restart PAM/ })).not.toBeInTheDocument();
   });
 
   it("chats with the local model in an ephemeral drawer with usage lines", async () => {

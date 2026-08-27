@@ -20,22 +20,25 @@ function driftSummary(data: SkillInventoryDataDto): string {
 export interface SkillInventoryPanelProps {
   bridge: PamBridge;
   fence: CommandFence;
+  /** Bumped by the library panel after a verified mutation so the observed
+   * inventory re-scans instead of showing pre-mutation artifacts. */
+  refreshTick?: number;
 }
 
-export function SkillInventoryPanel({ bridge, fence }: SkillInventoryPanelProps) {
+export function SkillInventoryPanel({ bridge, fence, refreshTick = 0 }: SkillInventoryPanelProps) {
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: { queries: { gcTime: 0, retry: false, staleTime: 0 } },
   }));
   return (
     <QueryClientProvider client={queryClient}>
-      <SkillInventoryContent bridge={bridge} fence={fence} />
+      <SkillInventoryContent bridge={bridge} fence={fence} refreshTick={refreshTick} />
     </QueryClientProvider>
   );
 }
 
-function SkillInventoryContent({ bridge, fence }: SkillInventoryPanelProps) {
+function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventoryPanelProps) {
   const inventoryQuery = useQuery({
-    queryKey: ["skill-inventory", fence.projectHandle, fence.generation],
+    queryKey: ["skill-inventory", fence.projectHandle, fence.generation, refreshTick],
     queryFn: async (): Promise<SkillInventoryDataDto> => {
       const requestFence = withOperation(fence);
       const response = await bridge.loadSkillInventory(requestFence);

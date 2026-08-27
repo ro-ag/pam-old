@@ -340,8 +340,8 @@ export function Sidebar({
             <button
               type="button"
               className="daemon-restart"
-              aria-label="Restart PAM"
-              title="Restart PAM"
+              aria-label="Restart PAM (unloads the loaded model)"
+              title="Restart PAM (unloads the loaded model)"
               disabled={pending}
               onClick={onRestartDaemon}
             >
