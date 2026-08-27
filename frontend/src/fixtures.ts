@@ -1,4 +1,5 @@
 import type {
+  AccessConfigDto,
   ActivityDto,
   ActivityEventDto,
   ApprovalDecision,
@@ -11,6 +12,8 @@ import type {
   ConnectorSummaryDto,
   ConnectorTestDto,
   ConnectorsDto,
+  DaemonAccessDto,
+  DaemonCapabilityDto,
   ActivityDayDto,
   DaemonLogEntryDto,
   DaemonLogsDto,
@@ -57,25 +60,33 @@ const projects: ProjectSummaryDto[] = [
   { handle: "33333333-3333-4333-8333-333333333333", name: "docs", location: "/work/docs" },
 ];
 
-// Daemon-only projects: never in the catalog, so the feed and the usage
-// panel must fall back from the catalog name to the remembered root's
-// basename, and only to a truncated ID when the daemon never learned one.
+// Events carry the daemon's project ID and the root it remembers for it;
+// the catalog is matched by root, not by the GUI-local handle. Daemon-only
+// projects are never in the catalog, so the feed and the usage panel must
+// fall back from the catalog name to the remembered root's basename, and
+// only to a truncated ID when the daemon never learned one.
 const DAEMON_ONLY_WITH_ROOT = "66666666-6666-4666-8666-666666666666";
 const DAEMON_ONLY_ROOTLESS = "77777777-7777-4777-8777-777777777777";
 
+// The daemon's own project IDs, deliberately unequal to the GUI-local catalog
+// handles above: an audit event only ever carries these, so the feed can only
+// reach a catalog name through the root both sides agree on.
+const PAYMENTS_PROJECT_ID = "d951014b-0a3c-4f2e-9a17-2b6c8e5f1d40";
+const LEDGER_PROJECT_ID = "4c2b9f70-6d18-4a55-9c31-7e0a2f8b6c94";
+
 const activityEvents: ActivityEventDto[] = [
-  { sequence: 4, projectId: "11111111-1111-4111-8111-111111111111", callerId: "gui:pam-desktop", action: "project.current", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_520_000, projectRoot: null },
-  { sequence: 3, projectId: "11111111-1111-4111-8111-111111111111", callerId: "cli:release-agent", action: "flow.save", decision: "approval_required", outcome: null, occurredAtMs: 1_777_001_460_000, projectRoot: null },
-  { sequence: 2, projectId: "22222222-2222-4222-8222-222222222222", callerId: "cli:release-agent", action: "project.refresh", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_400_000, projectRoot: null },
-  { sequence: 1, projectId: null, callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000, projectRoot: null },
+  { sequence: 4, projectId: PAYMENTS_PROJECT_ID, callerId: "gui:pam-desktop", action: "project.current", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_520_000, projectRoot: "/work/payments-api" },
+  { sequence: 3, projectId: PAYMENTS_PROJECT_ID, callerId: "cli:release-agent", action: "flow.save", decision: "approval_required", outcome: null, occurredAtMs: 1_777_001_460_000, projectRoot: "/work/payments-api" },
+  { sequence: 2, projectId: LEDGER_PROJECT_ID, callerId: "cli:release-agent", action: "project.refresh", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_400_000, projectRoot: "/work/ledger-web" },
+  { sequence: 1, projectId: "daemon", callerId: "gui:pam-desktop", action: "daemon.status", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_340_000, projectRoot: null },
   { sequence: 6, projectId: DAEMON_ONLY_WITH_ROOT, callerId: "cli:daemon-only-rooted", action: "agent.sync", decision: "denied", outcome: null, occurredAtMs: 1_777_001_320_000, projectRoot: "/work/scratch-agent" },
   { sequence: 5, projectId: DAEMON_ONLY_ROOTLESS, callerId: "cli:daemon-only-rootless", action: "agent.deploy", decision: "denied", outcome: null, occurredAtMs: 1_777_001_310_000, projectRoot: null },
   // Production caller IDs are UUIDs, unlike the pretty legacy IDs above; the
   // matching registeredCallers row carries a kind so the UI can label these.
   // Distinct action names from the rows above, so feed assertions elsewhere
   // that match on action text stay unambiguous.
-  { sequence: 7, projectId: "11111111-1111-4111-8111-111111111111", callerId: "8f14e45f-ceea-467e-adc9-15794b520d1d", action: "model.infer", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_530_000, projectRoot: null },
-  { sequence: 8, projectId: "11111111-1111-4111-8111-111111111111", callerId: "3f79bb7b-4a57-4b14-9b3a-9bb6b3b6c56a", action: "skill.audit", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_540_000, projectRoot: null },
+  { sequence: 7, projectId: PAYMENTS_PROJECT_ID, callerId: "8f14e45f-ceea-467e-adc9-15794b520d1d", action: "model.infer", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_530_000, projectRoot: "/work/payments-api" },
+  { sequence: 8, projectId: PAYMENTS_PROJECT_ID, callerId: "3f79bb7b-4a57-4b14-9b3a-9bb6b3b6c56a", action: "skill.audit", decision: "allowed", outcome: "served", occurredAtMs: 1_777_001_540_000, projectRoot: "/work/payments-api" },
 ];
 
 const daemonLogEntries: DaemonLogEntryDto[] = [
@@ -296,62 +307,55 @@ const registeredModels: ModelSummaryDto[] = [
   { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
 ];
 
-// Three curated presets: Qwen3 Coder 30B is PAM's validated quality floor,
-// offered at three quantizations. Sizes match the real catalog; memory
-// floors are fixture estimates (weight size plus a working margin).
-const modelPresets: ModelPresetDto[] = [
-  {
-    id: "qwen3-coder-30b-q4ks",
-    label: "Qwen3 Coder 30B — minimum",
-    model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_s",
-    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
-    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf",
-    expectedSizeBytes: 17_456_012_448,
-    sha256: "sha256:fixture-qwen3-coder-30b-q4ks",
-    licenseId: "Apache-2.0",
-    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
-    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
-    minMemoryBytes: 23_970_000_000,
-    paramsLabel: "30B-A3B params",
-    quantLabel: "Q4_K_S",
-  },
-  {
-    id: "qwen3-coder-30b-q4km",
-    label: "Qwen3 Coder 30B — balanced",
-    model: "qwen/qwen3-coder-30b-a3b-instruct-q4_k_m",
-    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-    expectedSizeBytes: 18_556_689_568,
-    sha256: "sha256:fixture-qwen3-coder-30b-q4km",
-    licenseId: "Apache-2.0",
-    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
-    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
-    minMemoryBytes: 25_340_000_000,
-    paramsLabel: "30B-A3B params",
-    quantLabel: "Q4_K_M",
-  },
-  {
-    id: "qwen3-coder-30b-q6k",
-    label: "Qwen3 Coder 30B — high fidelity",
-    model: "qwen/qwen3-coder-30b-a3b-instruct-q6_k",
-    fileName: "Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
-    url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
-    expectedSizeBytes: 25_092_535_456,
-    sha256: "sha256:fixture-qwen3-coder-30b-q6k",
-    licenseId: "Apache-2.0",
-    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
-    licenseNoticeText: "Apache License, Version 2.0. Redistributed under the Qwen3 model license notice.",
-    minMemoryBytes: 33_500_000_000,
-    paramsLabel: "30B-A3B params",
-    quantLabel: "Q6_K",
-  },
-];
-
 // A real 32 GB Mac (hw.memsize reports binary GiB) — PAM's supported system
-// minimum. Every curated quant fits here; tests that need the unfit or
-// below-minimum states override hostMemory instead.
+// minimum. Tests that need the below-minimum banner override hostMemory.
 const FIXTURE_HOST_MEMORY_BYTES = 34_359_738_368;
 const FIXTURE_SUPPORTED_MINIMUM_BYTES = 34_359_738_368;
+
+// The largest artifact a 32 GiB Mac can devote to a model: its 24,696,061,952
+// byte runtime ceiling less the 1,234,803,098 byte projection contingency.
+// The real value comes from Rust; this mirrors it so the fixture picker tiers
+// exactly like the shipped one.
+const FIXTURE_HOST_MODEL_BUDGET_BYTES = 23_461_258_854;
+
+// The curated catalog, mirrored from `crates/pam_gui/src/model_presets.rs`:
+// two coding families tiered by quantization from a 32 GiB Mac to a 128 GiB
+// one. Only the three original Qwen quants are calibrated; digests are
+// fixture placeholders. `fitsHost` is computed against the fixture host, the
+// way the Rust command computes it against the real one.
+const modelPresets: ModelPresetDto[] = (
+  [
+    ["qwen3-coder-30b-q4ks", "Qwen3 Coder 30B — minimum", "qwen", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3-Coder-30B-A3B-Instruct", "30B-A3B", "Q4_K_S", 17_456_012_448, true],
+    ["qwen3-coder-30b-q4km", "Qwen3 Coder 30B — balanced", "qwen", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3-Coder-30B-A3B-Instruct", "30B-A3B", "Q4_K_M", 18_556_689_568, true],
+    ["qwen3-coder-30b-q5km", "Qwen3 Coder 30B — refined", "qwen", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3-Coder-30B-A3B-Instruct", "30B-A3B", "Q5_K_M", 21_725_584_544, false],
+    ["qwen3-coder-30b-q6k", "Qwen3 Coder 30B — high fidelity", "qwen", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3-Coder-30B-A3B-Instruct", "30B-A3B", "Q6_K", 25_092_535_456, true],
+    ["qwen3-coder-30b-q80", "Qwen3 Coder 30B — maximum fidelity", "qwen", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3-Coder-30B-A3B-Instruct", "30B-A3B", "Q8_0", 32_483_935_392, false],
+    ["devstral-small-2-24b-q4km", "Devstral Small 2 24B — balanced", "mistral", "Devstral-Small-2-24B-Instruct-2512-GGUF", "Devstral-Small-2-24B-Instruct-2512", "24B", "Q4_K_M", 14_334_446_752, false],
+    ["devstral-small-2-24b-q5km", "Devstral Small 2 24B — refined", "mistral", "Devstral-Small-2-24B-Instruct-2512-GGUF", "Devstral-Small-2-24B-Instruct-2512", "24B", "Q5_K_M", 16_764_521_632, false],
+    ["devstral-small-2-24b-q6k", "Devstral Small 2 24B — high fidelity", "mistral", "Devstral-Small-2-24B-Instruct-2512-GGUF", "Devstral-Small-2-24B-Instruct-2512", "24B", "Q6_K", 19_346_476_192, false],
+    ["devstral-small-2-24b-q80", "Devstral Small 2 24B — maximum fidelity", "mistral", "Devstral-Small-2-24B-Instruct-2512-GGUF", "Devstral-Small-2-24B-Instruct-2512", "24B", "Q8_0", 25_055_317_152, false],
+    ["devstral-small-2-24b-bf16", "Devstral Small 2 24B — full precision", "mistral", "Devstral-Small-2-24B-Instruct-2512-GGUF", "Devstral-Small-2-24B-Instruct-2512", "24B", "BF16", 47_154_056_032, false],
+    ["gpt-oss-120b-f16", "GPT-OSS 120B — full precision", "openai", "gpt-oss-120b-GGUF", "gpt-oss-120b", "120B", "F16", 65_369_017_728, false],
+  ] as const
+).map(([id, label, vendor, repo, stem, paramsLabel, quantLabel, expectedSizeBytes, calibrated]) => {
+  const fileName = `${stem}-${quantLabel}.gguf`;
+  return {
+    id,
+    label,
+    model: `${vendor}/${stem.toLowerCase()}-${quantLabel.toLowerCase()}`,
+    fileName,
+    url: `https://huggingface.co/unsloth/${repo}/resolve/main/${fileName}`,
+    expectedSizeBytes,
+    sha256: `sha256:fixture-${id}`,
+    licenseId: "Apache-2.0",
+    licenseUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    licenseNoticeText: `${fileName} is distributed under the Apache-2.0 license at https://www.apache.org/licenses/LICENSE-2.0.`,
+    calibrated,
+    fitsHost: expectedSizeBytes <= FIXTURE_HOST_MODEL_BUDGET_BYTES,
+    paramsLabel,
+    quantLabel,
+  };
+});
 
 // Settings v1 is global, so these locations never depend on the scenario's
 // active project.
@@ -766,6 +770,14 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       ? { connectorId: "github-actions", enabled: false, baseUrl: null, credentialPresent: false, lastTestStatus: null, lastTestAtMs: null }
       : { connectorId: "github-actions", enabled: true, baseUrl: "https://api.github.com", credentialPresent: true, lastTestStatus: "passed", lastTestAtMs: 1_777_001_100_000 },
   ];
+  // Daemon-scope grants are durable owner decisions, so the fixture starts
+  // ungranted and only the Access view's own action flips a row.
+  const daemonCapabilities: DaemonCapabilityDto[] = [
+    { capability: "model.infer", name: "Model inference", summary: "Chat and the Control Center model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
+    { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
+    { capability: "connector.configure", name: "Connector configuration", summary: "Connections saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
+    { capability: "connector.test", name: "Connector self-test", summary: "Connections runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
+  ];
   const flowGraphSources = new Map<string, FlowDefinitionJson>([
     [normalizeFlowSource(flowSource), afterMergeDefinition],
   ]);
@@ -871,9 +883,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       // The registered catalog is durable store state: the desktop answers it
       // even while the daemon is paused, with nothing confirmable as loaded.
       if (!daemonRunning) {
-        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog });
+        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: false });
       }
-      return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog });
+      return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog, loadFailure: null, loading: false });
     },
     async modelInfer(_fence, model, messages: ChatMessageDto[]): Promise<ModelInferDto> {
       if (scenario === "model-infer-blocked") {
@@ -1055,7 +1067,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       };
     },
     async modelPresets(_fence): Promise<ModelPresetsDto> {
-      return clone({ presets: modelPresets });
+      return clone({ presets: modelPresets, hostModelBudgetBytes: FIXTURE_HOST_MODEL_BUDGET_BYTES });
     },
     async modelDownload(_fence, presetId): Promise<ModelDownloadDto> {
       if (!daemonRunning) {
@@ -1167,6 +1179,42 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         };
       }
       return clone({ status: "ok" as const, callers: registeredCallers });
+    },
+    async daemonAccessConfig(_fence): Promise<AccessConfigDto> {
+      // The observed boundary is daemon truth: no project identity reaches it,
+      // so it answers the same way with or without an active project.
+      if (!daemonRunning) {
+        return clone({
+          status: "unavailable" as const,
+          failure: { kind: "unavailable" as const, code: "daemon_offline", detail: "PAM is paused, so no access boundary is being reported.", recovery: "Start PAM to read the observed boundary." },
+        });
+      }
+      if (scenario === "access-blocked") {
+        return clone({
+          status: "blocked" as const,
+          failure: { kind: "blocked" as const, code: "Forbidden", detail: "Network diagnostics are blocked by policy for this PAM window.", recovery: "Grant network.diagnostics for this GUI caller, then retry." },
+          approvalId: null,
+          expiresAtMs: null,
+        });
+      }
+      return clone({
+        status: "available" as const,
+        truth: "System trust and proxy discovery are available to this PAM window.",
+        platformRootsEnabled: true,
+        systemProxyDiscoveryEnabled: true,
+        proxyEnvironment: "not configured",
+        noProxy: "configured",
+        pac: "not detected",
+      });
+    },
+    async daemonAccess(_fence): Promise<DaemonAccessDto> {
+      return { capabilities: clone(daemonCapabilities) };
+    },
+    async setDaemonAccess(_fence, capability, granted): Promise<DaemonAccessDto> {
+      const row = daemonCapabilities.find((candidate) => candidate.capability === capability);
+      if (!row) throw new Error("This is not a daemon-scoped capability the PAM window uses.");
+      row.granted = granted;
+      return { capabilities: clone(daemonCapabilities) };
     },
     async connectorRegistry(_fence): Promise<ConnectorsDto> {
       if (!daemonRunning) {

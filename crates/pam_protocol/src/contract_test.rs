@@ -175,6 +175,7 @@ fn model_status_is_authenticated_policy_named_and_free_of_path_or_digest_fields(
     let result = ResultPayload::ModelStatus(ModelStatusResult {
         loaded: Some(summary.clone()),
         registered: vec![summary],
+        load_failure: None,
     });
     let encoded = rmp_serde::to_vec_named(&result).unwrap();
     let rendered = String::from_utf8_lossy(&encoded).into_owned();

@@ -198,108 +198,45 @@ fn ownership_rejects_a_symlink_without_truncating_its_target() {
 }
 
 #[test]
-fn model_policy_resource_binds_the_exact_redacted_runtime_effect() {
-    let make = |request_id: &str,
-                model: &str,
-                first_role: ModelRole,
-                prompt: &str,
-                max_output_tokens: u32,
-                deadline_unix_ms: u64| {
+fn model_policy_resource_is_stable_across_conversation_turns() {
+    let make = |request_id: &str, model: &str, prompt: &str, max_output_tokens: u32| {
         RequestEnvelope::model_infer(
             RequestId::from(request_id),
             CallerId::from("model-caller"),
-            ProjectId::from("model-project"),
+            ProjectId::daemon_scope(),
             IdempotencyKey::new(format!("{request_id}-key")),
             model,
             vec![
-                ModelMessage::new(first_role, "private setup").unwrap(),
+                ModelMessage::new(ModelRole::System, "private setup").unwrap(),
                 ModelMessage::new(ModelRole::User, prompt).unwrap(),
             ],
             max_output_tokens,
-            deadline_unix_ms,
+            10_000,
         )
         .unwrap()
     };
     let secret = "private prompt bytes must never enter the policy resource";
-    let baseline = make(
-        "model-effect-1",
-        "vendor/model",
-        ModelRole::System,
-        secret,
-        64,
-        10_000,
-    );
+    let baseline = make("model-effect-1", "vendor/model", secret, 64);
     let baseline_resource = policy_resource(&baseline).unwrap();
-    assert!(
-        baseline_resource
-            .as_str()
-            .contains("model:vendor/model:effect=sha256:")
-    );
+
+    assert_eq!(baseline_resource.as_str(), "model:vendor/model");
     assert!(!baseline_resource.as_str().contains(secret));
-    assert!(!baseline_resource.as_str().contains("private setup"));
+
+    // A second turn carries a different message list; a grant written for the
+    // first turn has to keep matching, otherwise chat can never be unblocked.
     assert_eq!(
         baseline_resource,
-        policy_resource(&make(
-            "model-effect-2",
-            "vendor/model",
-            ModelRole::System,
-            secret,
-            64,
-            10_000,
-        ))
-        .unwrap(),
-        "observer identity and execution deadline are outside the approved semantic effect"
+        policy_resource(&make("model-effect-2", "vendor/model", "a later turn", 128)).unwrap()
     );
-    assert_eq!(
+    assert_ne!(
         baseline_resource,
-        policy_resource(&make(
-            "model-effect-new-deadline",
-            "vendor/model",
-            ModelRole::System,
-            secret,
-            64,
-            10_001,
-        ))
-        .unwrap(),
-        "approval retries may refresh the execution deadline"
+        policy_resource(&make("changed-model", "vendor/other", secret, 64)).unwrap()
     );
 
-    for changed in [
-        make(
-            "changed-model",
-            "vendor/other",
-            ModelRole::System,
-            secret,
-            64,
-            10_000,
-        ),
-        make(
-            "changed-role",
-            "vendor/model",
-            ModelRole::Assistant,
-            secret,
-            64,
-            10_000,
-        ),
-        make(
-            "changed-prompt",
-            "vendor/model",
-            ModelRole::System,
-            "private prompt bytes must never enter the policy resource!",
-            64,
-            10_000,
-        ),
-        make(
-            "changed-tokens",
-            "vendor/model",
-            ModelRole::System,
-            secret,
-            65,
-            10_000,
-        ),
-    ] {
-        assert_ne!(baseline_resource, policy_resource(&changed).unwrap());
-    }
+    assert_eq!(
+        grant_recovery(&baseline, &Ok(baseline_resource)),
+        "pam access grant model.infer --daemon --resource model:vendor/model"
+    );
 }
 
 #[test]
@@ -392,12 +329,20 @@ fn model_load_failure_degrades_to_serving_without_model() {
     fs::create_dir_all(&runtime).unwrap();
     let log = DaemonLog::open(&runtime);
 
-    let (loaded_model, model_worker) = degrade_after_model_load_failure(
+    let (surface, model_worker) = degrade_after_model_load_failure(
         &log,
         &RuntimeError::InitializationFailed("disk-full load failure"),
     );
 
-    assert!(loaded_model.is_none());
+    assert!(surface.loaded.is_none());
+    // The reason survives on the surface, not only in the log: `model.status`
+    // reports it for as long as the degraded daemon runs.
+    assert!(
+        surface
+            .load_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("disk-full load failure"))
+    );
     assert!(model_worker.is_none());
     let entries = log.recent(1);
     assert_eq!(entries.len(), 1);
@@ -555,7 +500,7 @@ fn denial_recovery_is_executable_only_for_shell_safe_exact_resources() {
     ];
     for (request, expected) in requests {
         assert_eq!(
-            grant_recovery(&request.capability, &policy_resource(&request)),
+            grant_recovery(&request, &policy_resource(&request)),
             expected
         );
     }
@@ -567,7 +512,7 @@ fn denial_recovery_is_executable_only_for_shell_safe_exact_resources() {
         IdempotencyKey::from("recovery-hostile"),
     );
     assert_eq!(
-        grant_recovery(&hostile.capability, &policy_resource(&hostile)),
+        grant_recovery(&hostile, &policy_resource(&hostile)),
         "run pam access grant with the denied capability and exact resource, quoted for your shell"
     );
 }
@@ -1922,7 +1867,7 @@ fn target_policy_resource_is_unambiguous_and_binds_the_expected_kind() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_approval_retry_refreshes_deadline_but_not_the_semantic_effect() {
+async fn model_approval_binds_the_model_not_the_conversation() {
     let runtime = test_runtime("model-effect-approval");
     let _ = fs::remove_dir_all(&runtime);
     let endpoint = LocalEndpoint::ipc(runtime.clone());
@@ -1974,15 +1919,13 @@ async fn model_approval_retry_refreshes_deadline_but_not_the_semantic_effect() {
     )
     .await;
 
-    let wrong_prompt = model_request("model-approval-wrong", "different prompt", first_deadline)
-        .with_approval(approval_id.clone());
-    assert_forbidden(&endpoint, &wrong_prompt).await;
-
+    // The approval binds `model:vendor/model`, so a later turn carrying a
+    // different message list and a refreshed deadline still redeems it.
     let refreshed_deadline = unix_time_ms().saturating_add(120_000);
-    let exact_retry = model_request("model-approval-exact", "exact prompt", refreshed_deadline)
+    let next_turn = model_request("model-approval-next", "a later turn", refreshed_deadline)
         .with_approval(approval_id.clone());
     assert!(matches!(
-        request_exchange(&endpoint, &exact_retry, TEST_TIMEOUT)
+        request_exchange(&endpoint, &next_turn, TEST_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -1992,7 +1935,7 @@ async fn model_approval_retry_refreshes_deadline_but_not_the_semantic_effect() {
 
     let consumed = model_request(
         "model-approval-consumed",
-        "exact prompt",
+        "a later turn",
         refreshed_deadline,
     )
     .with_approval(approval_id);
@@ -2800,12 +2743,26 @@ fn activity_event_summaries_drop_redacted_detail_and_retention() {
 
 #[test]
 fn model_status_reports_the_loaded_model_without_path_or_digest() {
-    let empty = model_status_result(None, Vec::new()).unwrap();
+    let empty = model_status_result(None, Vec::new(), None).unwrap();
     assert!(empty.loaded.is_none());
     assert!(empty.registered.is_empty());
+    assert!(empty.load_failure.is_none());
+
+    // A degraded daemon reports why nothing is loaded, and a successful load
+    // reports no failure at all.
+    let degraded = model_status_result(
+        None,
+        Vec::new(),
+        Some("model load failed: reason".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(
+        degraded.load_failure.as_deref(),
+        Some("model load failed: reason")
+    );
 
     let key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
-    let status = model_status_result(Some((&key, 42)), Vec::new()).unwrap();
+    let status = model_status_result(Some((&key, 42)), Vec::new(), None).unwrap();
     let encoded = encode(&status).unwrap();
     for secret_field in [&b"path"[..], b"digest", b"license"] {
         assert!(
@@ -2828,7 +2785,7 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
 
     // Nothing loaded: the catalog still surfaces every registered model, so a
     // registered-but-not-loaded model stays reachable.
-    let status = model_status_result(None, vec![on_deck.clone()]).unwrap();
+    let status = model_status_result(None, vec![on_deck.clone()], None).unwrap();
     assert!(status.loaded.is_none());
     assert_eq!(status.registered, vec![on_deck.clone()]);
 
@@ -2836,6 +2793,7 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
     let status = model_status_result(
         Some((&loaded_key, 42)),
         vec![loaded_entry.clone(), on_deck.clone()],
+        None,
     )
     .unwrap();
     assert_eq!(status.loaded, Some(loaded_entry.clone()));
@@ -2845,7 +2803,7 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
     );
 
     // Loaded but absent from the catalog: the serving model is never hidden.
-    let status = model_status_result(Some((&loaded_key, 42)), vec![on_deck.clone()]).unwrap();
+    let status = model_status_result(Some((&loaded_key, 42)), vec![on_deck.clone()], None).unwrap();
     assert_eq!(status.registered, vec![on_deck, loaded_entry]);
 }
 

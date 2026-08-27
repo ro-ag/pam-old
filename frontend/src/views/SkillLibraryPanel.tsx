@@ -12,11 +12,9 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { DAEMON_AUTHORITY, sameFence, withOperation } from "../bridge";
-import { ProjectPicker } from "../components/Shell";
 import type {
   CommandFence,
   PamBridge,
-  ProjectSummaryDto,
   SkillArtifactDto,
   SkillLibraryActionRequest,
   SkillLibraryActionResultDto,
@@ -288,8 +286,6 @@ function LibraryEntries({
 export interface SkillLibraryPanelProps {
   bridge: PamBridge;
   fence: CommandFence;
-  projects?: ProjectSummaryDto[];
-  onSelectProject?: (project: ProjectSummaryDto) => void;
   /** Called after a mutation verifies against refreshed durable state, so
    * sibling panels (the observed inventory) can invalidate themselves. */
   onMutated?: () => void;
@@ -298,7 +294,7 @@ export interface SkillLibraryPanelProps {
 // The library itself is global: entries, adoption, and installs run under
 // whichever authority the fence carries. Assignment — enable, materialize,
 // drift, resync — exists only for a project, so it is gated in place.
-export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject, onMutated }: SkillLibraryPanelProps) {
+export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPanelProps) {
   const projectScoped = fence.projectHandle !== DAEMON_AUTHORITY;
   const [entries, setEntries] = useState<SkillLibraryEntryDto[] | null>(null);
   const [selection, setSelection] = useState<SkillLibraryKeyDto | null>(null);
@@ -611,12 +607,7 @@ export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject, on
           <section aria-labelledby="skill-library-target-heading">
             <div className="skill-library-section-title"><div><HardDrives size={19} /><h3 id="skill-library-target-heading">Manage exact target</h3></div><span>{projectScoped ? "Every action is fenced to the active project generation." : "Assignment needs a project; the library above stays global."}</span></div>
             {!projectScoped ? (
-              <>
-                <p className="panel-empty">Enabling, materializing, and inspecting drift belong to one project. Pick a project to manage targets.</p>
-                {onSelectProject && projects && projects.length > 0 && (
-                  <ProjectPicker projects={projects} onSelect={onSelectProject} />
-                )}
-              </>
+              <p className="panel-empty">Enabling, materializing, and inspecting drift belong to one project scope, and PAM has none open. Everything above stays readable.</p>
             ) : selection ? (
               <>
                 <div className="skill-library-selectors">

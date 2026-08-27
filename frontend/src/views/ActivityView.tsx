@@ -9,7 +9,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { withDaemonOperation } from "../bridge";
+import { DAEMON_AUTHORITY, withDaemonOperation } from "../bridge";
 import type { ActivityDto, ActivityEventDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
 import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
@@ -87,12 +87,17 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
     ? modelStatus.loaded ?? modelStatus.registered[0] ?? null
     : null;
 
+  // Events carry the daemon's own project ID, not the GUI-local catalog
+  // handle, so the two never match; the shared identity is the canonical root
+  // the daemon remembers per project. Match on that, and degrade honestly.
   const projectLabel = (projectId: string | null, projectRoot: string | null) => {
-    if (projectId === null) return { text: "daemon" };
-    const known = projects.find((project) => project.handle === projectId);
-    if (known) return { text: known.name };
+    if (projectId === null || projectId === DAEMON_AUTHORITY) return { text: "daemon" };
+    const known = projectRoot === null
+      ? undefined
+      : projects.find((project) => project.location === projectRoot);
+    if (known) return { text: known.name, title: known.location };
     if (projectRoot) return { text: basename(projectRoot), title: projectRoot };
-    return { text: `${projectId.slice(0, 8)}…` };
+    return { text: `${projectId.slice(0, 8)}…`, title: projectId };
   };
 
   const eventRow = (event: ActivityEventDto) => {

@@ -142,27 +142,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .brand span { font-family: var(--font-editorial); font-size: 25px; letter-spacing: 0.02em; }
 .sidebar.is-collapsed .brand { margin-inline: 0; }
 .sidebar.is-collapsed .brand img { width: 34px; height: 34px; }
-.project-menu-wrap { width: 100%; }
-.project-switcher {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 14px;
-  width: 100%;
-  min-height: 34px;
-  height: 34px;
-  gap: var(--space-100);
-  align-items: center;
-  padding: 0 var(--space-100);
-  border: 1px solid rgba(255, 103, 79, 0.7);
-  border-radius: 7px;
-  cursor: pointer;
-  background: rgba(7, 29, 52, 0.82);
-  font-size: 12px;
-  text-align: left;
-}
-.project-switcher > svg { width: 16px; height: 16px; }
-.project-switcher:hover, .project-switcher[data-hovered], .project-switcher[data-pressed] { border-color: var(--coral); background: rgba(15, 40, 66, 0.92); }
-.project-switcher > svg:first-child { color: var(--coral); }
-.project-switcher span { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sand-400); }
 .health-dot--ready { background: var(--aqua); }
 .health-dot--busy { background: var(--coral); }
@@ -273,12 +252,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .project-header p span { color: var(--sand-400); }
 .project-header.compact { min-height: 68px; }
 .project-header.compact h1 { font-size: 34px; }
-.project-context-bar { display: grid; flex: 0 0 auto; gap: 4px; justify-items: end; min-width: 180px; max-width: 300px; padding-top: 6px; }
-.project-context-bar .project-menu-wrap { width: 100%; }
-.project-context-location { overflow: hidden; max-width: 100%; color: var(--sand-400); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.project-picker { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px; }
-.project-picker .button { display: inline-flex; gap: 8px; align-items: baseline; }
-.project-picker .button small { color: var(--sand-400); font-size: 11px; }
 }
 
 @layer product-views {
@@ -320,6 +293,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .access-icon { display: grid; width: calc(37px * var(--density)); height: calc(37px * var(--density)); place-items: center; border: 1px solid var(--line-warm); border-radius: 50%; color: var(--coral-soft); }
 .access-list article > div { display: grid; min-width: 0; gap: 4px; }
 .access-list p { margin: 0; overflow-wrap: anywhere; color: var(--sand-400); font-size: 13px; }
+.daemon-access-action { display: flex; gap: 10px; align-items: center; justify-content: end; }
 .state-pill { display: inline-flex; width: max-content; padding: 3px 8px; border: 1px solid rgba(236, 188, 151, 0.28); border-radius: 999px; color: var(--sand-400); font-size: 9px; font-weight: 850; letter-spacing: 0.04em; text-transform: uppercase; }
 .state-pill--allowed, .state-pill--observed, .state-pill--ready, .state-pill--succeeded, .state-pill--healthy { border-color: rgba(89, 225, 213, 0.34); color: var(--aqua); }
 .state-pill--policy-gated, .state-pill--elevated { border-color: rgba(236, 188, 151, 0.4); color: var(--sand-200); }
@@ -340,8 +314,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .connector-confirm { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--sand-400); font-size: 12px; }
 .connector-note { margin: 0; color: var(--sand-400); font-size: 12px; }
 .canvas > * + .panel { margin-top: 12px; }
-.project-picker { display: grid; gap: 6px; padding: 14px 16px; }
-.project-picker-location { margin: 0; color: var(--sand-400); font-size: 12px; }
 .project-detail { margin-top: 12px; }
 .project-detail-panel { padding: 14px 16px; }
 .project-detail-view { display: block; min-width: 0; }
@@ -584,7 +556,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   background: #06182c;
   box-shadow: 0 20px 48px var(--shadow);
 }
-.project-menu { display: grid; max-height: inherit; gap: 3px; padding: 6px; overflow: auto; outline: none; }
 .project-menu-item {
   display: grid;
   min-height: 48px;
@@ -785,7 +756,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   .toolbar { height: auto; min-height: 44px; flex-wrap: wrap; padding: var(--space-050) var(--space-100); }
   .project-header p { overflow-wrap: anywhere; flex-wrap: wrap; }
   .project-header.compact { flex-wrap: wrap; }
-  .project-context-bar { min-width: 0; max-width: 100%; justify-items: start; padding-top: 0; }
   .skill-audit-empty { align-items: stretch; flex-direction: column; }
   .skill-audit-empty > svg { align-self: center; }
   .skill-audit-empty .button { width: 100%; }
@@ -1042,20 +1012,6 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .brand { height: 48px; margin: 0 6px 10px; gap: 10px; }
 .brand img { width: 32px; height: 32px; }
 .brand span { color: var(--pam-chrome-text); font-family: var(--font-display); font-size: 22px; font-weight: 700; letter-spacing: -0.03em; }
-.project-switcher {
-  min-height: max(28px, calc(40px * var(--density)));
-  height: max(28px, calc(40px * var(--density)));
-  padding: 0 12px;
-  border: 0;
-  border-radius: 10px;
-  color: var(--pam-chrome-text);
-  background: transparent;
-  font-size: 13px;
-  transition: background 200ms ease;
-}
-.project-switcher:hover, .project-switcher[data-state="open"] { background: var(--pam-chrome-raised); }
-.project-switcher > svg:first-child { color: var(--pam-chrome-accent); }
-.project-switcher > svg:last-child { color: var(--pam-chrome-muted); }
 .project-monogram { width: 38px; height: 38px; border: 0; border-radius: 10px; color: var(--pam-chrome-accent); background: var(--pam-chrome-raised); }
 .primary-nav { gap: 2px; margin-top: 14px; }
 .nav-item {
@@ -1481,7 +1437,7 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
   .app-shell, .sidebar, .workspace, .toolbar, .canvas, .panel, .flow-workspace, .project-menu-popover, .drawer-modal, .drawer, .command-modal, .command-dialog, .startup-state-card { color: CanvasText; background: Canvas; forced-color-adjust: auto; }
   .atmosphere, .app-shell::after { display: none; }
   .status-dot, .health-dot { color: Highlight; background: Highlight; }
-  .button, .nav-item, .project-switcher, .project-menu-popover, .drawer-modal, .command-modal, .command-input, .evidence-handles button, .flow-list button { border: 1px solid ButtonText; }
+  .button, .nav-item, .project-menu-popover, .drawer-modal, .command-modal, .command-input, .evidence-handles button, .flow-list button { border: 1px solid ButtonText; }
   .workspace, .panel, .flow-workspace, .project-menu-popover, .drawer-modal, .command-modal { border-color: CanvasText; }
   .nav-item.is-active, .flow-list button.is-active { color: HighlightText; background: Highlight; }
   .project-menu-item:is([data-focused], [data-selected]), .command-option:is([data-focused], [data-selected]) { color: HighlightText; background: Highlight; }
@@ -1523,7 +1479,9 @@ label.model-import-consent { display: flex; align-items: center; gap: 8px; color
 .model-preset-item { display: grid; grid-template-columns: minmax(0, 1fr) 18px; gap: 8px; align-items: center; }
 .model-preset-item > span:first-child { display: grid; min-width: 0; gap: 3px; }
 .model-preset-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-preset-item small { color: var(--pam-chrome-muted); font-size: 11px; }
+/* The fit reason and the uncalibrated notice are full sentences: let them
+   wrap instead of inheriting the menu's single-line ellipsis. */
+.model-preset-item small { color: var(--pam-chrome-muted); font-size: 11px; overflow: visible; text-overflow: clip; white-space: normal; }
 .model-fit-warn { margin: 0; color: var(--pam-danger); font-size: 11px; }
 .model-preset-summary { display: grid; gap: calc(8px * var(--density)); padding: calc(10px * var(--density)) 14px; border: 1px solid var(--pam-line); border-radius: 10px; background: var(--pam-surface-raised); }
 .model-preset-summary .model-note { margin: 0; overflow-wrap: anywhere; }

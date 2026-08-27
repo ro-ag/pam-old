@@ -559,7 +559,7 @@ describe("model runtime panel", () => {
     expect(props.onModelImported).not.toHaveBeenCalled();
   });
 
-  it("lists the curated presets from the fixture, with a fit hint per option", async () => {
+  it("tiers the curated presets by host memory, showing what this Mac cannot run as disabled", async () => {
     const props = await controlCenterProps("model-none");
     render(<ControlCenterView {...props} />);
 
@@ -567,12 +567,24 @@ describe("model runtime panel", () => {
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
 
     const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(11);
     expect(within(menu).getByText("Qwen3 Coder 30B — minimum")).toBeInTheDocument();
-    expect(within(menu).getByText("Qwen3 Coder 30B — balanced")).toBeInTheDocument();
-    expect(within(menu).getByText("Qwen3 Coder 30B — high fidelity")).toBeInTheDocument();
-    // The fixture host is a 32 GB Mac — PAM's supported minimum — and every
-    // curated quant fits it.
-    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(3);
+    expect(within(menu).getByText("Devstral Small 2 24B — balanced")).toBeInTheDocument();
+    expect(within(menu).getByText("GPT-OSS 120B — full precision")).toBeInTheDocument();
+
+    // The fixture host is a 32 GB Mac — PAM's supported minimum — which can
+    // devote 23.5 GB to a model. Six quants fit; the rest stay visible but
+    // unselectable, each naming both numbers.
+    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(6);
+    const tooBig = within(menu).getByRole("menuitemradio", { name: /Qwen3 Coder 30B — high fidelity/ });
+    expect(tooBig).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(tooBig).getByText("Needs 25.1 GB; this Mac can devote 23.5 GB to a model."),
+    ).toBeInTheDocument();
+
+    // Only the three original Qwen quants are measured; every other preset
+    // says so before tens of GB move.
+    expect(within(menu).getAllByText(/Not in PAM's calibrated set/)).toHaveLength(8);
     expect(screen.queryByText(/of memory or more; this Mac reports/)).not.toBeInTheDocument();
   });
 
@@ -605,7 +617,7 @@ describe("model runtime panel", () => {
     await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ }));
 
     expect(within(panel).getByText("qwen/qwen3-coder-30b-a3b-instruct-q4_k_s")).toBeInTheDocument();
-    expect(within(panel).getByText(/Apache License, Version 2\.0/)).toBeInTheDocument();
+    expect(within(panel).getByText(/is distributed under the Apache-2.0 license/)).toBeInTheDocument();
     const downloadButton = within(panel).getByRole("button", { name: "Download" });
     expect(downloadButton).toBeDisabled();
 
@@ -613,27 +625,43 @@ describe("model runtime panel", () => {
     expect(downloadButton).toBeEnabled();
   });
 
-  it("disables download and warns below the supported minimum on an undersized Mac", async () => {
+  it("warns below the supported minimum and disables every preset an undersized Mac cannot run", async () => {
     const props = await controlCenterProps("model-none");
-    // A 24 GB machine: below PAM's supported 32 GB minimum.
+    // A 24 GB machine: below PAM's supported 32 GB minimum. Its runtime
+    // ceiling leaves 15.3 GB for a model — only the smallest preset fits.
+    const UNDERSIZED_BUDGET_BYTES = 15_300_820_992;
     vi.spyOn(props.bridge, "hostMemory").mockResolvedValue({
       totalBytes: 25_769_803_776,
       supportedMinimumBytes: 34_359_738_368,
+    });
+    const curatedPresets = props.bridge.modelPresets.bind(props.bridge);
+    vi.spyOn(props.bridge, "modelPresets").mockImplementation(async (fence) => {
+      const dto = await curatedPresets(fence);
+      return {
+        hostModelBudgetBytes: UNDERSIZED_BUDGET_BYTES,
+        presets: dto.presets.map((preset) => ({
+          ...preset,
+          fitsHost: preset.expectedSizeBytes <= UNDERSIZED_BUDGET_BYTES,
+        })),
+      };
     });
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(
-      await within(panel).findByText(/32 GB of memory or more; this Mac reports 24 GB/),
+      await within(panel).findByText(
+        /32 GB of memory or more; this Mac reports 24 GB, leaving 15.3 GB for a model after the OS reserve/,
+      ),
     ).toBeInTheDocument();
     await userEvent.click(await within(panel).findByRole("button", { name: "Choose a model" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Qwen3 Coder 30B — high fidelity/ }));
 
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(1);
+    const tooBig = within(menu).getByRole("menuitemradio", { name: /Qwen3 Coder 30B — minimum/ });
+    expect(tooBig).toHaveAttribute("aria-disabled", "true");
     expect(
-      within(panel).getByText(/Needs ~31 GB memory; this Mac has 24 GB/),
+      within(tooBig).getByText("Needs 17.5 GB; this Mac can devote 15.3 GB to a model."),
     ).toBeInTheDocument();
-    await userEvent.click(within(panel).getByLabelText(/I accept the .* license/));
-    expect(within(panel).getByRole("button", { name: "Download" })).toBeDisabled();
   });
 
   it("downloads a preset with polled progress, then registers it", async () => {
@@ -762,6 +790,8 @@ describe("model runtime panel", () => {
       status: "ok",
       loaded: { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
       registered: [],
+      loadFailure: null,
+      loading: false,
     };
     rerender(<ControlCenterView {...props} modelStatus={restarted} />);
 
@@ -850,9 +880,63 @@ describe("model runtime panel", () => {
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
   });
 
+  // Issue #32: the daemon keeps serving without the model and reports why.
+  // The reason has to live in the panel, not only in a 2.6 s toast.
+  it("renders the daemon's model load failure inline and clears it once a model loads", async () => {
+    const props = await controlCenterProps("solved");
+    const registered = [{ modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 }];
+    props.modelStatus = {
+      status: "ok",
+      loaded: null,
+      registered,
+      loadFailure:
+        "model load failed; the daemon will serve without a model: registered model does not match the calibrated macOS runtime profile",
+      loading: false,
+    };
+    const { rerender } = render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const alert = within(panel).getByRole("alert");
+    expect(alert).toHaveTextContent(/calibrated macOS runtime profile/);
+    // Still startable: the daemon is up, the catalog is reachable.
+    expect(
+      within(panel).getAllByRole("button", { name: "Restart PAM with this model" }).length,
+    ).toBeGreaterThan(0);
+
+    rerender(
+      <ControlCenterView
+        {...props}
+        modelStatus={{ status: "ok", loaded: registered[0], registered, loadFailure: null, loading: false }}
+      />,
+    );
+    expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // Issue #34: a large model takes minutes to hash and map, and the daemon
+  // answers nothing at all while it does. The panel must say "loading", not
+  // leave the user with a silent unreachable.
+  it("reports a model still loading instead of an unreachable runtime", async () => {
+    const props = await controlCenterProps("offline");
+    props.modelStatus = {
+      status: "ok",
+      loaded: null,
+      registered: [{ modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 39_200_000_000 }],
+      loadFailure: null,
+      loading: true,
+    };
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("loading")).toBeInTheDocument();
+    expect(within(panel).getByText(/the model is still loading/)).toBeInTheDocument();
+    expect(within(panel).queryByText("unreachable")).not.toBeInTheDocument();
+    // A load in flight is not a failure: no alert, no "PAM is paused" copy.
+    expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("marks the runtime unreachable while PAM is paused with no registered model", async () => {
     const props = await controlCenterProps("offline");
-    props.modelStatus = { status: "ok", loaded: null, registered: [] };
+    props.modelStatus = { status: "ok", loaded: null, registered: [], loadFailure: null, loading: false };
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });

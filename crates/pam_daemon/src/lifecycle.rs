@@ -76,8 +76,8 @@ use pam_protocol::{
     ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
     DaemonLogsResult, DaemonStatsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
     EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity,
-    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
-    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
+    ModelFinishReason, ModelGenerationResult, ModelRole, ModelStatusResult, ModelSummary,
+    ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
     ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
     RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
@@ -146,6 +146,15 @@ pub(super) struct LoadedModelService {
     key: ModelKey,
     size_bytes: u64,
     service: ModelService,
+}
+
+/// This daemon's model surface for its whole lifetime: the loaded service
+/// when the requested model came up, and otherwise why it did not. Both are
+/// `None` when no model was requested at all.
+#[derive(Clone, Default)]
+pub(super) struct ModelSurface {
+    pub(super) loaded: Option<LoadedModelService>,
+    pub(super) load_failure: Option<String>,
 }
 
 enum Outbound {
@@ -403,7 +412,7 @@ where
     );
     let mut server = ServerTransport::bind(&config.endpoint).await?;
     connectors.warm(log.clone());
-    let (loaded_model, model_worker) =
+    let (model_surface, model_worker) =
         start_model_service(&store, config.model.clone(), &log).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
     let (scheduler_tx, scheduler_rx) = mpsc::channel::<()>(SCHEDULER_CAPACITY);
@@ -418,7 +427,7 @@ where
     ));
     let mut subscriptions = HashMap::<RequestId, Vec<Subscription>>::new();
 
-    let ready_message = loaded_model.as_ref().map_or_else(
+    let ready_message = model_surface.loaded.as_ref().map_or_else(
         || format!("PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION})."),
         |model| {
             format!(
@@ -458,7 +467,7 @@ where
                 let request_outbound = outbound_tx.clone();
                 let request_scheduler = scheduler_tx.clone();
                 let request_brief_provider = Arc::clone(&brief_provider);
-                let request_model = loaded_model.clone();
+                let request_model = model_surface.clone();
                 let request_flow_preflight_admission = Arc::clone(&flow_preflight_admission);
                 let request_connectors = connectors.clone();
                 let request_log = log.clone();
@@ -555,9 +564,9 @@ async fn start_model_service(
     store: &Store,
     key: Option<ModelKey>,
     log: &DaemonLog,
-) -> Result<(Option<LoadedModelService>, Option<ModelWorker>), DaemonError> {
+) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
     let Some(key) = key else {
-        return Ok((None, None));
+        return Ok((ModelSurface::default(), None));
     };
     // Store failures are misconfiguration or integrity problems and stay
     // fatal; only an actual runtime load failure degrades below.
@@ -575,11 +584,14 @@ async fn start_model_service(
     let runtime: Arc<dyn ModelRuntime> = Arc::new(runtime);
     let (service, worker) = ModelService::start(runtime);
     Ok((
-        Some(LoadedModelService {
-            key,
-            size_bytes,
-            service: service.clone(),
-        }),
+        ModelSurface {
+            loaded: Some(LoadedModelService {
+                key,
+                size_bytes,
+                service: service.clone(),
+            }),
+            load_failure: None,
+        },
         Some(worker),
     ))
 }
@@ -589,9 +601,9 @@ async fn start_model_service(
     store: &Store,
     key: Option<ModelKey>,
     log: &DaemonLog,
-) -> Result<(Option<LoadedModelService>, Option<ModelWorker>), DaemonError> {
+) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
     let Some(key) = key else {
-        return Ok((None, None));
+        return Ok((ModelSurface::default(), None));
     };
     let _ = store.model(key).await?;
     Ok(degrade_after_model_load_failure(
@@ -603,14 +615,24 @@ async fn start_model_service(
 /// A model that cannot load must not stop the daemon: log the full error —
 /// the GUI captures daemon stderr and the CLI prints it — and keep serving
 /// without a model (inference answers `NotFound`, status reports none loaded).
+///
+/// The reason is also kept on the surface so `model.status` can report it for
+/// as long as this daemon runs: a log line the GUI never reads back is not a
+/// report.
 pub(super) fn degrade_after_model_load_failure(
     log: &DaemonLog,
     error: &RuntimeError,
-) -> (Option<LoadedModelService>, Option<ModelWorker>) {
+) -> (ModelSurface, Option<ModelWorker>) {
     let message = format!("model load failed; the daemon will serve without a model: {error}");
     eprintln!("{message}");
-    log.error(message);
-    (None, None)
+    log.error(message.clone());
+    (
+        ModelSurface {
+            loaded: None,
+            load_failure: Some(message),
+        },
+        None,
+    )
 }
 
 async fn deliver_outbound(
@@ -786,7 +808,7 @@ async fn handle_incoming(
     outbound: mpsc::Sender<Outbound>,
     scheduler: mpsc::Sender<()>,
     brief_provider: Arc<dyn BriefProvider>,
-    loaded_model: Option<LoadedModelService>,
+    model: ModelSurface,
     authentication_required: bool,
     policy_required: bool,
     flow_preflight_admission: Arc<Semaphore>,
@@ -1046,7 +1068,7 @@ async fn handle_incoming(
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
         (Capability::ModelStatus, RequestPayload::ModelStatus) => {
-            handle_model_status(&request, incoming, &store, &outbound, loaded_model.as_ref()).await
+            handle_model_status(&request, incoming, &store, &outbound, &model).await
         }
         (Capability::ConnectorList, RequestPayload::ConnectorList) => {
             handle_connector_list(&request, incoming, &store, &outbound, &connectors).await
@@ -1140,7 +1162,7 @@ async fn handle_incoming(
                 &store,
                 &outbound,
                 brief_provider.as_ref(),
-                loaded_model.as_ref(),
+                model.loaded.as_ref(),
             )
             .await
         }
@@ -1153,7 +1175,9 @@ async fn handle_incoming(
 /// audit then record the "daemon" project, so grants recorded against it apply
 /// globally. Every other capability needs a real project and rejects the
 /// reserved scope before dispatch. None of these handlers read project state;
-/// `daemon.status` only counts the scope's (always empty) request queue.
+/// `daemon.status` only counts the scope's (always empty) request queue, and
+/// `network.diagnostics` observes this host's TLS and proxy configuration,
+/// which belongs to the daemon process rather than to any project.
 pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool {
     matches!(
         capability,
@@ -1165,6 +1189,7 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::CallerList
             | Capability::ModelStatus
             | Capability::ModelInfer
+            | Capability::NetworkDiagnostics
             | Capability::ConnectorList
             | Capability::ConnectorConfigure
             | Capability::ConnectorTest
@@ -1539,14 +1564,12 @@ pub(super) fn policy_resource(
             offset,
             length,
         } => format!("evidence:{handle}:offset={offset}:length={length}"),
-        RequestPayload::ModelInfer {
-            model,
-            messages,
-            max_output_tokens,
-        } => {
-            let digest = model_infer_effect_digest(model, messages, *max_output_tokens);
-            format!("model:{model}:effect={digest}")
-        }
+        // Stable across turns on purpose: a per-conversation digest made every
+        // chat message a new resource, so no grant could ever match twice and
+        // the denial's own recovery hint was un-followable. The cost is that a
+        // `model.infer` approval binds to the model, not to one exact
+        // conversation -- a chat message can never be pre-approved anyway.
+        RequestPayload::ModelInfer { model, .. } => format!("model:{model}"),
         // Flow execution requires an exact worktree fingerprint and is prepared by
         // `handle_incoming` before policy evaluation.
         RequestPayload::FlowRun { .. } => return Err(InvalidResourceName),
@@ -1575,36 +1598,6 @@ fn target_policy_resource(
         let _ = write!(resource, ":after={after_sequence}");
     }
     resource
-}
-
-fn model_infer_effect_digest(
-    model: &str,
-    messages: &[ModelMessage],
-    max_output_tokens: u32,
-) -> ContentDigest {
-    let mut hasher = Sha256::new();
-    hash_effect_field(&mut hasher, b"pam-model-infer-effect-v1");
-    hash_effect_field(&mut hasher, model.as_bytes());
-    hasher.update(
-        u64::try_from(messages.len())
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
-    for message in messages {
-        hasher.update([match message.role() {
-            ModelRole::System => 0,
-            ModelRole::User => 1,
-            ModelRole::Assistant => 2,
-        }]);
-        hash_effect_field(&mut hasher, message.content().as_bytes());
-    }
-    hasher.update(max_output_tokens.to_le_bytes());
-    ContentDigest::from_sha256(hasher.finalize().into())
-}
-
-fn hash_effect_field(hasher: &mut Sha256, bytes: &[u8]) {
-    hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    hasher.update(bytes);
 }
 
 fn authorization_failure(
@@ -1647,7 +1640,7 @@ fn authorization_failure_with_resource(
         AuthorizationOutcome::Denied => (
             FailureCode::Forbidden,
             "project policy denied this capability".to_owned(),
-            Some(grant_recovery(&request.capability, resource)),
+            Some(grant_recovery(request, resource)),
             None,
         ),
         AuthorizationOutcome::ApprovalRequired {
@@ -1773,16 +1766,23 @@ fn typed_flow_approval_recovery(
 }
 
 pub(super) fn grant_recovery(
-    capability: &Capability,
+    request: &RequestEnvelope,
     resource: &Result<ResourceName, InvalidResourceName>,
 ) -> String {
-    let capability = capability.policy_name();
+    let capability = request.capability.policy_name();
+    // Grants are looked up by exact project id, so a denial on the reserved
+    // daemon scope is only fixed by a grant written there.
+    let scope = if request.project_id.is_daemon_scope() {
+        " --daemon"
+    } else {
+        ""
+    };
     let Ok(resource) = resource else {
         return "review the denied capability and resource before adding a grant".to_owned();
     };
     if shell_safe_policy_argument(capability) && shell_safe_policy_argument(resource.as_str()) {
         format!(
-            "pam access grant {capability} --resource {}",
+            "pam access grant {capability}{scope} --resource {}",
             resource.as_str()
         )
     } else {
@@ -2578,7 +2578,7 @@ async fn handle_model_status(
     incoming: IncomingRequest,
     store: &Store,
     outbound: &mpsc::Sender<Outbound>,
-    loaded: Option<&LoadedModelService>,
+    model: &ModelSurface,
 ) -> Result<(), DaemonError> {
     let catalog = match store.list_models().await {
         Ok(catalog) => catalog,
@@ -2593,8 +2593,9 @@ async fn handle_model_status(
         .collect::<Result<Vec<_>, _>>();
     let message = match registered.and_then(|registered| {
         model_status_result(
-            loaded.map(|model| (&model.key, model.size_bytes)),
+            model.loaded.as_ref().map(|it| (&it.key, it.size_bytes)),
             registered,
+            model.load_failure.clone(),
         )
     }) {
         Ok(result) => ServerMessage::Result(success_result(
@@ -3077,6 +3078,7 @@ fn bounded_connector_detail(mut detail: String) -> String {
 pub(super) fn model_status_result(
     loaded: Option<(&ModelKey, u64)>,
     registered: Vec<ModelSummary>,
+    load_failure: Option<String>,
 ) -> Result<ModelStatusResult, pam_protocol::ProtocolContractError> {
     let loaded = loaded
         .map(|(key, size_bytes)| ModelSummary::new(key.id(), size_bytes))
@@ -3089,7 +3091,11 @@ pub(super) fn model_status_result(
     {
         registered.push(loaded.clone());
     }
-    Ok(ModelStatusResult { registered, loaded })
+    Ok(ModelStatusResult {
+        registered,
+        loaded,
+        load_failure,
+    })
 }
 
 pub(super) fn protocol_caller_summary(registration: CallerRegistration) -> CallerSummary {

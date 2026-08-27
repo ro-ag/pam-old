@@ -147,23 +147,21 @@ describe("daemon observatory", () => {
     expect(screen.queryByText(/did not match the latest project operation/)).not.toBeInTheDocument();
   });
 
-  it("keeps project browsing available from the Access context bar while the daemon is offline", async () => {
-    const user = userEvent.setup();
+  it("keeps Access global and project-free while the daemon is offline", async () => {
     const bridge = fixtureBridge("offline");
     const activate = vi.spyOn(bridge, "activateProject");
     render(<App bridge={bridge} initialView="access" />);
     await screen.findByRole("heading", { name: "Access" });
 
-    const switcher = await screen.findByRole("button", { name: "payments-api" });
-    switcher.focus();
-    await user.keyboard("{ArrowDown}");
-    const menu = await screen.findByRole("menu");
-    expect(menu).toHaveAttribute("aria-label", "Registered projects");
-    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(3);
+    // No switcher, no menu, no project name anywhere in the view canvas.
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByText("/Users/dev/payments-api")).not.toBeInTheDocument();
+    expect(activate).not.toHaveBeenCalled();
 
-    await user.click(within(menu).getByRole("menuitemradio", { name: /ledger-web/ }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching ledger-web");
-    expect(activate).toHaveBeenCalledTimes(1);
+    // The daemon-scope grants and the observed boundary both stay readable.
+    expect(await screen.findByRole("heading", { name: "Capabilities this window uses" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Authorized capabilities" })).toBeInTheDocument();
   });
 
   it("keeps a calm paused Activity view while the daemon is offline", async () => {
@@ -216,11 +214,15 @@ describe("daemon observatory", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Project queue" })).not.toBeInTheDocument());
   });
 
-  it("renders the available Access facts supplied by the active project", async () => {
-    render(<App bridge={fixtureBridge("access-available")} initialView="access" />);
+  it("renders the observed boundary over the daemon authority with a project active", async () => {
+    const bridge = fixtureBridge("access-available");
+    const read = vi.spyOn(bridge, "daemonAccessConfig");
+    render(<App bridge={bridge} initialView="access" />);
 
     expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
-    expect(screen.getByText("Model access")).toBeInTheDocument();
+    expect(await screen.findByText("Model access")).toBeInTheDocument();
+    // Daemon authority, and a fresh operation per call so the replay guard holds.
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ projectHandle: "daemon", generation: "daemon" }));
     expect(screen.getByText("Access policy")).toBeInTheDocument();
     expect(screen.getByText("Certificates")).toBeInTheDocument();
     expect(screen.getByText("Network configuration")).toBeInTheDocument();
@@ -252,37 +254,39 @@ describe("daemon observatory", () => {
     expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
     expect(screen.getByText("Access policy")).toBeInTheDocument();
     expect(screen.getByText("policy-gated")).toBeInTheDocument();
-    expect(screen.getByText(/Network diagnostics are blocked by the selected project's policy/)).toBeInTheDocument();
+    expect(screen.getByText(/Network diagnostics are blocked by policy for this PAM window/)).toBeInTheDocument();
     expect(screen.queryByText("Certificates")).not.toBeInTheDocument();
   });
 
-  it("removes the prior project audit in the project-switch commit", async () => {
-    const priorAuditSummary =
+  it("surfaces a failed observed-boundary read without losing the daemon-scope grants", async () => {
+    const bridge = fixtureBridge();
+    bridge.daemonAccessConfig = vi.fn(async () => { throw new Error("PAM could not read the observed boundary."); });
+    render(<App bridge={bridge} initialView="access" />);
+
+    expect(await screen.findByRole("heading", { name: "Capabilities this window uses" })).toBeInTheDocument();
+    expect(await screen.findByText("PAM could not read the observed boundary.")).toBeInTheDocument();
+    expect(screen.queryByText("Certificates")).not.toBeInTheDocument();
+  });
+
+  it("keeps Skills global: the audit renders with no project switcher to change it", async () => {
+    const auditSummary =
       "The always-loaded footprint is usable, with one overlapping review pair and one stale candidate to inspect.";
     const user = userEvent.setup();
-    const bridge = fixtureBridge();
-    const loadFirstAudit = bridge.loadSkillAudit.bind(bridge);
-    bridge.loadSkillAudit = vi
-      .fn()
-      .mockImplementationOnce(loadFirstAudit)
-      .mockImplementation(() => new Promise<never>(() => undefined));
-    render(<App bridge={bridge} initialView="skills" />);
+    render(<App bridge={fixtureBridge()} initialView="skills" />);
 
     await user.click(await screen.findByRole("tab", { name: "Audit" }));
-    expect(await screen.findByText(priorAuditSummary)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "payments-api" }));
-    await user.click(await screen.findByRole("menuitemradio", { name: /ledger-web/ }));
+    expect(await screen.findByText(auditSummary)).toBeInTheDocument();
 
-    // Activation stays on the Skills view; the project-keyed remount drops
-    // the prior project's audit.
-    expect(await screen.findByText("Now watching ledger-web")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText(priorAuditSummary)).not.toBeInTheDocument());
+    // Nothing in the view canvas scopes, names, or switches a project.
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ledger-web" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 
+    // Navigating away and back keeps the same global audit in view.
+    await user.click(screen.getByRole("button", { name: "Access" }));
     await user.click(screen.getByRole("button", { name: "Skills" }));
-    expect(await screen.findByRole("button", { name: "ledger-web" })).toBeInTheDocument();
     await user.click(await screen.findByRole("tab", { name: "Audit" }));
-    expect(screen.queryByText(priorAuditSummary)).not.toBeInTheDocument();
-    expect(await screen.findByText("Loading latest skill audit…")).toBeInTheDocument();
+    expect(await screen.findByText(auditSummary)).toBeInTheDocument();
   });
 
   it("activates only the newest overlay and restores its underlay and exact openers", async () => {
@@ -425,56 +429,6 @@ describe("daemon observatory", () => {
     }
   });
 
-  // Radix moves menu focus through a requestAnimationFrame chain that jsdom
-  // starves under parallel-suite CPU contention; the test is deterministic in
-  // isolation, so environmental misses retry instead of weakening assertions.
-  it("supports the complete keyboard project-menu contract from the Access view", { retry: 2 }, async () => {
-    const user = userEvent.setup();
-    render(<App bridge={fixtureBridge()} initialView="access" />);
-    await screen.findByRole("heading", { name: "Access" });
-
-    const switcher = await screen.findByRole("button", { name: "payments-api" });
-    switcher.focus();
-    await user.keyboard("{ArrowDown}");
-    // Radix re-renders the portal while focus settles, so every assertion
-    // re-queries instead of holding element references across keystrokes.
-    const item = (name: RegExp) => screen.getByRole("menuitemradio", { name });
-    await screen.findByRole("menuitemradio", { name: /payments-api/ });
-    await waitFor(() => expect(item(/payments-api/)).toHaveFocus(), { timeout: 4000 });
-    expect(item(/payments-api/)).toHaveAttribute("tabindex", "0");
-    expect(item(/ledger-web/)).toHaveAttribute("tabindex", "-1");
-
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(item(/ledger-web/)).toHaveFocus(), { timeout: 4000 });
-    expect(item(/ledger-web/)).toHaveAttribute("tabindex", "0");
-    expect(item(/payments-api/)).toHaveAttribute("tabindex", "-1");
-    await user.keyboard("{End}");
-    await waitFor(() => expect(item(/^docs/)).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard("{Home}");
-    await waitFor(() => expect(item(/payments-api/)).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(switcher).toHaveFocus();
-
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(item(/payments-api/)).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(item(/ledger-web/)).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard("{Enter}");
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching ledger-web");
-
-    // Activation stays on the Access view, where the switcher now shows ledger-web.
-    await user.click(screen.getByRole("button", { name: "Access" }));
-    const ledgerSwitcher = await screen.findByRole("button", { name: "ledger-web" });
-    ledgerSwitcher.focus();
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /ledger-web/ })).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard("{End}");
-    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /^docs/ })).toHaveFocus(), { timeout: 4000 });
-    await user.keyboard(" ");
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching docs");
-  });
-
   it("filters and runs command-palette actions with keyboard focus restoration", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge()} />);
@@ -594,32 +548,21 @@ describe("daemon observatory", () => {
     expect(screen.queryByText("Exact request approved")).not.toBeInTheDocument();
   });
 
-  it("discards stale command success and its toast when project responses reverse", async () => {
-    const user = userEvent.setup();
+  it("discards a command response that answers a different operation, toast included", async () => {
     const bridge = fixtureBridge();
-    const activate = bridge.activateProject.bind(bridge);
-    const ledgerGate = deferred();
-    const docsGate = deferred();
-    bridge.activateProject = vi.fn(async (handle, operationId) => {
-      if (handle.includes("2222")) await ledgerGate.promise;
-      if (handle.includes("3333")) await docsGate.promise;
-      return activate(handle, operationId);
+    const nativeRefresh = bridge.refreshProject.bind(bridge);
+    bridge.refreshProject = vi.fn(async (fence) => {
+      const response = await nativeRefresh(fence);
+      // A snapshot answering some other project operation must never commit.
+      return { ...response, fence: { ...response.fence, operationId: "stale-operation" } };
     });
     render(<App bridge={bridge} initialView="access" />);
     await screen.findByRole("heading", { name: "Access" });
-    await screen.findByRole("button", { name: "payments-api" });
 
-    await user.click(screen.getByRole("button", { name: "payments-api" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /ledger-web/ }));
-    await user.click(screen.getByRole("button", { name: "payments-api" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /^docs/ }));
-    await act(async () => { docsGate.resolve(); });
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching docs");
-    // The docs activation wins and the user stays on the Access view.
-    expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
 
-    await act(async () => { ledgerGate.resolve(); });
-    expect(screen.queryByText("Now watching ledger-web")).not.toBeInTheDocument();
+    expect(await screen.findByText(/did not match the latest project operation/)).toBeInTheDocument();
+    expect(screen.queryByText("Project state refreshed")).not.toBeInTheDocument();
   });
 
   it("opens, validates, and durably saves a bounded flow document", async () => {
@@ -741,32 +684,36 @@ describe("daemon observatory", () => {
     expect(screen.getByText(/Valid · 1 dry-run steps/)).toBeInTheDocument();
   });
 
-  it("discards a flow document opened under the previous project authority", async () => {
+  it("keeps the flow library global: no project switcher, no project-scoped fence", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge();
-    const originalOpenFlow = bridge.openFlow.bind(bridge);
-    const gate = deferred();
-    bridge.openFlow = vi.fn(async (fence, flowHandle) => {
-      await gate.promise;
-      return originalOpenFlow(fence, flowHandle);
-    });
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
     render(<App bridge={bridge} initialView="control-center" />);
     await screen.findByRole("button", { name: "Refresh project" });
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await screen.findByRole("region", { name: "Flow workspace" });
     await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
 
-    await user.click(screen.getByRole("button", { name: "payments-api" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /ledger-web/ }));
-    expect(await screen.findByText("Now watching ledger-web")).toBeInTheDocument();
+    // The Flows view carries no project identity: nothing to select, nothing to scope.
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+
+    // Access and Skills carry no switcher either, so nothing can re-scope the
+    // library behind its back; a round trip leaves it exactly as it was.
+    await user.click(screen.getByRole("button", { name: "Access" }));
+    await screen.findByRole("heading", { name: "Access" });
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Skills" }));
+    await screen.findByRole("heading", { name: "Skills" });
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await screen.findByRole("region", { name: "Flow workspace" });
-    expect(await screen.findByRole("heading", { name: "Select a definition" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /after-merge-checks/ })).toBeInTheDocument();
 
-    await act(async () => { gate.resolve(); });
-    const source = screen.getByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement;
-    expect(source).toBeDisabled();
-    expect(source.value).toBe("");
+    expect(loadWorkspace.mock.calls.length).toBeGreaterThan(0);
+    for (const [requestFence] of loadWorkspace.mock.calls) {
+      expect(requestFence).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    }
   });
 
   it("shows an inline retry when the flow workspace load fails", async () => {
@@ -1041,17 +988,19 @@ describe("global-first workspace", () => {
     expect(callers.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 
-  it("shows the discovery hint in every project-shaped view with an empty catalog", async () => {
+  it("shows no project-shaped placeholder in any view with an empty catalog", async () => {
     const user = userEvent.setup();
     render(<App bridge={fixtureBridge("global-only")} />);
     await screen.findByRole("heading", { name: "Control center" });
 
+    // Every view is global: with zero projects each one still serves content,
+    // and none of them falls back to a project-shaped empty state or picker.
     await user.click(screen.getByRole("button", { name: "Access" }));
     expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "No projects discovered yet" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Capabilities this window uses" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Authorized capabilities" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
 
-    // Skills and Flows are global first: flow definitions live in one shared
-    // library, so both serve the daemon scope instead of the hint.
     await user.click(screen.getByRole("button", { name: "Skills" }));
     expect(await screen.findByRole("heading", { name: "Skill inventory" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
@@ -1059,6 +1008,25 @@ describe("global-first workspace", () => {
     await user.click(screen.getByRole("button", { name: "Flows" }));
     expect(await screen.findByRole("region", { name: "Flow workspace" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "No projects discovered yet" })).not.toBeInTheDocument();
+  });
+
+  it("serves the daemon-scope capability grants from Access with zero projects", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("global-only");
+    const read = vi.spyOn(bridge, "daemonAccess");
+    const write = vi.spyOn(bridge, "setDaemonAccess");
+    render(<App bridge={bridge} initialView="access" />);
+
+    const row = await screen.findByRole("article", { name: "model.infer" });
+    expect(within(row).getByText("granted")).toBeInTheDocument();
+    expect(read.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    // Daemon-scope grants carry no project identity, even once one exists.
+    expect(within(row).queryByText(/payments-api/)).not.toBeInTheDocument();
+
+    await user.click(within(row).getByRole("button", { name: "Revoke" }));
+
+    await waitFor(() => expect(within(row).getByText("not granted")).toBeInTheDocument());
+    expect(write.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 
   it("serves Flows under the daemon authority with zero projects", async () => {
@@ -1091,40 +1059,41 @@ describe("global-first workspace", () => {
     expect((screen.getByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement).value).toBe("# unsaved draft");
   });
 
-  it("serves Skills under the daemon authority and picks a project for assignment", async () => {
+  it("serves Skills under the daemon authority with no project pick on offer", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge();
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => ({ ...(await originalBootstrap()), snapshot: null }));
     const inventory = vi.spyOn(bridge, "loadSkillInventory");
+    const activate = vi.spyOn(bridge, "activateProject");
     render(<App bridge={bridge} initialView="skills" />);
 
     expect(await screen.findByText("Global review checklist")).toBeInTheDocument();
     expect(inventory.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
 
     await user.click(screen.getByRole("tab", { name: "Library" }));
-    expect(await screen.findByText(/Pick a project to manage targets/)).toBeInTheDocument();
+    // Assignment stays gated without a project scope, and nothing offers one.
+    expect(await screen.findByText(/PAM has none open/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /payments-api/ }));
-    // Activation keeps the user on Skills; the view re-scopes to the project.
-    expect(await screen.findByRole("heading", { name: "Skills" })).toBeInTheDocument();
-    expect(await screen.findByText("Now watching payments-api")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
+    expect(activate).not.toHaveBeenCalled();
   });
 
-  it("offers an inline picker without an active project and activates the selection", async () => {
-    const user = userEvent.setup();
+  it("serves Access with no snapshot and offers no picker for the missing one", async () => {
     const bridge = fixtureBridge();
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => ({ ...(await originalBootstrap()), snapshot: null }));
+    const activate = vi.spyOn(bridge, "activateProject");
     render(<App bridge={bridge} initialView="access" />);
 
-    expect(await screen.findByRole("heading", { name: "Pick a project to bring its queue into view." })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /payments-api/ }));
-
-    // Activation keeps the user on the Access view, now scoped to the pick.
     expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
-    expect(await screen.findByText("Now watching payments-api")).toBeInTheDocument();
+    // Both panels are daemon-scope reads, so they render with zero projects.
+    expect(await screen.findByRole("heading", { name: "Capabilities this window uses" })).toBeInTheDocument();
+    expect(await screen.findByText("Certificates")).toBeInTheDocument();
+    expect(screen.queryByText("The daemon has not reported an access boundary yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pick a project to bring its queue into view." })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
+    expect(activate).not.toHaveBeenCalled();
   });
 
   it("runs the daemon lifecycle from the global pill and re-probes health", async () => {

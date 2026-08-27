@@ -760,6 +760,7 @@ pub(crate) async fn caller_revoke(kind: CallerKindArg) -> i32 {
 pub(crate) async fn access_grant(
     kind: CallerKindArg,
     capability: CapabilityName,
+    daemon: bool,
     resource: Option<ResourceName>,
     deny: bool,
     require_approval: bool,
@@ -772,11 +773,15 @@ pub(crate) async fn access_grant(
             return EXIT_OPERATION_FAILED;
         }
     };
-    let project_id = match discover_project_id(".") {
-        Ok(project_id) => project_id,
-        Err(error) => {
-            report_identity_error(&error);
-            return EXIT_OPERATION_FAILED;
+    let project_id = if daemon {
+        ProjectId::daemon_scope()
+    } else {
+        match discover_project_id(".") {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                report_identity_error(&error);
+                return EXIT_OPERATION_FAILED;
+            }
         }
     };
     let data_dir = match user_data_dir() {

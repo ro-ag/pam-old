@@ -3003,6 +3003,192 @@ async fn policy_versions_and_grant_revocation_are_durable_and_idempotent() {
 }
 
 #[tokio::test]
+async fn a_daemon_scope_grant_authorizes_daemon_scoped_model_inference() {
+    let (directory, path) = database_path("daemon-scope-grant");
+    let store = Store::open(&path).unwrap();
+    store
+        .register_caller(
+            CallerId::from("gui-caller"),
+            CallerCredential::new("gui credential"),
+            1,
+        )
+        .await
+        .unwrap();
+    let daemon_scope = ProjectId::daemon_scope();
+
+    // A project-scoped grant cannot reach the daemon scope: this is the whole
+    // reason `pam access grant --daemon` has to exist.
+    store
+        .put_grant(PutGrant {
+            grant: grant(
+                "project-infer",
+                "gui-caller",
+                "some-project",
+                "model.infer",
+                ResourceScope::Any,
+            ),
+            created_at_ms: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .authorize(
+                authorization(
+                    "gui-caller",
+                    daemon_scope.as_str(),
+                    "model.infer",
+                    "model:byteshape/qwen3.6-q4ks",
+                    None,
+                ),
+                20,
+                100,
+            )
+            .await
+            .unwrap(),
+        AuthorizationOutcome::Denied
+    );
+
+    store
+        .put_grant(PutGrant {
+            grant: grant(
+                "daemon-infer",
+                "gui-caller",
+                daemon_scope.as_str(),
+                "model.infer",
+                ResourceScope::Exact(resource("model:byteshape/qwen3.6-q4ks")),
+            ),
+            created_at_ms: 11,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .authorize(
+                authorization(
+                    "gui-caller",
+                    daemon_scope.as_str(),
+                    "model.infer",
+                    "model:byteshape/qwen3.6-q4ks",
+                    None,
+                ),
+                21,
+                100,
+            )
+            .await
+            .unwrap(),
+        AuthorizationOutcome::Allowed
+    );
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
+async fn active_grants_report_one_callers_live_policy_rows_only() {
+    let (directory, path) = database_path("active-grants");
+    let store = Store::open(&path).unwrap();
+    for (caller_id, credential) in [
+        ("grant-reader", "reader credential"),
+        ("grant-other", "other credential"),
+    ] {
+        store
+            .register_caller(
+                CallerId::from(caller_id),
+                CallerCredential::new(credential),
+                1,
+            )
+            .await
+            .unwrap();
+    }
+    let daemon_scope = ProjectId::daemon_scope();
+    for (grant_id, caller_id, project_id, capability_name, created_at_ms) in [
+        (
+            "live",
+            "grant-reader",
+            daemon_scope.as_str(),
+            "model.infer",
+            10,
+        ),
+        (
+            "revoked",
+            "grant-reader",
+            daemon_scope.as_str(),
+            "connector.configure",
+            11,
+        ),
+        (
+            "expiring",
+            "grant-reader",
+            daemon_scope.as_str(),
+            "connector.test",
+            12,
+        ),
+        (
+            "other-caller",
+            "grant-other",
+            daemon_scope.as_str(),
+            "model.infer",
+            13,
+        ),
+        (
+            "other-project",
+            "grant-reader",
+            "some-project",
+            "model.infer",
+            14,
+        ),
+    ] {
+        let mut row = grant(
+            grant_id,
+            caller_id,
+            project_id,
+            capability_name,
+            ResourceScope::Any,
+        );
+        row.expires_at_ms = (grant_id == "expiring").then_some(30);
+        store
+            .put_grant(PutGrant {
+                grant: row,
+                created_at_ms,
+            })
+            .await
+            .unwrap();
+    }
+    store
+        .revoke_grant(GrantId::from("revoked"), 20)
+        .await
+        .unwrap();
+
+    let active = store
+        .active_grants(CallerId::from("grant-reader"), daemon_scope.clone(), 25)
+        .await
+        .unwrap();
+    assert_eq!(
+        active.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        vec!["live", "expiring"]
+    );
+    assert_eq!(active[0].capability, capability("model.infer"));
+    assert_eq!(active[0].resource, ResourceScope::Any);
+    assert_eq!(active[0].effect, Effect::Allow);
+    assert_eq!(active[0].approval, ApprovalRequirement::None);
+    assert_eq!(active[1].expires_at_ms, Some(30));
+
+    // The expiring row drops out the instant policy stops honoring it.
+    assert_eq!(
+        store
+            .active_grants(CallerId::from("grant-reader"), daemon_scope, 30)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["live"]
+    );
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
 async fn authorization_is_default_deny_and_matches_exact_policy_dimensions() {
     let (directory, path) = database_path("policy-matching");
     let store = Store::open(&path).unwrap();

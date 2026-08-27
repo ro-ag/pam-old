@@ -196,6 +196,7 @@ async fn run_async() -> i32 {
         } => app::model_generate(model, prompt, system, tokens, timeout, approval_id).await,
         Mode::AccessGrant {
             capability,
+            daemon,
             resource,
             deny,
             require_approval,
@@ -205,6 +206,7 @@ async fn run_async() -> i32 {
             app::access_grant(
                 kind,
                 capability,
+                daemon,
                 resource,
                 deny,
                 require_approval,

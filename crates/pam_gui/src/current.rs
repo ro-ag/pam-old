@@ -6,7 +6,7 @@ use pam_flow::{FlowRunResult, FlowSemanticEvent, FlowWaitReason, RunOutcome, Tra
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ApprovalChallenge, ApprovalDecision, ApprovalDecisionDisposition, Event, EventEnvelope,
-    EvidenceMetadata, ExpectedTargetKind, Failure, FailureCode, OperationTruth,
+    EvidenceMetadata, ExpectedTargetKind, Failure, FailureCode, FlowProjectRoot, OperationTruth,
     ProjectCurrentResult, ProjectRequestSummary, RequestEnvelope, ResultBody, ResultPayload,
 };
 use uuid::Uuid;
@@ -146,11 +146,33 @@ pub(crate) struct EvidencePreview {
     pub(crate) truth: OperationTruth,
 }
 
+/// Loads the active project's snapshot.
+///
+/// `project_root` is the canonical root the GUI discovered this project from.
+/// It rides along so the daemon can remember a human-readable location for
+/// the project ID, exactly as the CLI's requests already do; the daemon
+/// re-validates it and ignores anything that does not check out.
 pub(crate) async fn load_current(
     caller_id: CallerId,
     credential: CallerCredential,
     project_id: ProjectId,
+    project_root: Option<FlowProjectRoot>,
 ) -> CurrentState {
+    load_current_request(project_current_request(
+        caller_id,
+        credential,
+        project_id,
+        project_root,
+    ))
+    .await
+}
+
+pub(crate) fn project_current_request(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    project_id: ProjectId,
+    project_root: Option<FlowProjectRoot>,
+) -> RequestEnvelope {
     let request = RequestEnvelope::project_current(
         unique_request_id("gui-current"),
         caller_id,
@@ -158,7 +180,10 @@ pub(crate) async fn load_current(
         unique_idempotency("gui-current"),
     )
     .authenticated(credential);
-    load_current_request(request).await
+    match project_root {
+        Some(root) => request.with_project_root(root),
+        None => request,
+    }
 }
 
 pub(crate) async fn decide_current_approval(

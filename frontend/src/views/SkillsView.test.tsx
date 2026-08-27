@@ -1,13 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { CommandFence, ProjectSummaryDto } from "../domain";
+import type { CommandFence } from "../domain";
 import { fixtureBridge } from "../fixtures";
 import { SkillsView } from "./SkillsView";
-
-const projects: ProjectSummaryDto[] = [
-  { handle: "11111111-1111-4111-8111-111111111111", name: "payments-api", location: "/work/payments-api" },
-];
 
 describe("SkillsView", () => {
   it("hosts the three skill panels as Inventory, Library, and Audit tabs", async () => {
@@ -39,7 +35,7 @@ describe("SkillsView", () => {
     const nativeAudit = bridge.loadSkillAudit.bind(bridge);
     bridge.loadSkillInventory = vi.fn(async (fence) => { inventoryFences.push({ ...fence }); return nativeInventory(fence); });
     bridge.loadSkillAudit = vi.fn(async (fence) => { auditFences.push({ ...fence }); return nativeAudit(fence); });
-    render(<SkillsView bridge={bridge} fence={null} projects={projects} onSelectProject={vi.fn()} />);
+    render(<SkillsView bridge={bridge} fence={null} />);
 
     expect(await screen.findByText("Global review checklist")).toBeInTheDocument();
 
@@ -52,17 +48,18 @@ describe("SkillsView", () => {
     expect(new Set(fences.map((fence) => fence.operationId)).size).toBe(fences.length);
   });
 
-  it("gates library assignment on a project picked from the panel itself", async () => {
+  it("carries no project identity: no switcher, no picker, library still readable", async () => {
     const user = userEvent.setup();
-    const onSelectProject = vi.fn();
-    render(<SkillsView bridge={fixtureBridge()} fence={null} projects={projects} onSelectProject={onSelectProject} />);
+    render(<SkillsView bridge={fixtureBridge()} fence={null} />);
+
+    expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Library" }));
     expect(await screen.findByText("review-changes")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adopt into library" })).toBeInTheDocument();
+    // Assignment stays gated without a project scope, but nothing offers a pick.
     expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /payments-api/ }));
-    expect(onSelectProject).toHaveBeenCalledWith(projects[0]);
+    expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/PAM has none open/)).toBeInTheDocument();
   });
 });

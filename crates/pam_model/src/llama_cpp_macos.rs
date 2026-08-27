@@ -17,22 +17,24 @@ use llama_cpp_4::{ChatTemplateError, quantize::GgmlType};
 use pam_core::ContentDigest;
 
 use crate::{
-    CancellationSignal, CancellationToken, HostMemoryBudget, MemoryFit, ModelRuntime,
-    RegisteredModel, RuntimeError, RuntimeFinishReason, RuntimeFlashAttention, RuntimeGpuOffload,
-    RuntimeHostAdmission, RuntimeHostSnapshot, RuntimeKvCachePrecision, RuntimeMemoryPressure,
-    RuntimeMemoryProjection, RuntimeProfile, RuntimeRequest, RuntimeResponse, RuntimeSampling,
-    RuntimeSwapTrend, RuntimeUsage, UnifiedWorkingSetLimit, estimate_memory,
-    is_calibrated_artifact, revalidate_registered_model,
+    ArtifactCalibration, CancellationSignal, CancellationToken, HostMemoryBudget, MemoryFit,
+    ModelRuntime, RegisteredModel, RuntimeError, RuntimeFinishReason, RuntimeFlashAttention,
+    RuntimeGpuOffload, RuntimeHostAdmission, RuntimeHostSnapshot, RuntimeKvCachePrecision,
+    RuntimeMemoryPressure, RuntimeMemoryProjection, RuntimeProfile, RuntimeRequest,
+    RuntimeResponse, RuntimeSampling, RuntimeSwapTrend, RuntimeUsage, UnifiedWorkingSetLimit,
+    estimate_memory, is_calibrated_artifact, revalidate_registered_model,
 };
 
 const CONTEXT_TOKENS: u32 = 8_192;
 const BATCH_TOKENS: u32 = 512;
 const PHYSICAL_BATCH_TOKENS: u32 = 512;
 const PARALLEL_SEQUENCES: u32 = 1;
-// Fits the largest calibrated artifact (Q6_K, 25_092_535_456 bytes) plus its
-// 5% contingency (~26.35 GB); host admission remains the real per-machine gate.
-const MAX_MODEL_ALLOCATION_BYTES: u64 = 27_000_000_000;
-const MIN_OS_RESERVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const GIB: u64 = 1024 * 1024 * 1024;
+const MIN_OS_RESERVE_BYTES: u64 = 8 * GIB;
+/// PAM's own daemon/API/UI budget, held out of the model ceiling so it cannot
+/// disappear inside a model estimate. The host snapshot reports it separately,
+/// from this one definition.
+pub const APPLICATION_RESERVE_BYTES: u64 = GIB;
 const MIN_CALIBRATED_CONTINGENCY_BYTES: u64 = 256 * 1024 * 1024;
 const INITIAL_CHAT_TEMPLATE_BYTES: usize = 4 * 1024;
 const MAX_CHAT_TEMPLATE_BYTES: usize = 1024 * 1024;
@@ -48,22 +50,23 @@ pub struct MacosLlamaCppRuntime {
 }
 
 impl MacosLlamaCppRuntime {
-    /// Revalidates and loads the calibrated user-owned GGUF on one serialized
-    /// llama.cpp worker.
+    /// Revalidates and loads a user-owned GGUF on one serialized llama.cpp
+    /// worker.
     ///
     /// This call blocks through a full-file integrity check, projection, and
-    /// model load. Async callers must invoke it on a blocking executor.
+    /// model load. Async callers must invoke it on a blocking executor. An
+    /// artifact outside [`crate::CALIBRATED_ARTIFACTS`] still loads when it
+    /// fits this host's derived ceiling; the resulting profile reports
+    /// [`ArtifactCalibration::Uncalibrated`].
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError`] when the registered artifact is no longer exact,
-    /// does not match the calibrated profile, exceeds admission, or cannot load.
+    /// Returns [`RuntimeError`] when the registered artifact is no longer
+    /// exact, does not fit this host, exceeds admission, or cannot load.
     pub fn load(
         model: RegisteredModel,
         admission: Arc<dyn RuntimeHostAdmission>,
     ) -> Result<Self, RuntimeError> {
-        validate_calibrated_artifact(&model)?;
-
         let (commands, command_receiver) = mpsc::sync_channel(0);
         let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
         let shutdown = CancellationToken::default();
@@ -181,7 +184,11 @@ fn runtime_worker(
         )));
         return;
     };
-    if let Err(error) = admit_live_context(&context, prepared.profile.projection()) {
+    if let Err(error) = admit_live_context(
+        &context,
+        prepared.profile.projection(),
+        prepared.profile.max_projected_bytes(),
+    ) {
         let _ = ready.send(Err(error));
         return;
     }
@@ -247,11 +254,22 @@ fn prepare_model(
             .iter()
             .map(|entry| (entry.model, entry.context, entry.compute)),
     )?;
-    admit_projection(&projection)?;
+    // One fresh snapshot feeds all three gates: the host-derived ceiling, the
+    // calibration decision, and the exact host accounting below.
+    let snapshot = admission.snapshot()?;
+    let ceiling_bytes = host_model_ceiling_bytes(snapshot.total_bytes());
+    let calibration = artifact_calibration(registered, ceiling_bytes)?;
+    if calibration == ArtifactCalibration::Uncalibrated {
+        eprintln!(
+            "pam_model: loading {} — this artifact is not in PAM's calibrated set, so its runtime profile is untested; it fits this Mac's {ceiling_bytes}-byte model ceiling",
+            registered.key.id()
+        );
+    }
+    admit_projection(&projection, ceiling_bytes)?;
     validate_host_admission(
         registered,
         &projection,
-        admission.snapshot()?,
+        snapshot,
         metal_working_set_limit,
         projected_host_total,
     )?;
@@ -278,7 +296,12 @@ fn prepare_model(
         ));
     }
     let chat_template = embedded_chat_template(&model)?;
-    let profile = calibrated_runtime_profile(registered.digest.clone(), projection)?;
+    let profile = calibrated_runtime_profile(
+        registered.digest.clone(),
+        calibration,
+        ceiling_bytes,
+        projection,
+    )?;
     Ok(PreparedModel {
         backend,
         model,
@@ -290,10 +313,13 @@ fn prepare_model(
 
 pub(crate) fn calibrated_runtime_profile(
     digest: ContentDigest,
+    calibration: ArtifactCalibration,
+    ceiling_bytes: u64,
     projection: RuntimeMemoryProjection,
 ) -> Result<RuntimeProfile, RuntimeError> {
     RuntimeProfile::new(
         digest,
+        calibration,
         CONTEXT_TOKENS,
         BATCH_TOKENS,
         PHYSICAL_BATCH_TOKENS,
@@ -303,17 +329,97 @@ pub(crate) fn calibrated_runtime_profile(
         RuntimeKvCachePrecision::F16,
         false,
         RuntimeSampling::TopKTopPTemperature,
-        MAX_MODEL_ALLOCATION_BYTES,
+        ceiling_bytes,
         projection,
     )
 }
 
-pub(crate) fn validate_calibrated_artifact(model: &RegisteredModel) -> Result<(), RuntimeError> {
+/// This host's model-allocation ceiling: physical memory minus the
+/// operating-system reserve and PAM's own application budget. It replaces the
+/// former product-wide 27,000,000,000-byte constant, which assumed every Mac
+/// was PAM's 32 GiB minimum.
+///
+/// The OS share is [`required_os_reserve`] — the same `max(8 GiB, 20% of
+/// physical)` the exact accounting in [`validate_host_admission`] enforces —
+/// so one reserve rule applies everywhere and the ceiling can never advertise
+/// capacity the exact accounting will refuse. On a 32 GiB Mac the absolute
+/// 8 GiB floor binds, not the 20% share, and folding it in closes the
+/// 1.72 GB gap that let PAM's own Q6\_K artifact clear this gate and then be
+/// refused by physical reality at load.
+///
+/// Availability, pressure, and the Metal working-set limit are still *not*
+/// folded in: [`validate_host_admission`] checks those against a fresh
+/// snapshot. This is the coarse per-host cap the projection and the live
+/// context are measured against, and it is a pure function of the host total
+/// so tests can pass any machine size.
+#[must_use]
+pub fn host_model_ceiling_bytes(host_total_bytes: u64) -> u64 {
+    host_total_bytes
+        .saturating_sub(required_os_reserve(host_total_bytes))
+        .saturating_sub(APPLICATION_RESERVE_BYTES)
+}
+
+/// The projection contingency this host must set aside, derived from the same
+/// host facts as [`host_model_ceiling_bytes`] instead of a fixed constant.
+///
+/// It is the 5%-with-floor contingency of this host's *ceiling*, which is the
+/// largest projection any gate can admit here: `admit_projection` requires
+/// `projection + contingency(projection) <= ceiling`, so
+/// `contingency(projection) <= contingency(ceiling)` for everything that gets
+/// as far as [`validate_host_admission`]. The contingency check therefore
+/// stops being a second, unrelated size wall while still budgeting the full
+/// 5% the estimate spends. Deriving it from the raw physical total instead
+/// would over-reserve capacity that no admissible projection can use.
+///
+/// 32 GiB → 1,234,803,098 bytes; the retired fixed 1 GiB was 1,073,741,824,
+/// so the documented minimum Mac loses no margin. 64 GiB → 2,695,091,979.
+#[must_use]
+pub fn host_projection_contingency_bytes(host_total_bytes: u64) -> u64 {
+    calibrated_contingency(host_model_ceiling_bytes(host_total_bytes))
+}
+
+/// The operating-system share this host must keep free: the documented 20% of
+/// physical memory, never below the absolute 8 GiB floor.
+#[must_use]
+pub fn required_os_reserve(total_bytes: u64) -> u64 {
+    total_bytes.div_ceil(5).max(MIN_OS_RESERVE_BYTES)
+}
+
+/// Classifies the registered artifact against [`crate::CALIBRATED_ARTIFACTS`]
+/// and this host's ceiling.
+///
+/// A calibrated artifact is admitted as measured. An uncalibrated one is
+/// admitted as untested when it plausibly fits, and refused when it cannot.
+///
+/// ponytail: the fit test here is weights-only — the GGUF's file size stands
+/// in for the runtime allocation, because this gate runs before the exact
+/// projection is bound to a profile. Context and compute are covered by the
+/// 5% contingency and then re-checked exactly by `admit_projection` and
+/// `admit_live_context`. Swap in the projected total here if a model ever
+/// squeaks through this gate only to be rejected by the next one.
+///
+/// # Errors
+///
+/// Returns [`RuntimeError::UnsupportedArtifact`] when an uncalibrated artifact
+/// does not fit this host's ceiling.
+pub(crate) fn artifact_calibration(
+    model: &RegisteredModel,
+    ceiling_bytes: u64,
+) -> Result<ArtifactCalibration, RuntimeError> {
     if is_calibrated_artifact(model.digest.sha256_hex(), model.size_bytes) {
-        Ok(())
-    } else {
-        Err(RuntimeError::UnsupportedArtifact)
+        return Ok(ArtifactCalibration::Calibrated);
     }
+    let weights_with_contingency = model
+        .size_bytes
+        .checked_add(calibrated_contingency(model.size_bytes))
+        .ok_or_else(projection_overflow)?;
+    if weights_with_contingency > ceiling_bytes {
+        return Err(RuntimeError::UnsupportedArtifact {
+            size_bytes: model.size_bytes,
+            maximum_bytes: ceiling_bytes,
+        });
+    }
+    Ok(ArtifactCalibration::Uncalibrated)
 }
 
 pub(crate) fn fixed_model_params() -> LlamaModelParams {
@@ -393,13 +499,16 @@ fn projection_overflow() -> RuntimeError {
     RuntimeError::InitializationFailed("projected memory total overflowed")
 }
 
-fn admit_projection(projection: &RuntimeMemoryProjection) -> Result<(), RuntimeError> {
+fn admit_projection(
+    projection: &RuntimeMemoryProjection,
+    ceiling_bytes: u64,
+) -> Result<(), RuntimeError> {
     let projected_bytes = projected_runtime_bytes(projection)?;
-    let contingency = calibrated_contingency(projected_bytes)?;
+    let contingency = calibrated_contingency(projected_bytes);
     let calibrated_bytes = projected_bytes
         .checked_add(contingency)
         .ok_or_else(projection_overflow)?;
-    admit_bytes(calibrated_bytes)
+    admit_bytes(calibrated_bytes, ceiling_bytes)
 }
 
 fn projected_runtime_bytes(projection: &RuntimeMemoryProjection) -> Result<u64, RuntimeError> {
@@ -410,12 +519,10 @@ fn projected_runtime_bytes(projection: &RuntimeMemoryProjection) -> Result<u64, 
         .ok_or_else(projection_overflow)
 }
 
-pub(crate) fn calibrated_contingency(projected_bytes: u64) -> Result<u64, RuntimeError> {
-    let five_percent = projected_bytes
-        .checked_add(19)
-        .ok_or_else(projection_overflow)?
-        / 20;
-    Ok(five_percent.max(MIN_CALIBRATED_CONTINGENCY_BYTES))
+pub(crate) fn calibrated_contingency(projected_bytes: u64) -> u64 {
+    projected_bytes
+        .div_ceil(20)
+        .max(MIN_CALIBRATED_CONTINGENCY_BYTES)
 }
 
 pub(crate) fn validate_host_admission(
@@ -450,7 +557,7 @@ pub(crate) fn validate_host_admission(
             "PAM application memory reserve is missing",
         ));
     }
-    let required_contingency = calibrated_contingency(projected_runtime_bytes(projection)?)?;
+    let required_contingency = calibrated_contingency(projected_runtime_bytes(projection)?);
     if snapshot.projection_contingency_bytes() < required_contingency {
         return Err(RuntimeError::AdmissionUnavailable(
             "projection contingency is below the calibrated minimum",
@@ -476,13 +583,10 @@ pub(crate) fn validate_host_admission(
     Ok(())
 }
 
-pub(crate) fn required_os_reserve(total_bytes: u64) -> u64 {
-    total_bytes.div_ceil(5).max(MIN_OS_RESERVE_BYTES)
-}
-
 fn admit_live_context(
     context: &LlamaContext<'_>,
     projection: &RuntimeMemoryProjection,
+    ceiling_bytes: u64,
 ) -> Result<(), RuntimeError> {
     let live_bytes = context
         .memory_breakdown()
@@ -506,18 +610,16 @@ fn admit_live_context(
                 .ok_or_else(projection_overflow)
         })?;
     let live_with_contingency = live_bytes
-        .checked_add(calibrated_contingency(projected_runtime_bytes(
-            projection,
-        )?)?)
+        .checked_add(calibrated_contingency(projected_runtime_bytes(projection)?))
         .ok_or_else(projection_overflow)?;
-    admit_bytes(live_with_contingency)
+    admit_bytes(live_with_contingency, ceiling_bytes)
 }
 
-pub(crate) fn admit_bytes(bytes: u64) -> Result<(), RuntimeError> {
-    if bytes > MAX_MODEL_ALLOCATION_BYTES {
+pub(crate) fn admit_bytes(bytes: u64, ceiling_bytes: u64) -> Result<(), RuntimeError> {
+    if bytes > ceiling_bytes {
         return Err(RuntimeError::AdmissionRejected {
             projected_bytes: bytes,
-            maximum_bytes: MAX_MODEL_ALLOCATION_BYTES,
+            maximum_bytes: ceiling_bytes,
         });
     }
     Ok(())

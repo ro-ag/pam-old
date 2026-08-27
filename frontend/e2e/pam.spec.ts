@@ -168,26 +168,6 @@ test.describe("production-shaped interactions", () => {
     await page.setViewportSize({ width: 1_180, height: 800 });
   });
 
-  test("uses the complete keyboard project-menu contract", async ({ page }) => {
-    // The project menu lives in the context bar of project-shaped views.
-    await openFixture(page, "solved", "flows");
-    const trigger = page.getByRole("button", { name: "payments-api" });
-    await trigger.focus();
-    await page.keyboard.press("ArrowDown");
-    const menu = page.getByRole("menu");
-    await expect(menu).toBeVisible();
-    await expect(page.getByRole("menuitemradio", { name: /payments-api/ })).toBeFocused();
-    await expect(page).toHaveScreenshot("project-menu-1180x800.png");
-
-    await page.keyboard.press("End");
-    await expect(page.getByRole("menuitemradio", { name: /^docs/ })).toBeFocused();
-    await page.keyboard.press("Home");
-    await expect(page.getByRole("menuitemradio", { name: /payments-api/ })).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(menu).toBeHidden();
-    await expect(trigger).toBeFocused();
-  });
-
   test("navigates the command palette and replaces it with one queue drawer", async ({ page }) => {
     await openFixture(page);
     const opener = page.getByRole("button", { name: "Open command palette (⌘K)" });
@@ -603,7 +583,7 @@ test.describe("Skills library tab", () => {
     expect(horizontal.shellScroll).toBe(horizontal.shellClient);
   });
 
-  test("serves the daemon-scoped inventory and audit without an active project, gating assignment on a project pick", async ({ page }) => {
+  test("serves the daemon-scoped inventory and audit with no project pick on offer", async ({ page }) => {
     await page.setViewportSize({ width: 1_180, height: 1_000 });
     await openSkills(page, "Inventory", "global-only");
 
@@ -614,8 +594,10 @@ test.describe("Skills library tab", () => {
     const panel = page.getByRole("region", { name: "Skill library" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Assignment needs a project; the library above stays global.")).toBeVisible();
-    await expect(panel.getByText(/Pick a project to manage targets/)).toBeVisible();
+    await expect(panel.getByText(/PAM has none open/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Enable target" })).toHaveCount(0);
+    // Skills is global: no switcher, no picker, no project name in the canvas.
+    await expect(page.getByRole("button", { name: /payments-api/ })).toHaveCount(0);
     await expect(panel.getByLabel("Canonical library entries").getByText("review-changes")).toBeVisible();
 
     await page.getByRole("tab", { name: "Audit" }).click();

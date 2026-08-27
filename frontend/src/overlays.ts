@@ -14,10 +14,6 @@ export interface QueueOverlayEntry extends OverlayEntryBase {
   kind: "queue";
 }
 
-export interface ProjectOverlayEntry extends OverlayEntryBase {
-  kind: "project";
-}
-
 export interface CommandOverlayEntry extends OverlayEntryBase {
   kind: "command";
 }
@@ -43,7 +39,6 @@ export interface ModelChatOverlayEntry extends OverlayEntryBase {
 }
 
 export type OverlayEntry =
-  | ProjectOverlayEntry
   | QueueOverlayEntry
   | CommandOverlayEntry
   | ApprovalOverlayEntry

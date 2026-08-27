@@ -353,6 +353,31 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Lists one caller's active grants in one project, newest last.
+    ///
+    /// Revoked and expired grants are excluded, so the result is exactly the
+    /// grant rows policy would evaluate at `now_ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for corrupt grant rows or unavailable durable state.
+    pub async fn active_grants(
+        &self,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        now_ms: u64,
+    ) -> Result<Vec<Grant>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Policy(PolicyCommand::ActiveGrants {
+            caller_id,
+            project_id,
+            now_ms,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Revokes a grant idempotently and advances the project policy version.
     ///
     /// # Errors
@@ -1892,6 +1917,12 @@ enum PolicyCommand {
         now_ms: u64,
         response: Response<GrantRevocation>,
     },
+    ActiveGrants {
+        caller_id: CallerId,
+        project_id: ProjectId,
+        now_ms: u64,
+        response: Response<Vec<Grant>>,
+    },
     Authorize {
         request: AuthorizationRequest,
         now_ms: u64,
@@ -2222,6 +2253,15 @@ fn run_policy_command(connection: &mut Connection, command: PolicyCommand) {
             now_ms,
             response,
         } => respond(response, revoke_grant(connection, &grant_id, now_ms)),
+        PolicyCommand::ActiveGrants {
+            caller_id,
+            project_id,
+            now_ms,
+            response,
+        } => respond(
+            response,
+            active_grants(connection, &caller_id, &project_id, now_ms),
+        ),
         PolicyCommand::Authorize {
             request,
             now_ms,
@@ -3966,6 +4006,53 @@ fn put_grant(connection: &mut Connection, put: PutGrant) -> Result<ProjectPolicy
         version: unsigned_integer(version)?,
         updated_at_ms: put.created_at_ms,
     })
+}
+
+fn active_grants(
+    connection: &Connection,
+    caller_id: &CallerId,
+    project_id: &ProjectId,
+    now_ms: u64,
+) -> Result<Vec<Grant>, StoreError> {
+    let now = sql_integer(now_ms)?;
+    let mut statement = connection.prepare(
+        "SELECT grant_id, capability, resource_kind, resource, effect, approval, expires_at_ms
+         FROM capability_grants
+         WHERE caller_id = ?1 AND project_id = ?2 AND revoked_at_ms IS NULL
+           AND (expires_at_ms IS NULL OR expires_at_ms > ?3)
+         ORDER BY created_at_ms, grant_id",
+    )?;
+    let rows = statement.query_map(
+        params![caller_id.as_str(), project_id.as_str(), now],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+            ))
+        },
+    )?;
+    let mut grants = Vec::new();
+    for row in rows {
+        let (id, capability, resource_kind, resource, effect, approval, expires_at) = row?;
+        grants.push(Grant {
+            id: GrantId::from(id),
+            caller: caller_id.clone(),
+            project: project_id.clone(),
+            capability: CapabilityName::parse(capability)
+                .map_err(|_| StoreError::InvalidState("invalid stored capability".to_owned()))?,
+            resource: parse_resource_scope(&resource_kind, resource)?,
+            effect: parse_effect(&effect)?,
+            approval: parse_approval_requirement(&approval)?,
+            expires_at_ms: expires_at.map(unsigned_integer).transpose()?,
+            revoked_at_ms: None,
+        });
+    }
+    Ok(grants)
 }
 
 fn revoke_grant(

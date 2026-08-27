@@ -6,7 +6,7 @@ use std::{collections::HashSet, path::PathBuf};
 use pam_core::{CallerCredential, CallerId, IdempotencyKey, ProjectId, RequestId};
 use pam_daemon::{ExchangeError, request_exchange, request_status};
 use pam_platform::{LocalEndpoint, NativeSecretBackend, SecretLocator, SecretStore};
-use pam_protocol::{RequestEnvelope, ResultBody, ResultPayload, StatusResult};
+use pam_protocol::{FlowProjectRoot, RequestEnvelope, ResultBody, ResultPayload, StatusResult};
 use uuid::Uuid;
 
 use crate::{
@@ -55,10 +55,16 @@ pub(crate) async fn load_project_surfaces(
     caller_id: CallerId,
     credential: CallerCredential,
     project_id: ProjectId,
+    project_root: Option<FlowProjectRoot>,
 ) -> (HealthState, CurrentState, AccessConfigState) {
     tokio::join!(
         probe_health_authenticated(caller_id.clone(), credential.clone(), project_id.clone(),),
-        load_current(caller_id.clone(), credential.clone(), project_id.clone(),),
+        load_current(
+            caller_id.clone(),
+            credential.clone(),
+            project_id.clone(),
+            project_root,
+        ),
         load_access_config(caller_id, credential, project_id),
     )
 }

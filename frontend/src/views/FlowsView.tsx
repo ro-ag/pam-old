@@ -7,7 +7,7 @@ import {
   SidebarSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { sameFence, withDaemonOperation, withOperation } from "../bridge";
 import type {
@@ -40,16 +40,16 @@ const freshHistory = (): DefinitionHistory => ({ past: [], future: [], lastEditM
 export interface FlowsViewProps {
   bridge: PamBridge;
   fence: CommandFence | null;
-  contextBar?: ReactNode;
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }
 
-// Flow definitions are a daemon-global library: without an active project
-// this view still works, speaking to the daemon authority. When a project is
-// active, its fence is used as before — flow-catalog commands accept either.
-export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToast }: FlowsViewProps) {
-  const fence = useMemo(() => fenceProp ?? withDaemonOperation(), [fenceProp]);
+// Flow definitions are a daemon-global library, so this view always speaks
+// the daemon authority and carries no project identity. The `fence` prop is
+// only a refresh signal: its generation rotates on ⌘R, activate, and daemon
+// lifecycle changes.
+export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsViewProps) {
+  const fence = useMemo(() => withDaemonOperation(), []);
   const [workspace, setWorkspace] = useState<FlowWorkspaceDataDto | null>(null);
   const [selected, setSelected] = useState<FlowDocumentDataDto | null>(null);
   const [draft, setDraft] = useState("");
@@ -111,7 +111,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       const response = await bridge.loadFlowWorkspace(requestFence);
       if (!isCurrentRequest(sequence, requestFence)) return;
       if (!sameFence(requestFence, response.fence)) {
-        setLoadError("The flow workspace response did not match the active project request. Retry flows.");
+        setLoadError("The flow workspace response did not match the daemon request. Retry flows.");
         return;
       }
       setWorkspace(response.data);
@@ -125,10 +125,10 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
     }
   }, [bridge, isCurrentRequest]);
 
-  // A generation rotation (⌘R, activate, daemon lifecycle) re-fetches the
-  // catalog without touching the editor: draft, definition, undo history,
-  // and review state all survive. Runs on its own sequence so an in-flight
-  // open/validate/save is not invalidated by a background refresh.
+  // A generation rotation (⌘R, activate, daemon lifecycle, project switch)
+  // re-fetches the catalog without touching the editor: draft, definition,
+  // undo history, and review state all survive. Runs on its own sequence so
+  // an in-flight open/validate/save is not invalidated by a background refresh.
   const reloadSequence = useRef(0);
   const reloadWorkspace = useCallback(async () => {
     const sequence = ++reloadSequence.current;
@@ -144,19 +144,20 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
     }
   }, [bridge]);
 
-  const previousProjectHandle = useRef<string | null>(null);
+  const loaded = useRef(false);
   useEffect(() => {
-    // Only a project switch resets the editor; a same-project generation
-    // rotation is a soft reload.
-    const projectChanged = previousProjectHandle.current !== fence.projectHandle;
-    previousProjectHandle.current = fence.projectHandle;
-    if (projectChanged) void load();
-    else void reloadWorkspace();
+    // The library is global: the full load runs once, and every later
+    // generation rotation is a soft reload that preserves the editor.
+    if (loaded.current) void reloadWorkspace();
+    else {
+      loaded.current = true;
+      void load();
+    }
     return () => {
       requestSequence.current += 1;
       reloadSequence.current += 1;
     };
-  }, [load, reloadWorkspace, fence.projectHandle, fence.generation]);
+  }, [load, reloadWorkspace, fenceProp?.generation]);
 
   const open = async (flowHandle: string) => {
     const sequence = ++requestSequence.current;
@@ -173,7 +174,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       const response = await bridge.openFlow(requestFence, flowHandle);
       if (!isCurrentRequest(sequence, requestFence)) return;
       if (!sameFence(requestFence, response.fence)) {
-        onError("The flow document response did not match the active project request.");
+        onError("The flow document response did not match the daemon request.");
         return;
       }
       setSelected(response.data);
@@ -181,7 +182,9 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       // Visual is the default view of an opened flow; a source the converter
       // cannot follow simply opens in Source mode with a calm note.
       try {
-        const graph = await bridge.flowGraph(requestFence, response.data.source);
+        // A fresh operation: the daemon replay guard rejects a second command
+        // that reuses the operation the open already spent.
+        const graph = await bridge.flowGraph(withOperation(fenceRef.current), response.data.source);
         if (!isCurrentRequest(sequence, requestFence)) return;
         if (graph.status === "ok") {
           setDefinition(graph.definition);
@@ -322,7 +325,9 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       // The visual state composes to source first, so validation and save
       // always run against the exact document that will be written.
       if (mode === "visual" && definitionRef.current) {
-        const composed = await bridge.flowCompose(requestFence, definitionRef.current);
+        // Composition spends its own operation; the validate below keeps
+        // `requestFence` so its response fence check still matches.
+        const composed = await bridge.flowCompose(withOperation(fenceRef.current), definitionRef.current);
         if (!isCurrentRequest(sequence, requestFence)) return;
         if (composed.status === "invalid") {
           setValidationError(composed.failure.detail);
@@ -335,7 +340,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       const response = await bridge.validateFlow(requestFence, documentHandle, source);
       if (!isCurrentRequest(sequence, requestFence)) return;
       if (!sameFence(requestFence, response.fence)) {
-        setValidationError("The flow validation response did not match the active project request. Retry validation.");
+        setValidationError("The flow validation response did not match the daemon request. Retry validation.");
         return;
       }
       setReview(response.data);
@@ -361,7 +366,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       const response = await bridge.saveFlow(requestFence, documentHandle, normalizedSource);
       if (!isCurrentRequest(sequence, requestFence)) return;
       if (!sameFence(requestFence, response.fence)) {
-        onError("The flow save response did not match the active project request.");
+        onError("The flow save response did not match the daemon request.");
         return;
       }
       if (response.data.document !== documentHandle) {
@@ -373,7 +378,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
       setWorkspace((current) => current && ({ ...current, definitions: current.definitions.map((definition) => definition.identity.id === response.data.identity.id ? { ...definition, identity: response.data.identity } : definition) }));
       setReview(null);
       setReviewedSource(null);
-      onToast(response.data.durabilityConfirmed && response.data.cleanupComplete ? "Flow saved durably inside the project boundary" : "Flow saved; durability confirmation is incomplete");
+      onToast(response.data.durabilityConfirmed && response.data.cleanupComplete ? "Flow saved durably in the shared flow library" : "Flow saved; durability confirmation is incomplete");
     } catch (error) {
       if (isCurrentRequest(sequence, requestFence)) onError(presentError(error));
     } finally {
@@ -385,7 +390,7 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
 
   return (
     <main className="canvas" id="main-content">
-      <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke PAM.</p></div>{contextBar}</header>
+      <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke PAM.</p></div></header>
       {loadError && !workspace ? (
         <section className="panel loading-panel is-error" role="alert">
           <WarningCircle size={25} />

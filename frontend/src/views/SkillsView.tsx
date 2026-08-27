@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { withDaemonOperation } from "../bridge";
-import type { CommandFence, PamBridge, ProjectSummaryDto } from "../domain";
+import type { CommandFence, PamBridge } from "../domain";
 import { useMediaQuery, WIDE_VIEWPORT_QUERY } from "../useMediaQuery";
 import { SkillAuditReportPanel } from "./SkillAuditReportPanel";
 import { SkillInventoryPanel } from "./SkillInventoryPanel";
@@ -10,14 +10,11 @@ import { SkillLibraryPanel } from "./SkillLibraryPanel";
 export interface SkillsViewProps {
   bridge: PamBridge;
   fence: CommandFence | null;
-  projects?: ProjectSummaryDto[];
-  onSelectProject?: (project: ProjectSummaryDto) => void;
-  contextBar?: ReactNode;
 }
 
-// Skills is global first: without an active project every panel speaks to the
-// daemon authority, and a project is picked on demand for assignment.
-export function SkillsView({ bridge, fence, projects, onSelectProject, contextBar }: SkillsViewProps) {
+// Skills is global: every panel speaks the daemon authority and the view
+// carries no project identity, not even a switcher.
+export function SkillsView({ bridge, fence }: SkillsViewProps) {
   const wide = useMediaQuery(WIDE_VIEWPORT_QUERY);
   const authority = useMemo(() => fence ?? withDaemonOperation(), [fence]);
   // Library mutations (install, adopt, apply) change what the inventory
@@ -25,13 +22,12 @@ export function SkillsView({ bridge, fence, projects, onSelectProject, contextBa
   const [inventoryTick, setInventoryTick] = useState(0);
   const invalidateInventory = useCallback(() => setInventoryTick((tick) => tick + 1), []);
   const library = (
-    <SkillLibraryPanel bridge={bridge} fence={authority} projects={projects} onSelectProject={onSelectProject} onMutated={invalidateInventory} />
+    <SkillLibraryPanel bridge={bridge} fence={authority} onMutated={invalidateInventory} />
   );
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
         <div><h1>Skills</h1><p>What the agents carry with them, kept in view.</p></div>
-        {contextBar}
       </header>
       {wide ? (
         <>

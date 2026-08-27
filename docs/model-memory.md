@@ -90,6 +90,183 @@ minimum supported Mac, but each live host still supplies its own working-set
 limit and pressure snapshot. The M4 results below establish the model-memory
 profile, not M1 Pro throughput.
 
+## Host-derived model ceiling
+
+The model-allocation ceiling is derived from the machine PAM is running on,
+not from a product-wide constant. `pam_model::host_model_ceiling_bytes` is a
+pure function of the host's physical memory:
+
+```text
+OS reserve = max(8 GiB, ceil(20% of total))          [required_os_reserve]
+ceiling(total) = total - OS reserve - 1 GiB PAM application budget
+```
+
+Both terms are the reserves already documented above: the operating-system
+share and PAM's own daemon/API/UI budget, which is kept separate so it cannot
+disappear inside a model estimate. The OS term is `required_os_reserve`, the
+*same* function `validate_host_admission` enforces against the live snapshot,
+so one reserve rule applies everywhere and the ceiling can never advertise
+capacity the exact accounting will refuse. The 5% calibrated contingency is
+unchanged and is still added to the projection *before* it is compared to the
+ceiling.
+
+| Host physical memory | OS reserve | Derived ceiling |
+| ---: | ---: | ---: |
+| 8 GiB | 8,589,934,592 (floor) | 0 |
+| 32 GiB | 8,589,934,592 (floor) | 24,696,061,952 |
+| 64 GiB | 13,743,895,348 (20%) | 53,901,839,564 |
+
+The absolute 8 GiB floor binds below 40 GiB of physical memory; above it the
+20% share is larger and folding the floor in changes nothing. So the 64 GiB
+host is unaffected, an 8 GiB host now correctly admits nothing rather than
+advertising 5,798,205,849 bytes it could never hold, and the 32 GiB minimum
+Mac drops from 26,414,048,870 to 24,696,061,952 — exactly 23 GiB. That
+1,717,986,918-byte reduction is the gap that previously let an artifact clear
+the ceiling and then be refused by the exact accounting at load.
+
+The 32 GiB minimum Mac remains the safety floor: 24,696,061,952 bytes is below
+the retired 27,000,000,000-byte constant, so the minimum host gains no
+headroom. A 64 GiB host gets proportionally more instead of being capped at a
+number chosen for a machine half its size.
+
+### Host-derived projection contingency
+
+The contingency the host snapshot budgets is derived from the same host facts,
+not from a fixed size. `pam_model::host_projection_contingency_bytes` is the
+5%-with-256 MiB-floor contingency of *this host's ceiling*:
+
+```text
+contingency(total) = max(256 MiB, ceil(5% of ceiling(total)))
+```
+
+The ceiling is the largest projection any gate can admit on this host —
+`admit_projection` requires `projection + contingency(projection) <= ceiling` —
+so this budget covers the exact 5% of every projection that reaches
+`validate_host_admission`. That check can no longer be a second, unrelated size
+wall, and deriving the budget from the raw physical total instead would
+over-reserve capacity no admissible projection can use.
+
+| Host physical memory | Derived contingency |
+| ---: | ---: |
+| 8 GiB | 268,435,456 (floor) |
+| 32 GiB | 1,234,803,098 |
+| 64 GiB | 2,695,091,979 |
+
+The retired value was a fixed 1 GiB (1,073,741,824), which covered projections
+only up to about 21.47 GB and therefore refused PAM's own largest calibrated
+artifact with "projection contingency is below the calibrated minimum". The
+32 GiB minimum Mac keeps its margin after the OS floor was folded into the
+ceiling: 1,234,803,098 bytes is still above the retired constant, not below
+it. The invariant is unchanged by construction — the budget is 5% of the
+ceiling, and the ceiling is the largest projection any gate can admit — so
+this check is still never the wall that rejects a projection.
+
+The macOS daemon adapter takes one `hw.memsize` sample per admission and
+derives all three snapshot reserves from it —
+`pam_model::required_os_reserve`, `pam_model::APPLICATION_RESERVE_BYTES`, and
+`host_projection_contingency_bytes` — so the ceiling and the snapshot can never
+disagree about the same machine.
+
+The ceiling still does *not* fold in current availability, memory pressure, or
+the Metal working-set limit. It is the coarse per-host cap;
+`validate_host_admission` runs that exact accounting from a fresh snapshot
+taken immediately before load, and a model that clears the ceiling can still
+be refused there on those volatile grounds. What it can no longer be refused
+for is physical capacity, because the ceiling now carries the same OS reserve.
+The snapshot that supplies the host total is the same one that feeds the exact
+check — there is one sample per load, not two.
+
+### The 32 GiB story: PAM's own Q6_K
+
+The 25,092,535,456-byte Q6_K in `CALIBRATED_ARTIFACTS` is the artifact that
+motivated the fold. Its weights alone exceed the 32 GiB Mac's 24,696,061,952-byte
+ceiling, so on the minimum supported host it is refused before the model is
+loaded:
+
+```text
+projected runtime allocation of 27523861109 bytes exceeds the 24696061952-byte profile ceiling
+```
+
+Under the previous split rule the same artifact cleared the
+26,414,048,870-byte ceiling on weights and was then refused by the exact
+accounting at load — its weights plus the 8 GiB OS reserve and PAM's 1 GiB
+budget need 34,756,211,872 bytes of a 34,359,738,368-byte machine. No
+contingency value changes that; it is physical capacity, and now one rule
+reports it once.
+
+Calibration is a *measured-end-to-end* verdict, not a promise that an artifact
+fits every supported Mac. PAM ships a calibrated artifact its documented
+32 GiB minimum cannot run; the Q6_K is a 64 GiB-class profile, where it is
+admitted end to end. The other two calibrated artifacts (17,456,012,448 and
+18,556,689,568 bytes) clear the 32 GiB ceiling with their 5% contingency.
+
+## Uncalibrated artifacts at load time
+
+`CALIBRATED_ARTIFACTS` remains the known-good set: an exact digest and size
+pair PAM has measured end to end. Membership is no longer a load gate, only a
+calibration verdict.
+
+- **Calibrated** — the digest and size match the measured set; the runtime
+  profile reports `ArtifactCalibration::Calibrated`. The calibration gate does
+  not apply the host ceiling to a calibrated artifact, because the file size is
+  a coarse stand-in and these artifacts have been measured. It is still held to
+  the ceiling by the exact projection admission that follows, which is where a
+  32 GiB Mac refuses the Q6_K — before model load, not after.
+- **Uncalibrated but fitting** — outside the set, and its weights plus the 5%
+  contingency are within this host's ceiling. It loads, the profile reports
+  `ArtifactCalibration::Uncalibrated`, and the load path logs that the
+  artifact "is not in PAM's calibrated set, so its runtime profile is
+  untested" — the same wording the GUI uses for an uncalibrated import.
+  Nothing about it is treated as measured: it still passes the exact
+  projection, host admission, and live-context checks.
+- **Uncalibrated and too large** — refused with
+  `RuntimeError::UnsupportedArtifact`, whose message names both the artifact
+  size and this Mac's ceiling.
+
+The fit test in the calibration gate is weights-only: the GGUF's file size
+stands in for the runtime allocation, because the gate runs before the exact
+projection is bound to a profile. Context and compute are covered by the 5%
+contingency and then checked exactly by the projection and live-context
+admissions that follow.
+
+## The GUI download catalog
+
+`crates/pam_gui/src/model_presets.rs` is a curated catalog, not a view of
+`CALIBRATED_ARTIFACTS`. Each preset carries its own size and digest literals,
+so PAM can offer artifacts it has not measured — two coding families
+(Qwen3-Coder-30B-A3B, Devstral-Small-2-24B) plus a 120B tier, tiered by
+quantization from a 32 GiB Mac to a 128 GiB one. The three original Qwen
+quants remain the measured set; every other preset is flagged uncalibrated in
+the picker, with the same wording a manual import gets, before tens of GB
+move.
+
+The picker's fit rule is the daemon's own admission arithmetic, rearranged
+into one number by `model_presets::host_model_budget_bytes`:
+
+```text
+budget(total) = host_model_ceiling_bytes(total) - host_projection_contingency_bytes(total)
+a preset fits iff expected_size_bytes <= budget(total)
+```
+
+| host | ceiling | contingency | largest artifact |
+| --- | --- | --- | --- |
+| 32 GiB | 24,696,061,952 | 1,234,803,098 | 23,461,258,854 |
+| 48 GiB | 40,157,944,217 | 2,007,897,211 | 38,150,047,006 |
+| 64 GiB | 53,901,839,564 | 2,695,091,979 | 51,206,747,585 |
+| 96 GiB | 81,389,630,259 | 4,069,481,513 | 77,320,148,746 |
+| 128 GiB | 108,877,420,953 | 5,443,871,048 | 103,433,549,905 |
+
+The verdict is computed in Rust and carried on `ModelPresetDto.fitsHost`, so
+the picker and the load-time gate can never disagree: it is the same pair of
+functions. A preset the host cannot run is shown disabled with both numbers,
+never hidden and never downloadable behind a warning. It stays advisory —
+the daemon re-checks availability, pressure, and the Metal working-set limit
+against a live snapshot at load.
+
+One preset is one file, one digest, one size. Sharded GGUF releases (every
+usable GLM-4.5-Air quant, for one) cannot be expressed in this catalog until
+multi-part download and verification exist.
+
 ## Pinned Qwen projection
 
 The isolated spike uses `llama-cpp-4` 0.6.0, its pinned llama.cpp commit, full
@@ -133,7 +310,8 @@ The schema-v2 release spike reported 32,975,905,344 live allocated bytes for
 the same 512-token configuration, 540,344,320 bytes above the no-allocation
 projection because the live mapped Metal weight buffer is larger. The initial
 2 GiB minimum contingency covers that observed allocation-layout delta. The Q6
-artifact remains rejected under the 20 GB product ceiling.
+artifact remains rejected under the 20 GB ceiling that was in force when this
+profile was measured.
 
 That leaves only 1,924,177,344 bytes of a 32 GiB physical-memory budget before
 projection contingency, PAM, or the OS. The initial 10% contingency alone

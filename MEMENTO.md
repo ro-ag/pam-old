@@ -61,7 +61,7 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - scope: project
 - rule: PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note
 - fix: Control Center is GLOBAL — never render any project identity (name, breadcrumb, selector) on the main page; project_name from control_center.rs bootstrap must not reach Shell breadcrumb. Grep frontend for projectName renders when touching shell chrome.
-- hits: 2026-08-22, 2026-08-24, 2026-08-24, 2026-08-25
+- hits: 2026-08-22, 2026-08-24, 2026-08-24, 2026-08-25, 2026-08-27
 - cost: 60
 - status: enforced -> /Users/rodox/dev/rs/pam/AGENTS.md
 
@@ -106,6 +106,24 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - scope: project
 - rule: Flows are GLOBAL named definitions — define once, invoke against any project when asking PAM to do work; never store or present flow definitions per-project (runs stay project-scoped, definitions do not)
 - fix: Flow library = daemon-global (like skills); Flows view shows the global catalog with no project switcher; the project is chosen at invocation time, not at definition time
-- hits: 2026-08-26
-- cost: 20
+- hits: 2026-08-26, 2026-08-27
+- cost: 40
+- status: watching
+
+## pam-global-views-no-project-identity
+- kind: project-way
+- scope: project
+- rule: PAM's Control Center, Flows, Access and Skills are global surfaces: never render a project selector, project name, path, breadcrumb or project-shaped empty state in them — only the callers log may show project identity.
+- fix: Do not give a global view a contextBar prop or mount ProjectContextBar/ProjectPicker in it; project-scoped rows are labelled per row instead of gated behind a picker. Before shipping any view change: grep frontend/src for contextBar|projectContextBar|ProjectPicker and check each hit is the callers log.
+- hits: 2026-08-27
+- cost: 0
+- status: watching
+
+## pam-verify-in-the-running-app
+- kind: gate
+- scope: project
+- rule: A PAM change is not verified until it has been exercised in the running app — unit and DTO-shape tests pass while the real daemon path (scope admission, authorization, replay guards) still refuses the request
+- fix: Before calling GUI/daemon work done: build the RC, click the actual surface, and read daemon-stderr.log. Two defects this session (operation-UUID replay in Flows, network.diagnostics missing from capability_is_daemon_scoped) shipped green test suites and failed on first click. Authorization tests must send the real envelope through handle_incoming, not assert a DTO.
+- hits: 2026-08-27
+- cost: 0
 - status: watching

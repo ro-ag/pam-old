@@ -362,6 +362,7 @@ fn explicit_subcommands_select_runtime_modes() {
         .mode(),
         Mode::AccessGrant {
             capability: CapabilityName::parse("evidence.read").unwrap(),
+            daemon: false,
             resource: Some(ResourceName::parse("evidence:failure").unwrap()),
             deny: false,
             require_approval: true,
@@ -943,4 +944,44 @@ fn evidence_show_rejects_missing_invalid_and_conflicting_arguments() {
     ] {
         assert!(Cli::try_parse_from(arguments).is_err());
     }
+}
+
+#[test]
+fn access_grant_targets_the_daemon_scope_only_with_the_daemon_flag() {
+    assert_eq!(
+        Cli::try_parse_from([
+            "pam",
+            "access",
+            "grant",
+            "model.infer",
+            "--daemon",
+            "--resource",
+            "model:byteshape/qwen3.6-q4ks",
+        ])
+        .unwrap()
+        .mode(),
+        Mode::AccessGrant {
+            capability: CapabilityName::parse("model.infer").unwrap(),
+            daemon: true,
+            resource: Some(ResourceName::parse("model:byteshape/qwen3.6-q4ks").unwrap()),
+            deny: false,
+            require_approval: false,
+            expires_at_unix_ms: None,
+            kind: CallerKindArg::Cli,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "access", "grant", "brief.read"])
+            .unwrap()
+            .mode(),
+        Mode::AccessGrant {
+            capability: CapabilityName::parse("brief.read").unwrap(),
+            daemon: false,
+            resource: None,
+            deny: false,
+            require_approval: false,
+            expires_at_unix_ms: None,
+            kind: CallerKindArg::Cli,
+        }
+    );
 }

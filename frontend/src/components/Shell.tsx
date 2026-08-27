@@ -1,7 +1,6 @@
 import {
   ArrowClockwise,
   BookOpen,
-  CaretDown,
   Check,
   Circle,
   Gear,
@@ -28,14 +27,14 @@ import {
   useEffect,
   useRef,
 } from "react";
-import type { ProjectSummaryDto, ViewId } from "../domain";
+import type { ViewId } from "../domain";
 import {
   clampSidebarWidth,
   minimumSidebarWidth,
   sidebarMaximumWidth,
   sidebarWidthFromKey,
 } from "../layout";
-import type { DaemonView, ProjectView } from "../selectors";
+import type { DaemonView } from "../selectors";
 import type { PamDensity, PamTheme, PamThemeMode } from "../theme";
 
 // Mirrors p-track's version label: bare versions gain a "v" prefix and
@@ -72,167 +71,6 @@ function IconTooltip({ label, children }: { label: string; children: ReactNode }
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
-  );
-}
-
-export function ProjectMenu({
-  active,
-  projects,
-  open,
-  onOpenChange,
-  onSelect,
-}: {
-  active: ProjectView;
-  projects: ProjectView[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSelect: (project: ProjectView) => void;
-}) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (open) {
-      window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[data-state="checked"]')?.focus());
-    }
-  }, [open]);
-
-  return (
-    <div className="project-menu-wrap">
-      <DropdownMenu.Root open={open} onOpenChange={onOpenChange}>
-        <DropdownMenu.Trigger asChild>
-          <button
-          ref={triggerRef}
-          type="button"
-          className="project-switcher"
-          >
-            <GitBranch size={19} aria-hidden="true" />
-            <span>{active.name}</span>
-            <CaretDown size={16} weight="bold" aria-hidden="true" />
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            ref={menuRef}
-            className="project-menu-popover project-menu"
-            aria-label="Registered projects"
-            align="start"
-            sideOffset={8}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              triggerRef.current?.focus();
-            }}
-          >
-            <DropdownMenu.RadioGroup value={active.handle}>
-            {projects.map((project) => (
-              <DropdownMenu.RadioItem
-                className="project-menu-item"
-                key={project.handle}
-                textValue={project.name}
-                value={project.handle}
-                onSelect={() => onSelect(project)}
-              >
-                <span className={`health-dot health-dot--${project.health}`} aria-hidden="true" />
-                <span>
-                  <strong>{project.name}</strong>
-                  <small>{project.branch ?? project.rootLabel}</small>
-                  <VisuallyHidden.Root>Health: {project.health}</VisuallyHidden.Root>
-                </span>
-                <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-              </DropdownMenu.RadioItem>
-            ))}
-            </DropdownMenu.RadioGroup>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </div>
-  );
-}
-
-// Project context is contextual: this bar sits in the headers of the four
-// project-shaped views instead of the global sidebar chrome.
-export function ProjectContextBar({
-  project,
-  projects,
-  menuOpen,
-  onMenuOpenChange,
-  onSelect,
-}: {
-  project: ProjectView;
-  projects: ProjectView[];
-  menuOpen: boolean;
-  onMenuOpenChange: (open: boolean) => void;
-  onSelect: (project: ProjectView) => void;
-}) {
-  return (
-    <div className="project-context-bar">
-      <ProjectMenu
-        active={project}
-        projects={projects}
-        open={menuOpen}
-        onOpenChange={onMenuOpenChange}
-        onSelect={onSelect}
-      />
-      <span className="project-context-location">{project.rootLabel}</span>
-    </div>
-  );
-}
-
-// The inline project picker, shared by the project-shaped empty state and by
-// the panels that only gate part of their surface on an active project.
-export function ProjectPicker({
-  projects,
-  onSelect,
-}: {
-  projects: ProjectSummaryDto[];
-  onSelect: (project: ProjectSummaryDto) => void;
-}) {
-  return (
-    <div className="project-picker">
-      {projects.map((project) => (
-        <button type="button" className="button button--secondary" key={project.handle} onClick={() => onSelect(project)}>
-          <GitBranch size={17} aria-hidden="true" />
-          <span>{project.name}</span>
-          <small>{project.location}</small>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// The calm project-shaped empty state: an inline picker when projects exist,
-// and a gentle discovery hint when the catalog is empty.
-export function ProjectPlaceholderView({
-  title,
-  subtitle,
-  projects,
-  onSelect,
-}: {
-  title: string;
-  subtitle: string;
-  projects: ProjectSummaryDto[];
-  onSelect: (project: ProjectSummaryDto) => void;
-}) {
-  return (
-    <main className="canvas" id="main-content">
-      <header className="project-header compact">
-        <div><h1>{title}</h1><p>{subtitle}</p></div>
-      </header>
-      <section className="empty-state">
-        <GitBranch size={38} aria-hidden="true" />
-        {projects.length === 0 ? (
-          <>
-            <h2>No projects discovered yet</h2>
-            <p>Open PAM from a Git repository and it will settle in here on its own. The daemon keeps watch either way.</p>
-          </>
-        ) : (
-          <>
-            <h2>Pick a project to bring its queue into view.</h2>
-            <ProjectPicker projects={projects} onSelect={onSelect} />
-          </>
-        )}
-      </section>
-    </main>
   );
 }
 

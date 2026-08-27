@@ -8,19 +8,28 @@ use llama_cpp_4::{
 use pam_core::ContentDigest;
 
 use super::{
-    GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, RegisteredModel, RuntimeError,
-    RuntimeFinishReason, RuntimeFlashAttention, RuntimeGpuOffload, RuntimeHostSnapshot,
-    RuntimeKvCachePrecision, RuntimeMemoryPressure, RuntimeMessage, RuntimeMessageRole,
-    RuntimeRequest, RuntimeSampling, RuntimeSwapTrend,
+    ArtifactCalibration, GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, RegisteredModel,
+    RuntimeError, RuntimeFinishReason, RuntimeFlashAttention, RuntimeGpuOffload,
+    RuntimeHostSnapshot, RuntimeKvCachePrecision, RuntimeMemoryPressure, RuntimeMemoryProjection,
+    RuntimeMessage, RuntimeMessageRole, RuntimeRequest, RuntimeSampling, RuntimeSwapTrend,
 };
 use crate::CALIBRATED_ARTIFACTS;
 use crate::llama_cpp_macos::{
-    admit_bytes, bounded_template_size, build_chat_messages, calibrated_contingency,
-    calibrated_runtime_profile, final_prefill_sample_slot, fixed_context_params,
-    fixed_model_params, metal_and_host_memory_limits, prefill_chunk_ranges,
+    APPLICATION_RESERVE_BYTES, admit_bytes, artifact_calibration, bounded_template_size,
+    build_chat_messages, calibrated_contingency, calibrated_runtime_profile,
+    final_prefill_sample_slot, fixed_context_params, fixed_model_params, host_model_ceiling_bytes,
+    host_projection_contingency_bytes, metal_and_host_memory_limits, prefill_chunk_ranges,
     projection_from_entries, required_os_reserve, test_calibrated_digest, test_calibrated_size,
-    validate_calibrated_artifact, validate_host_admission,
+    validate_host_admission,
 };
+
+const GIB: u64 = 1024 * 1024 * 1024;
+/// PAM's documented minimum Mac; its ceiling is the safety floor no host
+/// derivation may loosen.
+const MIN_HOST_BYTES: u64 = 32 * GIB;
+const OWNER_HOST_BYTES: u64 = 64 * GIB;
+/// `qwen3next/qwen3-coder-next` weights: over the retired 27 GB constant.
+const LARGE_ARTIFACT_BYTES: u64 = 39_234_725_888;
 
 fn registered(digest: ContentDigest, size_bytes: u64) -> RegisteredModel {
     RegisteredModel {
@@ -48,47 +57,146 @@ fn registered(digest: ContentDigest, size_bytes: u64) -> RegisteredModel {
 }
 
 #[test]
-fn calibrated_profile_requires_exact_digest_and_size() {
+fn exact_digest_and_size_are_calibrated_and_anything_else_is_not() {
+    let ceiling = host_model_ceiling_bytes(MIN_HOST_BYTES);
     let digest = ContentDigest::parse(test_calibrated_digest()).unwrap();
-    assert!(
-        validate_calibrated_artifact(&registered(digest.clone(), test_calibrated_size())).is_ok()
+    assert_eq!(
+        artifact_calibration(&registered(digest.clone(), test_calibrated_size()), ceiling).unwrap(),
+        ArtifactCalibration::Calibrated
     );
-    assert!(matches!(
-        validate_calibrated_artifact(&registered(digest, test_calibrated_size() - 1)),
-        Err(RuntimeError::UnsupportedArtifact)
-    ));
-    assert!(matches!(
-        validate_calibrated_artifact(&registered(
-            ContentDigest::from_sha256([0; 32]),
-            test_calibrated_size(),
-        )),
-        Err(RuntimeError::UnsupportedArtifact)
-    ));
+    // Same digest, one byte short, and a stranger digest at the exact size:
+    // both leave the calibrated set but still fit this host.
+    assert_eq!(
+        artifact_calibration(&registered(digest, test_calibrated_size() - 1), ceiling).unwrap(),
+        ArtifactCalibration::Uncalibrated
+    );
+    assert_eq!(
+        artifact_calibration(
+            &registered(ContentDigest::from_sha256([0; 32]), test_calibrated_size()),
+            ceiling,
+        )
+        .unwrap(),
+        ArtifactCalibration::Uncalibrated
+    );
 }
 
 #[test]
 fn calibrated_profile_accepts_every_calibrated_artifact() {
+    let ceiling = host_model_ceiling_bytes(MIN_HOST_BYTES);
     for artifact in CALIBRATED_ARTIFACTS {
         let digest = ContentDigest::parse(format!("sha256:{}", artifact.digest)).unwrap();
-        assert!(
-            validate_calibrated_artifact(&registered(digest, artifact.size_bytes)).is_ok(),
+        assert_eq!(
+            artifact_calibration(&registered(digest, artifact.size_bytes), ceiling).unwrap(),
+            ArtifactCalibration::Calibrated,
             "{} should be an accepted calibrated artifact",
             artifact.digest
         );
     }
 }
 
+/// PAM ships a calibrated artifact its own documented minimum Mac cannot run.
+/// Calibration means "measured end to end", not "fits every supported host",
+/// so the honest assertion is per-host: every calibrated artifact clears
+/// admission on a host that can hold it, and the Q6\_K is refused on the
+/// 32 GiB minimum with a numbered message.
 #[test]
-fn calibrated_admission_accepts_every_calibrated_artifact() {
+fn every_calibrated_artifact_passes_admission_on_a_host_that_can_hold_it() {
+    let min_ceiling = host_model_ceiling_bytes(MIN_HOST_BYTES);
+    let owner_ceiling = host_model_ceiling_bytes(OWNER_HOST_BYTES);
     for artifact in CALIBRATED_ARTIFACTS {
-        let contingency = calibrated_contingency(artifact.size_bytes).unwrap();
+        let contingency = calibrated_contingency(artifact.size_bytes);
         let admitted = artifact.size_bytes.checked_add(contingency).unwrap();
+        // The 64 GiB Mac every artifact was measured on holds all of them.
         assert!(
-            admit_bytes(admitted).is_ok(),
-            "{} should pass admission with its calibrated contingency",
+            admit_bytes(admitted, owner_ceiling).is_ok(),
+            "{} should pass admission with its calibrated contingency on a 64 GiB Mac",
+            artifact.digest
+        );
+        // On the 32 GiB minimum, exactly the Q6_K is over the ceiling. This
+        // is pinned per artifact so a new catalog entry cannot quietly join
+        // it.
+        assert_eq!(
+            admit_bytes(admitted, min_ceiling).is_ok(),
+            artifact.size_bytes != LARGEST_CALIBRATED_BYTES,
+            "{} changed its minimum-Mac admission verdict",
             artifact.digest
         );
     }
+
+    let over_minimum = LARGEST_CALIBRATED_BYTES
+        .checked_add(calibrated_contingency(LARGEST_CALIBRATED_BYTES))
+        .unwrap();
+    let error = admit_bytes(over_minimum, min_ceiling).unwrap_err();
+    assert!(matches!(
+        error,
+        RuntimeError::AdmissionRejected {
+            projected_bytes,
+            maximum_bytes,
+        } if projected_bytes == over_minimum && maximum_bytes == min_ceiling
+    ));
+    let message = error.to_string();
+    assert!(message.contains(&over_minimum.to_string()), "{message}");
+    assert!(message.contains(&min_ceiling.to_string()), "{message}");
+}
+
+#[test]
+fn host_ceiling_scales_with_physical_memory_and_never_loosens_the_minimum_mac() {
+    // Physical minus this host's OS reserve — max(8 GiB, 20%), the same rule
+    // the exact accounting enforces — minus PAM's 1 GiB budget.
+    assert_eq!(host_model_ceiling_bytes(MIN_HOST_BYTES), 24_696_061_952);
+    assert_eq!(host_model_ceiling_bytes(OWNER_HOST_BYTES), 53_901_839_564);
+    // The retired product-wide constant is the floor's upper bound: the
+    // 32 GiB Mac gets no more headroom than it had.
+    assert!(host_model_ceiling_bytes(MIN_HOST_BYTES) <= 27_000_000_000);
+    // Above 40 GiB the 20% share exceeds the 8 GiB floor, so folding the
+    // floor in changes nothing for larger Macs.
+    assert_eq!(
+        host_model_ceiling_bytes(OWNER_HOST_BYTES),
+        OWNER_HOST_BYTES - OWNER_HOST_BYTES.div_ceil(5) - GIB
+    );
+    // A host that owes its whole capacity to the OS reserve admits nothing,
+    // instead of advertising 5.8 GB it could never hold.
+    assert_eq!(host_model_ceiling_bytes(8 * GIB), 0);
+    assert_eq!(host_model_ceiling_bytes(GIB), 0);
+    assert_eq!(host_model_ceiling_bytes(0), 0);
+}
+
+#[test]
+fn uncalibrated_artifact_loads_when_it_fits_the_host_and_is_refused_when_it_does_not() {
+    let large = registered(ContentDigest::from_sha256([3; 32]), LARGE_ARTIFACT_BYTES);
+
+    // 64 GiB Mac: outside the calibrated set, inside the host ceiling.
+    let owner_ceiling = host_model_ceiling_bytes(OWNER_HOST_BYTES);
+    assert_eq!(
+        artifact_calibration(&large, owner_ceiling).unwrap(),
+        ArtifactCalibration::Uncalibrated
+    );
+    let contingency = calibrated_contingency(LARGE_ARTIFACT_BYTES);
+    assert!(admit_bytes(LARGE_ARTIFACT_BYTES + contingency, owner_ceiling).is_ok());
+
+    // 32 GiB Mac: refused, and the refusal names both numbers.
+    let min_ceiling = host_model_ceiling_bytes(MIN_HOST_BYTES);
+    let error = artifact_calibration(&large, min_ceiling).unwrap_err();
+    assert!(matches!(
+        error,
+        RuntimeError::UnsupportedArtifact {
+            size_bytes: LARGE_ARTIFACT_BYTES,
+            maximum_bytes,
+        } if maximum_bytes == min_ceiling
+    ));
+    let message = error.to_string();
+    assert!(
+        message.contains(&LARGE_ARTIFACT_BYTES.to_string()),
+        "{message}"
+    );
+    assert!(message.contains(&min_ceiling.to_string()), "{message}");
+    assert!(message.contains("calibrated set"), "{message}");
+
+    // A small host refuses it too.
+    assert!(matches!(
+        artifact_calibration(&large, host_model_ceiling_bytes(8 * GIB)),
+        Err(RuntimeError::UnsupportedArtifact { .. })
+    ));
 }
 
 #[test]
@@ -108,7 +216,13 @@ fn calibrated_runtime_parameters_are_exact() {
 
     let digest = ContentDigest::parse(test_calibrated_digest()).unwrap();
     let projection = projection_from_entries(digest.clone(), [(1, 2, 3)]).unwrap();
-    let profile = calibrated_runtime_profile(digest, projection).unwrap();
+    let profile = calibrated_runtime_profile(
+        digest,
+        ArtifactCalibration::Uncalibrated,
+        host_model_ceiling_bytes(OWNER_HOST_BYTES),
+        projection,
+    )
+    .unwrap();
     assert_eq!(profile.context_tokens(), 8_192);
     assert_eq!(profile.batch_tokens(), 512);
     assert_eq!(profile.physical_batch_tokens(), 512);
@@ -118,7 +232,9 @@ fn calibrated_runtime_parameters_are_exact() {
     assert_eq!(profile.kv_cache_precision(), RuntimeKvCachePrecision::F16);
     assert!(!profile.kv_cache_unified());
     assert_eq!(profile.sampling(), RuntimeSampling::TopKTopPTemperature);
-    assert_eq!(profile.max_projected_bytes(), 27_000_000_000);
+    assert_eq!(profile.max_projected_bytes(), 53_901_839_564);
+    // An uncalibrated load is marked on the profile, never silently blessed.
+    assert_eq!(profile.calibration(), ArtifactCalibration::Uncalibrated);
 }
 
 #[test]
@@ -128,9 +244,9 @@ fn projection_aggregates_all_entries_and_enforces_decimal_cap() {
     assert_eq!(projection.weight_bytes(), 11);
     assert_eq!(projection.context_bytes(), 22);
     assert_eq!(projection.compute_bytes(), 33);
-    assert!(admit_bytes(27_000_000_000).is_ok());
+    assert!(admit_bytes(27_000_000_000, 27_000_000_000).is_ok());
     assert!(matches!(
-        admit_bytes(27_000_000_001),
+        admit_bytes(27_000_000_001, 27_000_000_000),
         Err(RuntimeError::AdmissionRejected {
             projected_bytes: 27_000_000_001,
             maximum_bytes: 27_000_000_000,
@@ -140,8 +256,8 @@ fn projection_aggregates_all_entries_and_enforces_decimal_cap() {
 
 #[test]
 fn calibrated_projection_contingency_rounds_up_to_five_percent() {
-    assert_eq!(calibrated_contingency(18_587_496_448).unwrap(), 929_374_823);
-    assert_eq!(calibrated_contingency(1).unwrap(), 256 * 1024 * 1024);
+    assert_eq!(calibrated_contingency(18_587_496_448), 929_374_823);
+    assert_eq!(calibrated_contingency(1), 256 * 1024 * 1024);
 }
 
 #[test]
@@ -181,7 +297,7 @@ fn host_admission_requires_fresh_normal_memory_facts() {
     let digest = ContentDigest::parse(test_calibrated_digest()).unwrap();
     let model = registered(digest.clone(), test_calibrated_size());
     let projection = projection_from_entries(digest, [(10, 20, 30)]).unwrap();
-    let gib = 1024 * 1024 * 1024;
+    let gib = GIB;
     let snapshot = RuntimeHostSnapshot::new(
         32 * gib,
         32 * gib,
@@ -255,7 +371,7 @@ fn memory_limits_require_one_positive_metal_and_one_positive_host_entry() {
 
 #[test]
 fn os_reserve_is_at_least_eight_gib_and_twenty_percent_physical() {
-    let gib = 1024 * 1024 * 1024;
+    let gib = GIB;
     assert_eq!(required_os_reserve(32 * gib), 8 * gib);
     assert_eq!(required_os_reserve(64 * gib), 13_743_895_348);
 }
@@ -321,4 +437,146 @@ fn host_snapshot_rejects_inconsistent_os_memory() {
 #[test]
 fn finish_reason_remains_model_neutral() {
     assert_ne!(RuntimeFinishReason::Stop, RuntimeFinishReason::Length);
+}
+
+/// PAM's own largest calibrated artifact, the Q6\_K in `CALIBRATED_ARTIFACTS`.
+const LARGEST_CALIBRATED_BYTES: u64 = 25_092_535_456;
+/// Measured M4 Max Metal recommended maximum working set.
+const METAL_WORKING_SET_BYTES: u64 = 55_662_788_608;
+/// Context and compute bytes measured for the 8,192-token Qwen profile.
+const PROFILE_CONTEXT_BYTES: usize = 805_306_368;
+const PROFILE_COMPUTE_BYTES: usize = 315_359_232;
+
+/// Exactly the snapshot the daemon's macOS adapter builds from `hw.memsize`:
+/// every reserve derived from the host total, nothing fixed.
+fn host_snapshot(total_bytes: u64) -> RuntimeHostSnapshot {
+    RuntimeHostSnapshot::new(
+        total_bytes,
+        total_bytes,
+        required_os_reserve(total_bytes),
+        APPLICATION_RESERVE_BYTES,
+        host_projection_contingency_bytes(total_bytes),
+        RuntimeMemoryPressure::Normal,
+        RuntimeSwapTrend::Stable,
+    )
+    .unwrap()
+}
+
+fn artifact_projection(digest: ContentDigest, size_bytes: u64) -> RuntimeMemoryProjection {
+    projection_from_entries(
+        digest,
+        [(
+            usize::try_from(size_bytes).unwrap(),
+            PROFILE_CONTEXT_BYTES,
+            PROFILE_COMPUTE_BYTES,
+        )],
+    )
+    .unwrap()
+}
+
+#[test]
+fn host_contingency_scales_with_physical_memory_and_never_loosens_the_minimum_mac() {
+    // 5% of this host's ceiling: the largest projection any gate can admit.
+    assert_eq!(
+        host_projection_contingency_bytes(MIN_HOST_BYTES),
+        1_234_803_098
+    );
+    assert_eq!(
+        host_projection_contingency_bytes(OWNER_HOST_BYTES),
+        2_695_091_979
+    );
+    // The retired fixed 1 GiB (1,073,741,824) stays the floor even after the
+    // 8 GiB OS reserve was folded into the ceiling: the minimum Mac budgets
+    // more contingency than the constant it replaced, not less.
+    assert!(host_projection_contingency_bytes(MIN_HOST_BYTES) >= GIB);
+    // The Q6_K no longer clears the 32 GiB ceiling at all, so its 5% is not
+    // this host's problem; the 64 GiB host still covers the largest
+    // uncalibrated artifact it can admit.
+    assert!(
+        host_projection_contingency_bytes(OWNER_HOST_BYTES)
+            >= calibrated_contingency(LARGE_ARTIFACT_BYTES)
+    );
+    // A host too small to admit anything still gets the 256 MiB floor.
+    assert_eq!(host_projection_contingency_bytes(GIB), 256 * 1024 * 1024);
+    assert_eq!(
+        host_projection_contingency_bytes(8 * GIB),
+        256 * 1024 * 1024
+    );
+}
+
+#[test]
+fn contingency_gate_never_rejects_a_projection_the_ceiling_already_admitted() {
+    for total in [8 * GIB, MIN_HOST_BYTES, OWNER_HOST_BYTES, 128 * GIB] {
+        let ceiling = host_model_ceiling_bytes(total);
+        assert!(host_projection_contingency_bytes(total) >= calibrated_contingency(ceiling));
+    }
+}
+
+#[test]
+fn host_derived_contingency_admits_the_owner_artifact_the_fixed_one_gib_rejected() {
+    let digest = ContentDigest::parse(test_calibrated_digest()).unwrap();
+    let owner = registered(digest.clone(), LARGE_ARTIFACT_BYTES);
+    let projection = artifact_projection(digest, LARGE_ARTIFACT_BYTES);
+    // Its 5% is nearly twice the retired fixed contingency.
+    assert!(calibrated_contingency(LARGE_ARTIFACT_BYTES) > GIB);
+    assert!(
+        validate_host_admission(
+            &owner,
+            &projection,
+            host_snapshot(OWNER_HOST_BYTES),
+            METAL_WORKING_SET_BYTES,
+            OWNER_HOST_BYTES,
+        )
+        .is_ok()
+    );
+    // A 32 GiB Mac still refuses it, and the refusal names both numbers.
+    let error = artifact_calibration(&owner, host_model_ceiling_bytes(MIN_HOST_BYTES)).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains(&LARGE_ARTIFACT_BYTES.to_string()),
+        "{message}"
+    );
+    assert!(
+        message.contains(&host_model_ceiling_bytes(MIN_HOST_BYTES).to_string()),
+        "{message}"
+    );
+}
+
+#[test]
+fn largest_calibrated_artifact_is_refused_by_the_minimum_mac_ceiling_not_by_a_late_load_failure() {
+    let digest = ContentDigest::parse(test_calibrated_digest()).unwrap();
+    let model = registered(digest.clone(), LARGEST_CALIBRATED_BYTES);
+    let projection = artifact_projection(digest, LARGEST_CALIBRATED_BYTES);
+    let projected = LARGEST_CALIBRATED_BYTES
+        + u64::try_from(PROFILE_CONTEXT_BYTES + PROFILE_COMPUTE_BYTES).unwrap();
+    let admitted = projected + calibrated_contingency(projected);
+
+    // 32 GiB: the ceiling now carries the absolute 8 GiB OS reserve, so the
+    // gate that refuses this artifact is the ceiling itself, before load —
+    // not the exact accounting discovering the same shortfall afterwards.
+    let min_ceiling = host_model_ceiling_bytes(MIN_HOST_BYTES);
+    let error = admit_bytes(admitted, min_ceiling).unwrap_err();
+    assert!(matches!(
+        error,
+        RuntimeError::AdmissionRejected {
+            projected_bytes,
+            maximum_bytes,
+        } if projected_bytes == admitted && maximum_bytes == min_ceiling
+    ));
+    // Weights alone are already over: no contingency or projection detail
+    // can rescue 25.09 GB on a Mac that owes 8 GiB to the OS and 1 GiB to PAM.
+    assert!(LARGEST_CALIBRATED_BYTES > min_ceiling);
+
+    // A 64 GiB Mac admits the same artifact and projection end to end.
+    assert!(admit_bytes(admitted, host_model_ceiling_bytes(OWNER_HOST_BYTES)).is_ok());
+    assert!(
+        validate_host_admission(
+            &model,
+            &projection,
+            host_snapshot(OWNER_HOST_BYTES),
+            METAL_WORKING_SET_BYTES,
+            OWNER_HOST_BYTES,
+        )
+        .is_ok()
+    );
 }
