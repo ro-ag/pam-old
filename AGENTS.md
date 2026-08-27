@@ -66,3 +66,4 @@ Standing rules for any agent working in this project (from ~/dev/ai):
 
 Rules promoted from the memento ledger. Details/fix: `memento show <slug>`.
 - PAM capabilities repeatedly land daemon/CLI-side without GUI exposure and the owner discovers them 'missing' (skills, model status, callers) — every feature plan must include its GUI surface or an explicit owner-approved deferral note (memento: pam-features-coded-but-not-surfaced)
+- In the pam repo, any file the memento CLI touches (MEMENTO.md via hit, AGENTS.md/CLAUDE.md via promote) must have its trailing blank line at EOF stripped before landing — the Foundation gate's git diff --check fails main on it (memento: memento-md-trailing-blank-fails-foundation)
