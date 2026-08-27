@@ -1168,6 +1168,11 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .panel, .flow-workspace, .state-card { border-color: var(--pam-line); border-radius: 12px; color: var(--pam-text); background: var(--pam-surface-raised); box-shadow: none; }
 .panel-title { min-height: calc(72px * var(--density)); padding: calc(14px * var(--density)) 20px; border-color: var(--pam-line); }
 .panel-title h2 { color: var(--pam-text); font-family: var(--font-display); font-size: 18px; letter-spacing: -0.02em; }
+/* Loose panel content — a note, an action, a confirm row — that is not inside
+   an .access-list or .connector-list. Those wrappers carry the panel's 20px
+   inset themselves, so anything placed directly in a .panel had none and sat
+   flush against the border, 20px left of the heading it belongs to. */
+.panel-body { display: grid; justify-items: start; gap: calc(10px * var(--density)); padding: calc(14px * var(--density)) 20px; }
 .panel-title > svg, .skill-library-title > div:last-child svg, .skill-library-section-title svg, .skill-audit-title > div:last-child > svg { color: var(--pam-violet); }
 .access-list article, .skill-inventory-list article { min-height: calc(76px * var(--density)); padding: calc(14px * var(--density)) 20px; border-color: var(--pam-line); }
 .access-icon { border-color: color-mix(in srgb, var(--pam-ice) 25%, transparent); border-radius: 16px; color: var(--pam-ice); background: var(--pam-ice-soft); }
