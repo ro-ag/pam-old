@@ -50,7 +50,7 @@ export function AccessView({ bridge }: AccessViewProps) {
     <main className="canvas" id="main-content">
       <section className="project-detail-view">
         <header className="project-header compact"><div><h1>Access</h1><p>Narrow capabilities, visible to the developer.</p></div></header>
-        <DaemonAccessPanel bridge={bridge} />
+        <DaemonAccessPanel bridge={bridge} onGrantsChanged={() => void load()} />
         <section className="panel access-panel" aria-labelledby="access-heading">
           <div className="panel-title"><div><span className="eyebrow">Observed boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>
           {loadError && <p className="panel-empty" role="alert">{loadError}</p>}

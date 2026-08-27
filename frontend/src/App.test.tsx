@@ -164,6 +164,24 @@ describe("daemon observatory", () => {
     expect(screen.getByRole("heading", { name: "Authorized capabilities" })).toBeInTheDocument();
   });
 
+  it("re-reads the observed boundary after a daemon-scope grant changes", async () => {
+    // The boundary's verdicts are derived from these grants, so a grant that
+    // leaves the boundary showing its pre-grant answer tells the owner to run
+    // the exact CLI command the button they just pressed already ran.
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("connector-blocked");
+    const readBoundary = vi.spyOn(bridge, "daemonAccessConfig");
+    render(<App bridge={bridge} initialView="access" />);
+
+    await screen.findByRole("heading", { name: "Authorized capabilities" });
+    await waitFor(() => expect(readBoundary).toHaveBeenCalledTimes(1));
+
+    const capabilityRow = within(await screen.findByRole("article", { name: "connector.test" }));
+    await user.click(capabilityRow.getByRole("button", { name: "Grant" }));
+
+    await waitFor(() => expect(readBoundary).toHaveBeenCalledTimes(2));
+  });
+
   it("keeps a calm paused Activity view while the daemon is offline", async () => {
     render(<App bridge={fixtureBridge("offline")} initialView="activity" />);
 

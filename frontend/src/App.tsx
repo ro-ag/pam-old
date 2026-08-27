@@ -691,7 +691,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               )}
               {state.activeView === "access" && (
                 <AccessView
-                  key="access"
+                  key={`access:${refreshTick}`}
                   bridge={bridge}
                 />
               )}
