@@ -5,7 +5,16 @@ type ViewName = "control-center" | "access" | "skills" | "flows" | "activity" | 
 const responsiveWidths = [1_180, 960, 780, 600, 320] as const;
 const runtimeErrors = new WeakMap<Page, string[]>();
 
+// The fixture's activity heatmap is anchored to the wall clock so the demo
+// fills to today (frontend/src/fixtures.ts). That makes every full-canvas
+// baseline expire overnight, so the visual run pins the clock instead of
+// freezing the fixture — the browser demo stays live, the screenshots stay
+// reproducible. `setFixedTime` only pins Date/now; timers keep running, which
+// the app needs.
+const VISUAL_CLOCK = new Date("2026-06-01T12:00:00.000Z");
+
 test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(VISUAL_CLOCK);
   const errors: string[] = [];
   runtimeErrors.set(page, errors);
   page.on("console", (message) => {
