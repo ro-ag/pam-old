@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicUsize;
 
 use super::{
     access_config::{AccessConfigState, map_diagnostics_for_test},
+    control_center::HealthState,
     current::{CurrentState, EvidencePreview, pending_approval_for_test},
     desktop::{
         AccessConfigDto, AppSettingsDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto,
@@ -31,7 +32,7 @@ use super::{
         gui_registration_current_for_test, manage_skill_library_without_io_for_test,
         model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
         registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
-        reserve_for_test, switch_authority_for_test,
+        reserve_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -661,7 +662,8 @@ async fn model_import_status_defaults_to_idle() {
             "stage": null,
             "hashedBytes": 0,
             "totalBytes": 0,
-            "failure": null
+            "failure": null,
+            "calibrated": false
         })
     );
 }
@@ -1311,6 +1313,154 @@ async fn start_daemon_rejects_a_malformed_model_key_before_any_authority_io() {
             "model {model:?}"
         );
     }
+}
+
+/// Writes an executable fake-daemon shell script into a fresh temp dir and
+/// returns (script path, temp dir) so the caller can clean up.
+#[cfg(unix)]
+fn fake_daemon_script(name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-daemon-{name}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("fake-daemon");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (path, directory)
+}
+
+/// Regression: a daemon that dies after spawn (e.g. its model load fails)
+/// must not be reported as a successful start, and the error must point at
+/// the captured stderr log. The health prober stays Offline so only process
+/// liveness can end the wait — a dead child must surface as an error.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
+    let (executable, directory) = fake_daemon_script("early-exit", "exit 3");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+
+    let error = wait_for_daemon_serving_for_test(
+        &mut child,
+        None,
+        || async { HealthState::Offline },
+        || async { false },
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, DesktopErrorKind::Unavailable);
+    assert!(error.message.contains("exited during startup"));
+    assert!(
+        error
+            .recovery
+            .as_deref()
+            .unwrap()
+            .contains("daemon-stderr.log")
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The daemon now keeps serving when a requested model fails to load, so a
+/// healthy answer alone must not pass startup verification.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_serving_daemon_without_the_requested_model_is_not_a_successful_start() {
+    let (executable, directory) = fake_daemon_script("no-model", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+
+    let error = wait_for_daemon_serving_for_test(
+        &mut child,
+        Some("vendor/model"),
+        || async {
+            HealthState::Healthy {
+                daemon_version: "test".to_owned(),
+                queue_depth: 0,
+            }
+        },
+        || async { false },
+    )
+    .await
+    .unwrap_err();
+
+    let _ = child.kill();
+    assert_eq!(error.kind, DesktopErrorKind::Unavailable);
+    assert!(error.message.contains("failed to load"));
+    assert!(
+        error
+            .recovery
+            .as_deref()
+            .unwrap()
+            .contains("daemon-stderr.log")
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// While the daemon loads a multi-GB model it is alive but deaf, which the
+/// health probe reports as Degraded ("running but did not respond in time").
+/// That must keep the startup poll going — erroring out here would fail
+/// every healthy load seconds in.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
+    let (executable, directory) = fake_daemon_script("deaf-then-healthy", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let probes = std::sync::Arc::new(AtomicUsize::new(0));
+    let probe_count = std::sync::Arc::clone(&probes);
+
+    let result = wait_for_daemon_serving_for_test(
+        &mut child,
+        Some("vendor/model"),
+        move || {
+            let probe_count = std::sync::Arc::clone(&probe_count);
+            async move {
+                if probe_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    HealthState::Degraded {
+                        detail: "PAM daemon (pid 1) is running but did not respond in time."
+                            .to_owned(),
+                        recovery: None,
+                    }
+                } else {
+                    HealthState::Healthy {
+                        daemon_version: "test".to_owned(),
+                        queue_depth: 0,
+                    }
+                }
+            }
+        },
+        || async { true },
+    )
+    .await;
+
+    let _ = child.kill();
+    assert!(result.is_ok());
+    assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 3);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Positive control: a serving daemon with the requested model reported
+/// loaded passes startup verification immediately.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() {
+    let (executable, directory) = fake_daemon_script("loaded", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+
+    let result = wait_for_daemon_serving_for_test(
+        &mut child,
+        Some("vendor/model"),
+        || async {
+            HealthState::Healthy {
+                daemon_version: "test".to_owned(),
+                queue_depth: 0,
+            }
+        },
+        || async { true },
+    )
+    .await;
+
+    let _ = child.kill();
+    assert!(result.is_ok());
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[tokio::test]
