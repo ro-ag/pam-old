@@ -1042,6 +1042,31 @@ fn connector_migration_upgrades_v12_without_replacing_existing_state() {
 }
 
 #[test]
+fn racing_openers_on_a_fresh_database_migrate_exactly_once() {
+    // Store::open itself spawns two opener threads, and the daemon and the CLI
+    // can race on a fresh database too: the version check and the migrations
+    // are one immediate transaction, so every racer either applies the full
+    // chain or blocks and then sees the final version.
+    let (directory, path) = database_path("migration-race");
+    let mut racers = Vec::new();
+    for _ in 0..4 {
+        let path = path.clone();
+        racers.push(std::thread::spawn(move || {
+            let connection = open_connection(&path).unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, LATEST_SCHEMA_VERSION);
+        }));
+    }
+    for racer in racers {
+        racer.join().unwrap();
+    }
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn future_schema_is_refused_without_deleting_the_database() {
     let (directory, path) = database_path("future-schema");
     fs::create_dir_all(&directory).unwrap();

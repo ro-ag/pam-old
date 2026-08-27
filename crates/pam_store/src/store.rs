@@ -5518,7 +5518,12 @@ fn ensure_foreign_keys(connection: &Connection) -> Result<(), StoreError> {
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
-    let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    // The version check and every outstanding migration run in one immediate
+    // transaction: a concurrent opener on a fresh database (the daemon and the
+    // CLI, or Store's own two workers) blocks on the write lock and then sees
+    // the final version, so migrations can never be applied twice.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let found: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if found > LATEST_SCHEMA_VERSION {
         return Err(StoreError::FutureSchema {
             found,
@@ -5527,11 +5532,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
     }
 
     for &(version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version > found) {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(sql)?;
         transaction.pragma_update(None, "user_version", version)?;
-        transaction.commit()?;
     }
+    transaction.commit()?;
     Ok(())
 }
 

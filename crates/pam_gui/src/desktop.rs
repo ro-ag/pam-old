@@ -76,6 +76,10 @@ const MAX_EVIDENCE_HANDLES: usize = 256;
 /// so the post-spawn startup poll gets a generous bound.
 const STARTUP_TIMEOUT: Duration = Duration::from_mins(2);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Graceful daemon shutdown after a stop request is quick; this bounds the
+/// wait before the GUI kills and collects the daemon child itself.
+const DAEMON_STOP_GRACE: Duration = Duration::from_secs(5);
+const DAEMON_STOP_POLL: Duration = Duration::from_millis(50);
 const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
 const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
@@ -1517,14 +1521,14 @@ impl DesktopCore {
         match scope {
             CommandScope::Daemon => {
                 let mut state = self.inner.lock().await;
-                state.daemon_child = Some(child);
+                replace_daemon_child(&mut state.daemon_child, child);
                 Ok(None)
             }
             CommandScope::Project(active) => {
                 let surfaces = load_surfaces(active.project_id.clone()).await;
                 let mut state = self.inner.lock().await;
                 ensure_active_matches(&state, &active, &fence)?;
-                state.daemon_child = Some(child);
+                replace_daemon_child(&mut state.daemon_child, child);
                 finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
             }
         }
@@ -1552,7 +1556,7 @@ impl DesktopCore {
         match scope {
             CommandScope::Daemon => {
                 let mut state = self.inner.lock().await;
-                reap_daemon_child(&mut state);
+                reap_daemon_child(&mut state.daemon_child);
                 Ok(None)
             }
             CommandScope::Project(active) => {
@@ -1561,7 +1565,7 @@ impl DesktopCore {
                         .await;
                 let mut state = self.inner.lock().await;
                 ensure_active_matches(&state, &active, &fence)?;
-                reap_daemon_child(&mut state);
+                reap_daemon_child(&mut state.daemon_child);
                 finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
             }
         }
@@ -1890,10 +1894,14 @@ impl DesktopCore {
 
     /// Runs one policy-gated direct inference on the embedded runtime.
     ///
-    /// A missing or zero `max_output_tokens` requests the default budget and
-    /// larger requests are clamped to the protocol maximum. Policy and
-    /// approval refusals are classified as blocked in the returned DTO with
-    /// recovery text; everything else is unavailable.
+    /// Inference can run for minutes, so it never takes the command gate:
+    /// fence authorization and the post-exchange staleness check synchronize
+    /// through the state lock alone, and the daemon policy-gates and
+    /// serializes the generation itself. A missing or zero
+    /// `max_output_tokens` requests the default budget and larger requests
+    /// are clamped to the protocol maximum. Policy and approval refusals are
+    /// classified as blocked in the returned DTO with recovery text;
+    /// everything else is unavailable.
     ///
     /// # Errors
     ///
@@ -1907,7 +1915,6 @@ impl DesktopCore {
         messages: Vec<ModelMessageDto>,
         max_output_tokens: Option<u32>,
     ) -> DesktopResult<ModelInferDto> {
-        let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
         let messages = messages
             .into_iter()
@@ -2832,6 +2839,12 @@ fn daemon_stderr_log_hint() -> String {
 /// health alone is not proof, because a daemon whose model load failed
 /// still serves, just without the model.
 ///
+/// On failure the child is collected before returning: killed first when it
+/// is still running, then always waited on, so a failed start never leaves a
+/// zombie or an untracked live daemon blocking a retry on the ownership
+/// lock. (A child that exited during startup was already reaped by
+/// `try_wait`.)
+///
 /// Only `HealthState::Healthy` is definitive: the daemon binds its socket
 /// before loading the model, so mid-load it is alive but deaf and the health
 /// probe's timeout disambiguation reports that as `Degraded` ("running but
@@ -2872,6 +2885,7 @@ where
                 if model_loaded().await {
                     return Ok(());
                 }
+                reap_failed_daemon_start(child);
                 return Err(DesktopErrorDto::unavailable(
                     format!("The local daemon is running, but the model {model} failed to load."),
                     Some(daemon_stderr_log_hint()),
@@ -2880,6 +2894,7 @@ where
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
+            reap_failed_daemon_start(child);
             return Err(DesktopErrorDto::unavailable(
                 format!(
                     "The local daemon did not start serving within {} seconds.",
@@ -4190,13 +4205,50 @@ fn bounded_utf8(mut value: String, maximum: usize) -> String {
     value
 }
 
-fn reap_daemon_child(state: &mut DesktopState) {
-    let exited = state
-        .daemon_child
-        .as_mut()
-        .is_some_and(|child| child.try_wait().ok().flatten().is_some());
-    if exited {
-        state.daemon_child = None;
+/// Collects a child whose startup verification failed: kill it when it is
+/// still running and always wait, so no zombie outlives the handle and no
+/// untracked daemon blocks a retry on the ownership lock.
+fn reap_failed_daemon_start(child: &mut Child) {
+    if !matches!(child.try_wait(), Ok(Some(_))) {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+/// Collects the spawned daemon child after a stop request. The graceful
+/// shutdown gets a bounded grace period; whatever is still running after that
+/// is killed, and the child is always waited on — dropping the handle without
+/// a wait would leave a zombie once the process exits, and an untracked live
+/// daemon would block a later start on the ownership lock.
+fn reap_daemon_child(child_slot: &mut Option<Child>) {
+    let Some(mut child) = child_slot.take() else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + DAEMON_STOP_GRACE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(DAEMON_STOP_POLL);
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+}
+
+/// Replaces the tracked daemon child, always collecting the previous one: an
+/// already-exited child is reaped and a still-running one is killed first, so
+/// a replaced daemon never outlives its handle as a zombie.
+fn replace_daemon_child(child_slot: &mut Option<Child>, child: Child) {
+    if let Some(mut previous) = child_slot.replace(child) {
+        if !matches!(previous.try_wait(), Ok(Some(_))) {
+            let _ = previous.kill();
+        }
+        let _ = previous.wait();
     }
 }
 
@@ -4264,6 +4316,16 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn reap_daemon_child_for_test(child_slot: &mut Option<Child>) {
+    reap_daemon_child(child_slot);
+}
+
+#[cfg(test)]
+pub(crate) fn replace_daemon_child_for_test(child_slot: &mut Option<Child>, child: Child) {
+    replace_daemon_child(child_slot, child);
 }
 
 #[cfg(test)]
@@ -4461,6 +4523,11 @@ pub(crate) async fn reserve_for_test(
     fence: &CommandFence,
 ) -> DesktopResult<()> {
     core.begin(fence).await.map(drop)
+}
+
+#[cfg(test)]
+pub(crate) fn command_gate_for_test(core: &DesktopCore) -> Arc<Mutex<()>> {
+    Arc::clone(&core.command_gate)
 }
 
 #[cfg(test)]

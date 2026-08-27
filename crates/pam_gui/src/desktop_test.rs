@@ -25,14 +25,15 @@ use super::{
         access_dto_for_test, active_core_at_for_test, active_core_for_test, activity_dto_for_test,
         approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
-        clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
+        clamp_model_output_tokens_for_test, command_gate_for_test, connector_configure_dto_for_test,
         connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
         daemon_start_cwd_for_test, evidence_dto_for_test, failure_kind_for_test,
         flow_compose_data_for_test, flow_graph_data_for_test, flow_workspace_at_for_test,
         gui_registration_current_for_test, manage_skill_library_without_io_for_test,
         model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
-        reserve_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
+        reap_daemon_child_for_test, registration_contract_for_test, registration_failure_detail,
+        replace_daemon_child_for_test, reserve_daemon_for_test, reserve_for_test,
+        switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -1292,6 +1293,33 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     );
 }
 
+/// Inference can run for minutes, so it must never queue behind the global
+/// command gate: a replayed daemon operation conflicts even while the gate is
+/// deliberately held, proving fence authorization fired without acquiring it.
+#[tokio::test]
+async fn model_infer_authorizes_off_the_command_gate() {
+    let core = DesktopCore::new("/bounded/test");
+    let operation = OperationId::new();
+    reserve_daemon_for_test(&core, &daemon_fence(operation.clone()))
+        .await
+        .unwrap();
+
+    let gate = command_gate_for_test(&core);
+    let _held = gate.lock().await;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        core.model_infer(
+            daemon_fence(operation),
+            "vendor/name".to_owned(),
+            Vec::new(),
+            None,
+        ),
+    )
+    .await
+    .expect("model_infer must not wait on the command gate");
+    assert_daemon_replay_conflict(result);
+}
+
 #[tokio::test]
 async fn start_daemon_rejects_a_malformed_model_key_before_any_authority_io() {
     let core = DesktopCore::new("/bounded/test");
@@ -1460,6 +1488,64 @@ async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() 
 
     let _ = child.kill();
     assert!(result.is_ok());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Regression: replacing the tracked daemon child (start-with-model and
+/// restart flows) used to drop the previous handle without a wait, leaving a
+/// zombie once the old process exited and an untracked live daemon holding
+/// the ownership lock. The replaced child must be killed and collected.
+#[cfg(unix)]
+#[tokio::test]
+async fn replacing_a_live_daemon_child_kills_and_collects_it() {
+    let (executable, directory) = fake_daemon_script("replace", "sleep 30");
+    let previous = std::process::Command::new(&executable).spawn().unwrap();
+    let previous_pid = previous.id();
+    let next = std::process::Command::new(&executable).spawn().unwrap();
+    let mut slot = Some(previous);
+
+    replace_daemon_child_for_test(&mut slot, next);
+
+    // A killed-but-unreaped child would still answer kill -0 as a zombie.
+    let gone = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {previous_pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(
+        !gone.success(),
+        "replaced daemon child {previous_pid} is still alive or a zombie"
+    );
+    if let Some(mut child) = slot.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Regression: a daemon that exits right after the stop request must be
+/// collected within the grace period — the old code kept the handle whenever
+/// the child had not exited yet, and no later call would ever reap it.
+#[cfg(unix)]
+#[tokio::test]
+async fn reap_daemon_child_collects_a_child_that_exits_within_the_grace_period() {
+    let (executable, directory) = fake_daemon_script("graceful-exit", "sleep 0.2");
+    let child = std::process::Command::new(&executable).spawn().unwrap();
+    let pid = child.id();
+    let mut slot = Some(child);
+
+    reap_daemon_child_for_test(&mut slot);
+
+    assert!(slot.is_none());
+    let gone = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(
+        !gone.success(),
+        "daemon child {pid} is still alive or a zombie"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 
