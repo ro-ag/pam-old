@@ -909,4 +909,3 @@ describe("model runtime panel", () => {
     expect(within(panel).getByText(/local model runtime is not reachable/)).toBeInTheDocument();
   });
 });
-
