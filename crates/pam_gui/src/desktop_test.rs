@@ -18,21 +18,24 @@ use super::{
     current::{CurrentState, EvidencePreview, pending_approval_for_test},
     desktop::{
         AccessConfigDto, AppSettingsDto, ApprovalDecisionDispositionDto, BootstrapDto, CatalogDto,
-        CommandFence, ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind,
-        DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto,
-        FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId, HealthDto,
-        ModelDownloadDto, ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto,
-        access_dto_for_test, active_core_at_for_test, active_core_for_test, activity_dto_for_test,
-        approval_current_for_test, approval_failure_retains_handle_for_test,
-        bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
-        clamp_model_output_tokens_for_test, connector_configure_dto_for_test,
-        connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
-        daemon_start_cwd_for_test, evidence_dto_for_test, failure_kind_for_test,
-        flow_compose_data_for_test, flow_graph_data_for_test, flow_workspace_at_for_test,
-        gui_registration_current_for_test, manage_skill_library_without_io_for_test,
+        CommandFence, ConnectorConfigureParams, CurrentDto, DaemonStartup, DesktopCore,
+        DesktopErrorKind, DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto,
+        FlowComposeDto, FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId,
+        HealthDto, ModelDownloadDto, ModelInspectDto, ModelStatusDto, ModelSummaryDto, OperationId,
+        ProjectHandle, TimelineKindDto, access_dto_for_test, active_core_at_for_test,
+        active_core_for_test, activity_dto_for_test, approval_current_for_test,
+        approval_failure_retains_handle_for_test, bootstrap_with_catalog_for_test,
+        bounded_detail_for_test, callers_dto_for_test, clamp_model_output_tokens_for_test,
+        command_gate_for_test, connector_configure_dto_for_test, connector_test_dto_for_test,
+        connectors_dto_for_test, current_dto_for_test, daemon_start_cwd_for_test,
+        evidence_dto_for_test, failure_kind_for_test, flow_compose_data_for_test,
+        flow_graph_data_for_test, flow_workspace_at_for_test, gui_registration_current_for_test,
+        manage_skill_library_without_io_for_test, mark_model_loading_for_test,
         model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        registration_contract_for_test, registration_failure_detail, reserve_daemon_for_test,
-        reserve_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
+        reap_daemon_child_for_test, registered_model_catalog_in_for_test,
+        registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
+        reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
+        switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -579,6 +582,7 @@ fn model_status_dto_serializes_the_exact_frontend_ok_contract() {
             ModelSummary::new("qwen/qwen3-4b-instruct", 2_600_000_000).unwrap(),
             ModelSummary::new("vendor/name", 123).unwrap(),
         ],
+        load_failure: None,
     }));
 
     assert_eq!(
@@ -589,7 +593,9 @@ fn model_status_dto_serializes_the_exact_frontend_ok_contract() {
             "registered": [
                 { "modelId": "qwen/qwen3-4b-instruct", "sizeBytes": 2_600_000_000_u64 },
                 { "modelId": "vendor/name", "sizeBytes": 123 }
-            ]
+            ],
+            "loadFailure": null,
+            "loading": false
         })
     );
 }
@@ -599,37 +605,138 @@ fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
     let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
         loaded: None,
         registered: Vec::new(),
+        load_failure: None,
     }));
 
     assert_eq!(
         serde_json::to_value(dto).unwrap(),
-        serde_json::json!({ "status": "ok", "loaded": null, "registered": [] })
+        serde_json::json!({
+            "status": "ok",
+            "loaded": null,
+            "registered": [],
+            "loadFailure": null,
+            "loading": false
+        })
+    );
+}
+
+/// A daemon serving without the model it was started with reports why: the
+/// reason reaches the frontend on every status read, not just once as a
+/// toast.
+#[test]
+fn model_status_dto_carries_the_daemon_reported_load_failure() {
+    let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
+        loaded: None,
+        registered: vec![ModelSummary::new("vendor/name", 123).unwrap()],
+        load_failure: Some(
+            "model load failed; the daemon will serve without a model: registered model does not \
+             match the calibrated macOS runtime profile"
+                .to_owned(),
+        ),
+    }));
+
+    let value = serde_json::to_value(dto).unwrap();
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["loaded"], serde_json::Value::Null);
+    assert!(
+        value["loadFailure"]
+            .as_str()
+            .unwrap()
+            .contains("calibrated macOS runtime profile")
+    );
+}
+
+/// A model that does load clears the reason: the status carries no stale
+/// failure once the runtime is up.
+#[test]
+fn model_status_dto_reports_no_load_failure_once_a_model_is_loaded() {
+    let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
+        loaded: Some(ModelSummary::new("vendor/name", 123).unwrap()),
+        registered: vec![ModelSummary::new("vendor/name", 123).unwrap()],
+        load_failure: None,
+    }));
+
+    assert_eq!(
+        serde_json::to_value(dto).unwrap()["loadFailure"],
+        serde_json::Value::Null
     );
 }
 
 #[tokio::test]
-async fn model_presets_lists_exactly_the_curated_catalog() {
+async fn registered_model_catalog_reads_the_durable_store_directly() {
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-model-catalog-{}", uuid::Uuid::new_v4()));
+    let state_path = directory.join("state.sqlite3");
+    std::fs::create_dir_all(&directory).unwrap();
+    let store = pam_store::Store::open(&state_path).unwrap();
+    store
+        .put_model(pam_model::RegisteredModel {
+            key: pam_model::ModelKey::new("qwen", "seeded").unwrap(),
+            path: directory.join("seeded.gguf"),
+            digest: ContentDigest::from_sha256([7; 32]),
+            size_bytes: 64,
+            gguf: pam_model::GgufMetadata {
+                version: 3,
+                tensor_count: 17,
+                metadata_kv_count: 29,
+                architecture: None,
+                model_name: None,
+                license: None,
+            },
+            license: pam_model::LicenseSnapshot::new(
+                "Apache-2.0",
+                "https://example.test/license",
+                ContentDigest::from_sha256([8; 32]),
+            )
+            .unwrap(),
+            source: pam_model::ModelSource::Local,
+            registered_at_ms: 5,
+        })
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let catalog = registered_model_catalog_in_for_test(state_path)
+        .await
+        .expect("a readable store yields its catalog");
+    assert_eq!(
+        catalog,
+        vec![ModelSummaryDto {
+            model_id: "qwen/seeded".to_owned(),
+            size_bytes: 64,
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[tokio::test]
+async fn model_presets_lists_the_curated_catalog_judged_against_this_host() {
     let core = DesktopCore::new("/bounded/test");
     let dto = core
         .model_presets(daemon_fence(OperationId::new()))
         .await
         .unwrap();
 
-    assert_eq!(dto.presets.len(), 3);
-    let mut ids: Vec<&str> = dto
+    let ids: Vec<&str> = dto
         .presets
         .iter()
         .map(|preset| preset.id.as_str())
         .collect();
-    ids.sort_unstable();
-    assert_eq!(
-        ids,
-        [
-            "qwen3-coder-30b-q4km",
-            "qwen3-coder-30b-q4ks",
-            "qwen3-coder-30b-q6k"
-        ]
-    );
+    assert_eq!(ids.len(), crate::model_presets::CATALOG.len());
+    assert!(ids.contains(&"qwen3-coder-30b-q4ks"));
+    assert!(ids.contains(&"devstral-small-2-24b-q4km"));
+
+    for preset in &dto.presets {
+        let source = crate::model_presets::find(&preset.id).unwrap();
+        assert_eq!(preset.calibrated, source.calibrated(), "{}", preset.id);
+        assert_eq!(
+            preset.fits_host,
+            dto.host_model_budget_bytes
+                .is_none_or(|budget| preset.expected_size_bytes <= budget),
+            "{}",
+            preset.id
+        );
+    }
 }
 
 #[tokio::test]
@@ -1252,6 +1359,7 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
             .await,
     );
     assert_daemon_replay_conflict(core.daemon_health(fence()).await);
+    assert_daemon_replay_conflict(core.daemon_access_config(fence()).await);
     assert_daemon_replay_conflict(core.start_daemon(fence(), None).await);
     assert_daemon_replay_conflict(core.stop_daemon(fence()).await);
     assert_daemon_replay_conflict(core.model_presets(fence()).await);
@@ -1292,6 +1400,81 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
     );
 }
 
+/// Inference can run for minutes, so it must never queue behind the global
+/// command gate: a replayed daemon operation conflicts even while the gate is
+/// deliberately held, proving fence authorization fired without acquiring it.
+#[tokio::test]
+async fn model_infer_authorizes_off_the_command_gate() {
+    let core = DesktopCore::new("/bounded/test");
+    let operation = OperationId::new();
+    reserve_daemon_for_test(&core, &daemon_fence(operation.clone()))
+        .await
+        .unwrap();
+
+    let gate = command_gate_for_test(&core);
+    let _held = gate.lock().await;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        core.model_infer(
+            daemon_fence(operation),
+            "vendor/name".to_owned(),
+            Vec::new(),
+            None,
+        ),
+    )
+    .await
+    .expect("model_infer must not wait on the command gate");
+    assert_daemon_replay_conflict(result);
+}
+
+/// The observed access boundary is daemon truth, so its command must refuse a
+/// project fence outright: no project identity can reach this read.
+#[tokio::test]
+async fn daemon_access_config_refuses_a_project_fence() {
+    let core = DesktopCore::new("/bounded/test");
+    let error = core
+        .daemon_access_config(CommandFence::new(
+            ProjectHandle::new(),
+            GenerationId::new(),
+            OperationId::new(),
+        ))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind, DesktopErrorKind::InvalidInput);
+    assert!(error.message.contains("daemon authority fence"));
+}
+
+/// The daemon-scope read hands back the same access DTO the project snapshot
+/// carries, so both paths render identically.
+#[test]
+fn daemon_access_config_reuses_the_snapshot_access_contract() {
+    assert_eq!(
+        serde_json::to_value(access_dto_for_test(AccessConfigState::Available(
+            map_diagnostics_for_test(
+                OperationTruth::Observed,
+                &NetworkDiagnosticsResult {
+                    platform_roots_enabled: true,
+                    system_proxy_discovery_enabled: false,
+                    proxy_environment_presence: ConfigurationPresence::NotConfigured,
+                    no_proxy_presence: ConfigurationPresence::NotConfigured,
+                    pac_state: PacState::NotDetected,
+                },
+            )
+        )))
+        .unwrap(),
+        serde_json::json!({
+            "status": "available",
+            "truth": "observed",
+            "platformRootsEnabled": true,
+            "systemProxyDiscoveryEnabled": false,
+            "proxyEnvironment": "not configured",
+            "noProxy": "not configured",
+            "pac": "not detected"
+        })
+    );
+}
+
 #[tokio::test]
 async fn start_daemon_rejects_a_malformed_model_key_before_any_authority_io() {
     let core = DesktopCore::new("/bounded/test");
@@ -1318,6 +1501,18 @@ async fn start_daemon_rejects_a_malformed_model_key_before_any_authority_io() {
 /// Writes an executable fake-daemon shell script into a fresh temp dir and
 /// returns (script path, temp dir) so the caller can clean up.
 #[cfg(unix)]
+/// True while the process still exists (a zombie also answers `kill -0`, so
+/// pair this with `try_wait` when liveness matters).
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {pid} 2>/dev/null"))
+        .status()
+        .unwrap()
+        .success()
+}
+
 fn fake_daemon_script(name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let directory =
@@ -1342,6 +1537,7 @@ async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
     let error = wait_for_daemon_serving_for_test(
         &mut child,
         None,
+        std::time::Duration::from_secs(30),
         || async { HealthState::Offline },
         || async { false },
     )
@@ -1349,6 +1545,8 @@ async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
     .unwrap_err();
 
     assert_eq!(error.kind, DesktopErrorKind::Unavailable);
+    // A genuinely dead start is still collected: no zombie, nothing to track.
+    assert!(child.try_wait().unwrap().is_some());
     assert!(error.message.contains("exited during startup"));
     assert!(
         error
@@ -1362,15 +1560,21 @@ async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
 
 /// The daemon now keeps serving when a requested model fails to load, so a
 /// healthy answer alone must not pass startup verification.
+///
+/// Regression (#31): the verification used to kill that daemon, so a failed
+/// model load left nothing running while the GUI reported otherwise. The
+/// child must survive the verification for `start_daemon` to track it.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_serving_daemon_without_the_requested_model_is_not_a_successful_start() {
+async fn a_serving_daemon_without_the_requested_model_is_reported_alive_and_not_reaped() {
     let (executable, directory) = fake_daemon_script("no-model", "sleep 30");
     let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let pid = child.id();
 
-    let error = wait_for_daemon_serving_for_test(
+    let outcome = wait_for_daemon_serving_for_test(
         &mut child,
         Some("vendor/model"),
+        std::time::Duration::from_secs(30),
         || async {
             HealthState::Healthy {
                 daemon_version: "test".to_owned(),
@@ -1380,9 +1584,23 @@ async fn a_serving_daemon_without_the_requested_model_is_not_a_successful_start(
         || async { false },
     )
     .await
-    .unwrap_err();
+    .unwrap();
 
+    let DaemonStartup::ModelMissing(error) = outcome else {
+        panic!("a serving daemon without its model must report the model failure")
+    };
+    // The process is still there and still ours to wait on: neither killed
+    // nor reaped, so the message below is true when the GUI shows it.
+    assert!(
+        alive(pid),
+        "daemon child {pid} was killed by the verification"
+    );
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "daemon child {pid} was collected by the verification"
+    );
     let _ = child.kill();
+    let _ = child.wait();
     assert_eq!(error.kind, DesktopErrorKind::Unavailable);
     assert!(error.message.contains("failed to load"));
     assert!(
@@ -1410,6 +1628,7 @@ async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
     let result = wait_for_daemon_serving_for_test(
         &mut child,
         Some("vendor/model"),
+        std::time::Duration::from_secs(30),
         move || {
             let probe_count = std::sync::Arc::clone(&probe_count);
             async move {
@@ -1432,8 +1651,111 @@ async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
     .await;
 
     let _ = child.kill();
-    assert!(result.is_ok());
+    assert!(matches!(result, Ok(DaemonStartup::Serving)));
     assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 3);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Regression (#34): a 39 GB artifact needs a full digest revalidation plus
+/// the Metal load, which outran the flat two-minute deadline — and the
+/// deadline branch killed the daemon mid-load, leaving the user with a
+/// silent UNREACHABLE. A process that is still running at the deadline is
+/// still starting: it must be handed back alive for `start_daemon` to track.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_daemon_still_loading_at_the_deadline_is_reported_starting_and_not_killed() {
+    let (executable, directory) = fake_daemon_script("still-loading", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let pid = child.id();
+
+    let outcome = wait_for_daemon_serving_for_test(
+        &mut child,
+        Some("vendor/model"),
+        std::time::Duration::from_millis(1),
+        // Mid-load the daemon is alive but deaf: bound, not yet accepting.
+        || async {
+            HealthState::Degraded {
+                detail: "PAM daemon (pid 1) is running but did not respond in time.".to_owned(),
+                recovery: None,
+            }
+        },
+        || async { false },
+    )
+    .await
+    .unwrap();
+
+    let DaemonStartup::StillStarting(notice) = outcome else {
+        panic!("a daemon still running at the deadline must be reported as still starting")
+    };
+    assert!(
+        alive(pid),
+        "daemon child {pid} was killed by the deadline branch"
+    );
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "daemon child {pid} was collected by the deadline branch"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(notice.message.contains("still starting"));
+    assert!(notice.recovery.as_deref().unwrap().contains("Leave PAM"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The startup budget is the artifact's work, not a flat guess: a base
+/// allowance for binding plus one minute per 8 GiB to hash and map, capped
+/// so no launch can hold the command gate indefinitely.
+#[test]
+fn the_startup_budget_scales_with_the_artifact_size_on_disk() {
+    assert_eq!(
+        startup_budget_for_bytes_for_test(None),
+        std::time::Duration::from_mins(2)
+    );
+    // 17.5 GB: 2 minutes plus 3.
+    assert_eq!(
+        startup_budget_for_bytes_for_test(Some(17_500_000_000)),
+        std::time::Duration::from_mins(5)
+    );
+    // 39.2 GB: 2 minutes plus 5.
+    assert_eq!(
+        startup_budget_for_bytes_for_test(Some(39_200_000_000)),
+        std::time::Duration::from_mins(7)
+    );
+    assert_eq!(
+        startup_budget_for_bytes_for_test(Some(u64::MAX)),
+        std::time::Duration::from_mins(10)
+    );
+}
+
+/// The daemon cannot answer while it loads, so the GUI infers the phase from
+/// the child it spawned: unreachable plus a live process is a load in
+/// flight, and the panel says so instead of showing a silent unreachable.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreachable_daemon_with_a_live_child_reports_its_model_as_loading() {
+    let (executable, directory) = fake_daemon_script("loading-status", "sleep 30");
+    let unreachable = || ModelStatusDto::Ok {
+        loaded: None,
+        registered: Vec::new(),
+        load_failure: None,
+        loading: false,
+    };
+    let mut live_slot = Some(std::process::Command::new(&executable).spawn().unwrap());
+
+    let live = mark_model_loading_for_test(unreachable(), &mut live_slot);
+    assert!(
+        matches!(live, ModelStatusDto::Ok { loading: true, .. }),
+        "a live spawned daemon that cannot answer is still loading"
+    );
+
+    let mut child = live_slot.take().unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    let exited = mark_model_loading_for_test(unreachable(), &mut Some(child));
+    assert!(
+        matches!(exited, ModelStatusDto::Ok { loading: false, .. }),
+        "a daemon whose process is gone is not loading"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -1448,6 +1770,7 @@ async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() 
     let result = wait_for_daemon_serving_for_test(
         &mut child,
         Some("vendor/model"),
+        std::time::Duration::from_secs(30),
         || async {
             HealthState::Healthy {
                 daemon_version: "test".to_owned(),
@@ -1459,7 +1782,65 @@ async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() 
     .await;
 
     let _ = child.kill();
-    assert!(result.is_ok());
+    assert!(matches!(result, Ok(DaemonStartup::Serving)));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Regression: replacing the tracked daemon child (start-with-model and
+/// restart flows) used to drop the previous handle without a wait, leaving a
+/// zombie once the old process exited and an untracked live daemon holding
+/// the ownership lock. The replaced child must be killed and collected.
+#[cfg(unix)]
+#[tokio::test]
+async fn replacing_a_live_daemon_child_kills_and_collects_it() {
+    let (executable, directory) = fake_daemon_script("replace", "sleep 30");
+    let previous = std::process::Command::new(&executable).spawn().unwrap();
+    let previous_pid = previous.id();
+    let next = std::process::Command::new(&executable).spawn().unwrap();
+    let mut slot = Some(previous);
+
+    replace_daemon_child_for_test(&mut slot, next);
+
+    // A killed-but-unreaped child would still answer kill -0 as a zombie.
+    let gone = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {previous_pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(
+        !gone.success(),
+        "replaced daemon child {previous_pid} is still alive or a zombie"
+    );
+    if let Some(mut child) = slot.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Regression: a daemon that exits right after the stop request must be
+/// collected within the grace period — the old code kept the handle whenever
+/// the child had not exited yet, and no later call would ever reap it.
+#[cfg(unix)]
+#[tokio::test]
+async fn reap_daemon_child_collects_a_child_that_exits_within_the_grace_period() {
+    let (executable, directory) = fake_daemon_script("graceful-exit", "sleep 0.2");
+    let child = std::process::Command::new(&executable).spawn().unwrap();
+    let pid = child.id();
+    let mut slot = Some(child);
+
+    reap_daemon_child_for_test(&mut slot);
+
+    assert!(slot.is_none());
+    let gone = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(
+        !gone.success(),
+        "daemon child {pid} is still alive or a zombie"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 

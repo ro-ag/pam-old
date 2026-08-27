@@ -246,7 +246,9 @@ export function selectDaemonView(health: HealthDto | null): DaemonView {
   return healthView(health).daemon;
 }
 
-function accessView(access: AccessConfigDto): AccessGrantView[] {
+// Both the project snapshot and the daemon-scope read carry the same access
+// DTO, so one mapping serves the Access view whether or not a project exists.
+export function accessView(access: AccessConfigDto): AccessGrantView[] {
   if (access.status === "blocked") {
     return [{
       id: "access-recovery",

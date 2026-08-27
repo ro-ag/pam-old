@@ -367,3 +367,62 @@ async fn daemon_scope_grant_authorizes_connector_configure() {
     daemon.await.unwrap().unwrap();
     let _ = fs::remove_dir_all(runtime);
 }
+
+/// The GUI's Access view reads the observed boundary over the daemon
+/// authority, with no project anywhere. This exercises that exact path:
+/// scope admission first, then policy, then the typed read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daemon_scope_grant_authorizes_the_access_boundary_read() {
+    let runtime = test_runtime("daemon-scope-network-round-trip");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    // No project is registered: the store knows the caller and one
+    // daemon-scope grant, nothing else.
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed.put_grant(pam_store::PutGrant {
+        grant: Grant {
+            id: GrantId::from("daemon-scope-network-grant"),
+            caller: CallerId::from("scope-operator"),
+            project: ProjectId::daemon_scope(),
+            capability: CapabilityName::parse("network.diagnostics").unwrap(),
+            resource: ResourceScope::Any,
+            effect: Effect::Allow,
+            approval: ApprovalRequirement::None,
+            expires_at_ms: None,
+            revoked_at_ms: None,
+        },
+        created_at_ms: 2,
+    })
+    .await
+    .unwrap();
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    let observed = request_exchange(
+        &endpoint,
+        &authenticated(RequestEnvelope::network_diagnostics(
+            RequestId::from("scope-network"),
+            CallerId::from("scope-operator"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("scope-network-key"),
+        )),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    match observed.result.body {
+        ResultBody::Success {
+            payload: ResultPayload::NetworkDiagnostics(_),
+            ..
+        } => {}
+        other => panic!("a daemon-scope access-boundary read must be served: {other:?}"),
+    }
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(runtime);
+}

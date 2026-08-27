@@ -3,6 +3,7 @@
 mod access_config;
 mod control_center;
 mod current;
+mod daemon_access;
 mod desktop;
 mod flow_editor;
 mod model_discovery;
@@ -21,6 +22,8 @@ mod access_config_test;
 mod control_center_test;
 #[cfg(test)]
 mod current_test;
+#[cfg(test)]
+mod daemon_access_test;
 #[cfg(test)]
 mod desktop_test;
 #[cfg(test)]
@@ -67,6 +70,8 @@ pub use desktop::{
 // Re-exported so the desktop shell can accept the debug-redacted credential
 // action without depending on pam_protocol directly.
 pub use pam_protocol::{ConnectorCredentialAction, ConnectorSecret};
+
+pub use daemon_access::{DaemonAccessDto, DaemonCapabilityDto};
 
 pub use model_import::ModelImportParams;
 

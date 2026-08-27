@@ -37,6 +37,8 @@ const loadedStatus: ModelStatusDto = {
   status: "ok",
   loaded: { modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 },
   registered: [{ modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 }],
+  loadFailure: null,
+  loading: false,
 };
 
 describe("ActivityView", () => {
@@ -77,13 +79,23 @@ describe("ActivityView", () => {
     expect(spy.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 
-  it("serves the feed with zero projects using opaque project labels", async () => {
+  it("names a daemon-scope event daemon rather than truncating the reserved id", async () => {
+    const props = await activityProps();
+    render(<ActivityView {...props} />);
+
+    expect(await screen.findByText("daemon.status")).toBeInTheDocument();
+    expect(screen.getByText(/gui:pam-desktop · daemon · served/)).toBeInTheDocument();
+  });
+
+  it("falls back to the remembered root when the catalog holds no project", async () => {
     const props = await activityProps("global-only");
     render(<ActivityView {...props} />);
 
     expect(props.projects).toHaveLength(0);
     expect(await screen.findByText("project.current")).toBeInTheDocument();
-    expect(screen.getByText(/gui:pam-desktop · 11111111…/)).toBeInTheDocument();
+    const fallback = screen.getByText(/gui:pam-desktop · payments-api · served/);
+    expect(fallback).toHaveAttribute("title", "/work/payments-api");
+    expect(screen.getByText(/cli:daemon-only-rootless · 77777777…/)).toBeInTheDocument();
   });
 
   it("labels a project outside the catalog by its remembered root, and only truncates the id when rootless", async () => {
@@ -94,7 +106,19 @@ describe("ActivityView", () => {
     expect(rooted).toHaveAttribute("title", "/work/scratch-agent");
 
     const rootless = screen.getByText(/cli:daemon-only-rootless · 77777777…/);
-    expect(rootless).not.toHaveAttribute("title");
+    expect(rootless).toHaveAttribute("title", "77777777-7777-4777-8777-777777777777");
+  });
+
+  it("names a catalog project by the root the daemon remembers, not the GUI handle", async () => {
+    const props = await activityProps();
+    render(<ActivityView {...props} />);
+
+    // The event's project ID is the daemon's, never the catalog handle: the
+    // name has to come from the root the two surfaces share.
+    const payments = props.projects.find((project) => project.name === "payments-api");
+    expect(payments?.handle).toBe("11111111-1111-4111-8111-111111111111");
+    const named = await screen.findByText(/gui:pam-desktop · payments-api · served/);
+    expect(named).toHaveAttribute("title", "/work/payments-api");
   });
 
   it("renders the exact empty feed without inventing events", async () => {
@@ -166,6 +190,8 @@ describe("ActivityView", () => {
       status: "ok",
       loaded: null,
       registered: [{ modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 }],
+      loadFailure: null,
+      loading: false,
     });
     render(<ActivityView {...props} />);
 
@@ -175,7 +201,7 @@ describe("ActivityView", () => {
   });
 
   it("shows a calm empty model state pointing at the Control Center, never a CLI command", async () => {
-    const props = await activityProps("solved", { status: "ok", loaded: null, registered: [] });
+    const props = await activityProps("solved", { status: "ok", loaded: null, registered: [], loadFailure: null, loading: false });
     render(<ActivityView {...props} />);
 
     expect(screen.getByText("No local model yet")).toBeInTheDocument();

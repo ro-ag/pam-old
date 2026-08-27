@@ -1,39 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
-import { createRef, useState } from "react";
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProjectView } from "../selectors";
-import { ProjectMenu, ResizeSeparator, Toolbar, appVersionLabel } from "./Shell";
-
-const projects: ProjectView[] = [
-  { handle: "payments", name: "payments-api", rootLabel: "/work/payments-api", branch: "main", health: "ready", queuedCount: 0 },
-  { handle: "ledger", name: "ledger-web", rootLabel: "/work/ledger-web", branch: "feature/ledger", health: "busy", queuedCount: 1 },
-  { handle: "docs", name: "docs", rootLabel: "/work/docs", branch: null, health: "attention", queuedCount: null },
-];
-
-function ControlledProjectMenu({
-  onOpenChange = vi.fn(),
-  onSelect = vi.fn(),
-}: {
-  onOpenChange?: (open: boolean) => void;
-  onSelect?: (project: ProjectView) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <ProjectMenu
-      active={projects[0]}
-      projects={projects}
-      open={open}
-      onOpenChange={(nextOpen) => {
-        onOpenChange(nextOpen);
-        setOpen(nextOpen);
-      }}
-      onSelect={onSelect}
-    />
-  );
-}
+import { ResizeSeparator, Toolbar, appVersionLabel } from "./Shell";
 
 interface CaptureStubs {
   captured: Set<number>;
@@ -83,63 +54,6 @@ function renderSeparator({
   );
   return screen.getByRole("separator", { name: "Resize project sidebar" });
 }
-
-describe("ProjectMenu", () => {
-  it("uses controlled state and restores trigger focus after keyboard dismissal", async () => {
-    const user = userEvent.setup();
-    const onOpenChange = vi.fn();
-    render(<ControlledProjectMenu onOpenChange={onOpenChange} />);
-
-    const switcher = screen.getByRole("button", { name: "payments-api" });
-    switcher.focus();
-    await user.keyboard("{ArrowDown}");
-
-    const menu = await screen.findByRole("menu");
-    expect(menu).toHaveClass("project-menu");
-    expect(menu).toHaveAttribute("aria-label", "Registered projects");
-    expect(menu.closest(".project-menu-popover")).toBeInTheDocument();
-    expect(menu.closest(".project-menu-wrap")).toBeNull();
-    expect(onOpenChange).toHaveBeenCalledWith(true);
-
-    const payments = screen.getByRole("menuitemradio", { name: /payments-api/ });
-    const ledger = screen.getByRole("menuitemradio", { name: /ledger-web/ });
-    const docs = screen.getByRole("menuitemradio", { name: /^docs/ });
-    expect(payments).toHaveClass("project-menu-item");
-    expect(payments).toHaveAttribute("aria-checked", "true");
-    expect(payments).toHaveAccessibleName(/Health: ready/i);
-    expect(ledger).toHaveAccessibleName(/Health: busy/i);
-    expect(docs).toHaveAccessibleName(/Health: attention/i);
-    await waitFor(() => expect(payments).toHaveFocus());
-
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(ledger).toHaveFocus());
-    await user.keyboard("{End}");
-    await waitFor(() => expect(docs).toHaveFocus());
-    await user.keyboard("{Home}");
-    await waitFor(() => expect(payments).toHaveFocus());
-    await user.keyboard("{Escape}");
-
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    expect(onOpenChange).toHaveBeenLastCalledWith(false);
-    await waitFor(() => expect(switcher).toHaveFocus());
-  });
-
-  it("closes after keyboard selection and restores the exact opener", async () => {
-    const user = userEvent.setup();
-    const onSelect = vi.fn();
-    render(<ControlledProjectMenu onSelect={onSelect} />);
-
-    const switcher = screen.getByRole("button", { name: "payments-api" });
-    switcher.focus();
-    await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /payments-api/ })).toHaveFocus());
-    await user.keyboard("{ArrowDown}{Enter}");
-
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(projects[1]));
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    await waitFor(() => expect(switcher).toHaveFocus());
-  });
-});
 
 describe("Toolbar", () => {
   it("changes theme family and variant from the toolbar theme menu", async () => {

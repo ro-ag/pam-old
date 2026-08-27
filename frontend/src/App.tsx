@@ -29,7 +29,7 @@ import {
   type LayoutStorage,
 } from "./layout";
 import { selectControlCenter, selectDaemonView } from "./selectors";
-import { ProjectContextBar, ProjectPlaceholderView, ResizeSeparator, Sidebar, Toolbar } from "./components/Shell";
+import { ResizeSeparator, Sidebar, Toolbar } from "./components/Shell";
 import {
   ApprovalDrawer,
   CommandPalette,
@@ -113,6 +113,8 @@ function readInitialLayout(): InitialLayout {
 }
 
 const acceptsResponseFence = answersFence;
+// How often the model surface is re-read while a model load is in flight.
+const MODEL_LOADING_POLL_MS = 5_000;
 
 function sameAuthority(left: CommandFence, right: CommandFence): boolean {
   return left.projectHandle === right.projectHandle && left.generation === right.generation;
@@ -155,6 +157,8 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const previousCompactViewportRef = useRef(initialLayout.compactViewport);
   const fenceRef = useRef(state.activeFence);
   fenceRef.current = state.activeFence;
+  const pendingRef = useRef(state.pendingFence);
+  pendingRef.current = state.pendingFence;
   // With no active project the overlays run under the daemon authority, so
   // global surfaces (palette, model chat) stay available with zero projects.
   const overlayAuthority: OverlayAuthority | null = state.activeFence
@@ -331,13 +335,25 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     if (ready) void loadModelStatus();
   }, [ready, loadModelStatus]);
 
+  // A daemon still loading its model answers nothing, so nothing can push the
+  // finished load to the panel. Re-read the model surface until it stops
+  // reporting a load in flight; each answer re-arms this, and a finished (or
+  // failed) load ends it.
+  useEffect(() => {
+    if (modelStatus?.status !== "ok" || !modelStatus.loading) return;
+    const timer = window.setTimeout(() => void loadModelStatus(), MODEL_LOADING_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [modelStatus, loadModelStatus]);
+
   // ⌘R refreshes the global health slice and the active view's loaders; the
   // project snapshot refresh happens only while a project is active.
   const refresh = useCallback(() => {
     void loadDaemonHealth();
     void loadModelStatus();
     setRefreshTick((tick) => tick + 1);
-    if (!fenceRef.current) return;
+    // A project command in flight (activation above all) owns the data
+    // sequence: a refresh here would supersede it and drop its completion.
+    if (!fenceRef.current || pendingRef.current) return;
     const fence = withOperation(fenceRef.current);
     void executeDataCommand(fence, () => bridge.refreshProject(fence), "Project state refreshed");
   }, [bridge, executeDataCommand, loadDaemonHealth, loadModelStatus]);
@@ -374,8 +390,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   }, [effectiveOverlays]);
 
   const openOverlay = useCallback((entry: OverlayEntry, replaceTop = false, reopenApproval = false) => {
-    const current = activeOverlay(effectiveOverlays);
-    if (replaceTop || current?.kind === "project") {
+    if (replaceTop) {
       dispatchOverlay({ type: "replace-top", entry });
     } else {
       dispatchOverlay({ type: "open", entry, reopenApproval });
@@ -435,14 +450,6 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   const daemon = projectData?.daemon ?? selectDaemonView(daemonHealth);
   const pending = state.pendingFence !== null;
   const busy = pending || daemonBusy;
-  const selectProject = (project: { handle: string; name: string }) => {
-    if (project.handle === state.data?.project.handle) return;
-    const operationId = nextOperationId();
-    const pendingFence = { projectHandle: project.handle, generation: "", operationId };
-    void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`)
-      .then((activated) => { if (activated) dispatch({ type: "navigate", view: "control-center" }); });
-    if (mobileSidebarOpen) toggleSidebar();
-  };
   // Daemon lifecycle always runs under the daemon authority. The response is
   // no snapshot, so we re-probe daemon_health; with a project active, the
   // project refresh keeps the snapshot fresh too.
@@ -552,7 +559,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
   };
 
   const currentOverlay = activeOverlay(effectiveOverlays);
-  const applicationOverlayOpen = currentOverlay !== null && currentOverlay.kind !== "project";
+  const applicationOverlayOpen = currentOverlay !== null;
   const openQueue = (returnFocusTarget?: HTMLElement) => {
     if (!overlayAuthority || !projectActive) return;
     const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
@@ -561,7 +568,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     queueReturnFocusRef.current = returnFocusTarget ?? activeElement ?? queueButtonRef.current;
     openOverlay({ id: "queue", kind: "queue", authority: overlayAuthority });
   };
-  const chatModelId = modelStatus?.status === "ok"
+  const chatModelId = daemon.state !== "stopped" && modelStatus?.status === "ok"
     ? (modelStatus.loaded ?? modelStatus.registered[0])?.modelId ?? null
     : null;
   const openModelChat = (modelId: string, returnFocusTarget?: HTMLElement) => {
@@ -577,17 +584,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     commandReturnFocusRef.current = returnFocusTarget ?? commandButtonRef.current;
     openOverlay({ id: "command", kind: "command", authority: overlayAuthority });
   };
-  const setProjectMenuOpen = (open: boolean) => {
-    if (!overlayAuthority) return;
-    if (open && !currentOverlay) {
-      openOverlay({ id: "project", kind: "project", authority: overlayAuthority });
-    } else if (!open) {
-      dispatchOverlay({ type: "remove", entryId: "project" });
-    }
-  };
   const commands: CommandPaletteCommand[] = [
     { id: "view-control-center", label: "Open Control Center", description: "Show daemon health, activity, the local model, and requests per caller.", shortcut: "⌘1" },
-    { id: "view-access", label: "Open Access", description: "Show the project's authorized capabilities.", shortcut: "⌘2" },
+    { id: "view-access", label: "Open Access", description: "Show the capabilities PAM is authorized to use.", shortcut: "⌘2" },
     { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
     { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
@@ -636,26 +635,6 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       refresh();
     }
   };
-
-  // Project context is contextual: this bar renders in the headers of the
-  // four project-shaped views, never in the global sidebar chrome.
-  const projectContextBar = projectData ? (
-    <ProjectContextBar
-      project={projectData.project}
-      projects={projectData.catalog}
-      menuOpen={effectiveOverlays.stack.some(({ kind }) => kind === "project")}
-      onMenuOpenChange={setProjectMenuOpen}
-      onSelect={selectProject}
-    />
-  ) : null;
-  const projectPlaceholder = (title: string, subtitle: string) => (
-    <ProjectPlaceholderView
-      title={title}
-      subtitle={subtitle}
-      projects={state.catalog?.projects ?? []}
-      onSelect={selectProject}
-    />
-  );
 
   const shellWidth = state.sidebarCollapsed ? 68 : state.sidebarWidth;
   const shellStyle: ShellStyle = { "--sidebar-size": `${shellWidth}px` };
@@ -710,25 +689,24 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   onRegisterCaller={registerGuiCaller}
                 />
               )}
-              {state.activeView === "access" && (projectData
-                ? <AccessView contextBar={projectContextBar} data={projectData} />
-                : projectPlaceholder("Access", "Narrow capabilities, visible to the developer."))}
+              {state.activeView === "access" && (
+                <AccessView
+                  key="access"
+                  bridge={bridge}
+                />
+              )}
               {state.activeView === "skills" && (
                 <SkillsView
                   key={state.activeFence ? `skills:${state.activeFence.projectHandle}` : "skills:daemon"}
                   bridge={bridge}
                   fence={state.activeFence}
-                  projects={state.catalog.projects}
-                  onSelectProject={selectProject}
-                  contextBar={projectContextBar}
                 />
               )}
               {state.activeView === "flows" && (
                 <FlowsView
-                  key={state.activeFence ? `flows:${state.activeFence.projectHandle}` : "flows:daemon"}
+                  key="flows"
                   bridge={bridge}
                   fence={state.activeFence}
-                  contextBar={projectContextBar}
                   onError={showToast}
                   onToast={showToast}
                 />
@@ -777,7 +755,6 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         </section>
       </div>
       {effectiveOverlays.stack.map((entry) => {
-        if (entry.kind === "project") return null;
         const active = overlayLayer(effectiveOverlays, entry.id) === "active";
         if (entry.kind === "queue") {
           if (!projectData) return null;

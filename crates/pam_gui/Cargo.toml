@@ -19,6 +19,7 @@ pam_daemon.workspace = true
 pam_flow.workspace = true
 pam_model.workspace = true
 pam_platform.workspace = true
+pam_policy.workspace = true
 pam_protocol.workspace = true
 pam_skills.workspace = true
 pam_store.workspace = true

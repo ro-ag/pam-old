@@ -2118,12 +2118,19 @@ pub struct CallerSummary {
 ///
 /// `loaded` is the model currently served by the embedded runtime, when one
 /// is loaded. `registered` lists the catalog entries this daemon can resolve.
+/// `load_failure` explains a `loaded: None` that a requested model was
+/// supposed to fill.
 /// Filesystem paths, content digests, and license text never cross this
 /// contract.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelStatusResult {
     pub loaded: Option<ModelSummary>,
     pub registered: Vec<ModelSummary>,
+    /// Why the requested model is not loaded, when this daemon attempted a
+    /// load at startup and it failed. `None` when no model was requested, the
+    /// load succeeded, or the peer predates this field. Carries the runtime's
+    /// own reason text only — never a path, digest, or license.
+    pub load_failure: Option<String>,
 }
 
 /// One registered model identified only by its `vendor/name` ID and size.

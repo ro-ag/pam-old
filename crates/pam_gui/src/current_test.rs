@@ -1,14 +1,14 @@
 use pam_core::{ApprovalId, CallerId, IdempotencyKey, ProjectId, RequestId};
 use pam_flow::{EffectReport, FlowSemanticEvent, FlowWaitReason, RunOutcome, TransitionKind};
 use pam_protocol::{
-    ApprovalChallenge, Event, EventEnvelope, Failure, FailureCode, PROTOCOL_VERSION,
-    RequestEnvelope,
+    ApprovalChallenge, Event, EventEnvelope, Failure, FailureCode, FlowProjectRoot,
+    PROTOCOL_VERSION, RequestEnvelope,
 };
 
 use super::current::{
     CurrentState, TimelineKind, failure_state_for_test, outcome_heading_for_test,
-    pending_approval_for_test, timeline_from_events, timeline_semantic_for_test,
-    timeline_transition_for_test,
+    pending_approval_for_test, project_current_request, timeline_from_events,
+    timeline_semantic_for_test, timeline_transition_for_test,
 };
 
 #[test]
@@ -182,4 +182,31 @@ fn forbidden_current_is_blocked_but_internal_current_is_unavailable() {
 
     assert!(matches!(blocked, CurrentState::Blocked { .. }));
     assert!(matches!(unavailable, CurrentState::Degraded { .. }));
+}
+
+#[test]
+fn snapshot_requests_carry_the_project_root_so_the_daemon_can_name_the_project() {
+    let request = project_current_request(
+        CallerId::new("gui-1"),
+        pam_core::CallerCredential::new("secret"),
+        ProjectId::new("project-1"),
+        FlowProjectRoot::new("/work/payments-api").ok(),
+    );
+
+    assert_eq!(
+        request.project_root.as_ref().map(FlowProjectRoot::as_str),
+        Some("/work/payments-api")
+    );
+}
+
+#[test]
+fn snapshot_requests_omit_a_project_root_the_gui_could_not_resolve() {
+    let request = project_current_request(
+        CallerId::new("gui-1"),
+        pam_core::CallerCredential::new("secret"),
+        ProjectId::new("project-1"),
+        None,
+    );
+
+    assert!(request.project_root.is_none());
 }

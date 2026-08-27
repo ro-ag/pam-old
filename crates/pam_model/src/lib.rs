@@ -29,7 +29,10 @@ pub use acquisition::{
 };
 pub use error::ModelError;
 #[cfg(target_os = "macos")]
-pub use llama_cpp_macos::MacosLlamaCppRuntime;
+pub use llama_cpp_macos::{
+    APPLICATION_RESERVE_BYTES, MacosLlamaCppRuntime, host_model_ceiling_bytes,
+    host_projection_contingency_bytes, required_os_reserve,
+};
 pub use memory::{
     HostMemoryBudget, MemoryEstimate, MemoryEstimateError, MemoryFit, RuntimeMemoryProjection,
     UnifiedWorkingSetLimit, estimate_memory,
@@ -42,9 +45,9 @@ pub use path::{
     default_model_path, model_path_under, validate_absolute_unicode_path, validate_model_filename,
 };
 pub use runtime::{
-    CancellationSignal, CancellationToken, ModelRuntime, RuntimeError, RuntimeFinishReason,
-    RuntimeFlashAttention, RuntimeGpuOffload, RuntimeHostAdmission, RuntimeHostSnapshot,
-    RuntimeKvCachePrecision, RuntimeMemoryPressure, RuntimeMessage, RuntimeMessageRole,
-    RuntimeProfile, RuntimeRequest, RuntimeResponse, RuntimeSampling, RuntimeSwapTrend,
-    RuntimeUsage,
+    ArtifactCalibration, CancellationSignal, CancellationToken, ModelRuntime, RuntimeError,
+    RuntimeFinishReason, RuntimeFlashAttention, RuntimeGpuOffload, RuntimeHostAdmission,
+    RuntimeHostSnapshot, RuntimeKvCachePrecision, RuntimeMemoryPressure, RuntimeMessage,
+    RuntimeMessageRole, RuntimeProfile, RuntimeRequest, RuntimeResponse, RuntimeSampling,
+    RuntimeSwapTrend, RuntimeUsage,
 };

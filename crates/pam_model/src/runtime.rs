@@ -213,9 +213,23 @@ pub enum RuntimeSampling {
     TopKTopPTemperature,
 }
 
+/// Whether the loaded GGUF is one PAM has actually measured.
+///
+/// An [`ArtifactCalibration::Uncalibrated`] artifact still loads when it fits
+/// the host-derived model ceiling; only its memory and quality profile are
+/// untested. Callers must say so rather than presenting it as a blessed
+/// preset — the GUI already words this as "not in PAM's calibrated set".
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactCalibration {
+    Calibrated,
+    Uncalibrated,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeProfile {
     model_digest: ContentDigest,
+    calibration: ArtifactCalibration,
     context_tokens: u32,
     batch_tokens: u32,
     physical_batch_tokens: u32,
@@ -234,6 +248,7 @@ impl RuntimeProfile {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         model_digest: ContentDigest,
+        calibration: ArtifactCalibration,
         context_tokens: u32,
         batch_tokens: u32,
         physical_batch_tokens: u32,
@@ -261,6 +276,7 @@ impl RuntimeProfile {
         }
         Ok(Self {
             model_digest,
+            calibration,
             context_tokens,
             batch_tokens,
             physical_batch_tokens,
@@ -278,6 +294,13 @@ impl RuntimeProfile {
     #[must_use]
     pub fn model_digest(&self) -> &ContentDigest {
         &self.model_digest
+    }
+
+    /// Whether the loaded artifact is one PAM has measured. Surface
+    /// `Uncalibrated` to the user; do not present it as a tested profile.
+    #[must_use]
+    pub const fn calibration(&self) -> ArtifactCalibration {
+        self.calibration
     }
 
     #[must_use]
@@ -499,7 +522,10 @@ pub trait ModelRuntime: Send + Sync {
 pub enum RuntimeError {
     InvalidRequest(&'static str),
     ArtifactValidationFailed,
-    UnsupportedArtifact,
+    UnsupportedArtifact {
+        size_bytes: u64,
+        maximum_bytes: u64,
+    },
     AdmissionRejected {
         projected_bytes: u64,
         maximum_bytes: u64,
@@ -528,8 +554,13 @@ impl fmt::Display for RuntimeError {
             Self::ArtifactValidationFailed => {
                 formatter.write_str("registered model revalidation failed")
             }
-            Self::UnsupportedArtifact => formatter
-                .write_str("registered model does not match the calibrated macOS runtime profile"),
+            Self::UnsupportedArtifact {
+                size_bytes,
+                maximum_bytes,
+            } => write!(
+                formatter,
+                "registered model of {size_bytes} bytes is not in PAM's calibrated set and does not fit this Mac's {maximum_bytes}-byte model ceiling"
+            ),
             Self::AdmissionRejected {
                 projected_bytes,
                 maximum_bytes,

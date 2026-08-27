@@ -4,8 +4,8 @@ use pam_gui::SkillLibraryRequest;
 
 use crate::commands::{
     ActivateProjectRequest, ActivityRequest, ApprovalRequest, BootstrapRequest,
-    ConnectorConfigureRequest, ConnectorTestRequest, FencedRequest, FlowComposeRequest,
-    FlowGraphRequest, ModelImportRequest, ModelInferRequest, RevealPathRequest,
+    ConnectorConfigureRequest, ConnectorTestRequest, DaemonAccessRequest, FencedRequest,
+    FlowComposeRequest, FlowGraphRequest, ModelImportRequest, ModelInferRequest, RevealPathRequest,
     SettingsUpdateRequest,
 };
 
@@ -362,6 +362,35 @@ fn connector_test_request_accepts_only_the_fence_and_connector_identity() {
 
     assert!(serde_json::from_value::<ConnectorTestRequest>(valid).is_ok());
     assert!(serde_json::from_value::<ConnectorTestRequest>(ambient).is_err());
+}
+
+#[test]
+fn daemon_access_request_accepts_only_the_daemon_fence_capability_and_decision() {
+    let valid = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "capability": "model.infer",
+        "granted": true
+    });
+    let ambient = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "capability": "model.infer",
+        "granted": true,
+        "resource": "model:byteshape/qwen3.6-q4ks"
+    });
+    let missing_decision = json!({
+        "projectHandle": "daemon",
+        "generation": "daemon",
+        "operationId": OPERATION_ID,
+        "capability": "model.infer"
+    });
+
+    assert!(serde_json::from_value::<DaemonAccessRequest>(valid).is_ok());
+    assert!(serde_json::from_value::<DaemonAccessRequest>(ambient).is_err());
+    assert!(serde_json::from_value::<DaemonAccessRequest>(missing_decision).is_err());
 }
 
 #[test]

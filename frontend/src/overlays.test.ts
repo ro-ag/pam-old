@@ -71,18 +71,18 @@ describe("overlay reducer", () => {
     expect(activeOverlay(state)).toBeNull();
   });
 
-  it("retains a project menu as an underlay while a modal is active", () => {
+  it("retains an earlier overlay as an underlay while a modal is active", () => {
     let state = createOverlayState(authorityA);
     state = overlayReducer(state, {
       type: "open",
-      entry: { id: "project", kind: "project", authority: authorityA },
+      entry: { id: "queue", kind: "queue", authority: authorityA },
     });
     state = overlayReducer(state, { type: "open", entry: approval() });
 
-    expect(overlayLayer(state, "project")).toBe("underlay");
+    expect(overlayLayer(state, "queue")).toBe("underlay");
     expect(activeOverlay(state)?.kind).toBe("approval");
     state = overlayReducer(state, { type: "close-top" });
-    expect(activeOverlay(state)?.kind).toBe("project");
+    expect(activeOverlay(state)?.kind).toBe("queue");
   });
 
   it("dismisses a closed approval for the session and refuses to reopen it", () => {

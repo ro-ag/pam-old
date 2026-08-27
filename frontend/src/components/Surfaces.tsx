@@ -17,7 +17,7 @@ import type {
   ModelUsageDto,
   PamBridge,
 } from "../domain";
-import { CHAT_MAX_OUTPUT_TOKENS, MAX_CHAT_MESSAGES, MAX_EVIDENCE_TEXT } from "../domain";
+import { CHAT_CONTEXT_TOKEN_BUDGET, CHAT_MAX_OUTPUT_TOKENS, MAX_CHAT_MESSAGES, MAX_EVIDENCE_TEXT } from "../domain";
 import type { ControlCenterView } from "../selectors";
 import { presentError } from "../state";
 
@@ -141,6 +141,24 @@ interface ChatTurn {
   usage?: ModelUsageDto;
 }
 
+// The same ~4-chars-per-token heuristic the fixtures use; good enough to
+// keep the request inside the model's context window.
+const estimateTokens = (text: string) => Math.max(1, Math.ceil(text.length / 4));
+
+// Keep the newest turns whose estimated tokens (plus the reserved reply
+// budget) fit the context window; the just-sent message is always kept.
+function trimToContextBudget(turns: ChatTurn[]): ChatTurn[] {
+  let tokens = CHAT_MAX_OUTPUT_TOKENS;
+  const kept: ChatTurn[] = [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (kept.length > 0 && tokens + estimateTokens(turn.content) > CHAT_CONTEXT_TOKEN_BUDGET) break;
+    tokens += estimateTokens(turn.content);
+    kept.unshift(turn);
+  }
+  return kept;
+}
+
 export interface ModelChatDrawerProps {
   modelId: string;
   bridge: PamBridge;
@@ -173,7 +191,10 @@ export function ModelChatDrawer({ modelId, bridge, onClose, active = true, retur
       return;
     }
     const nextTurns: ChatTurn[] = [...turns, { role: "user", content }];
-    const messages: ChatMessageDto[] = nextTurns.map((turn) => ({ role: turn.role, content: turn.content }));
+    // The request carries the token-budgeted window, not the raw transcript:
+    // long old messages drop first instead of counting toward a message cap.
+    const messages: ChatMessageDto[] = trimToContextBudget(nextTurns)
+      .map((turn) => ({ role: turn.role, content: turn.content }));
     setTurns(nextTurns);
     setInput("");
     setNote(null);

@@ -353,6 +353,31 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Lists one caller's active grants in one project, newest last.
+    ///
+    /// Revoked and expired grants are excluded, so the result is exactly the
+    /// grant rows policy would evaluate at `now_ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for corrupt grant rows or unavailable durable state.
+    pub async fn active_grants(
+        &self,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        now_ms: u64,
+    ) -> Result<Vec<Grant>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Policy(PolicyCommand::ActiveGrants {
+            caller_id,
+            project_id,
+            now_ms,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Revokes a grant idempotently and advances the project policy version.
     ///
     /// # Errors
@@ -812,6 +837,21 @@ impl Store {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(Command::Model(ModelCommand::Get {
             key,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Lists every registered model in stable identity order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a stored record is corrupt or durable state is
+    /// unavailable.
+    pub async fn list_models(&self) -> Result<Vec<RegisteredModel>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Model(ModelCommand::List {
             response: response_tx,
         }))
         .await?;
@@ -1783,6 +1823,9 @@ enum ModelCommand {
         key: ModelKey,
         response: Response<RegisteredModel>,
     },
+    List {
+        response: Response<Vec<RegisteredModel>>,
+    },
 }
 
 enum InventoryCommand {
@@ -1873,6 +1916,12 @@ enum PolicyCommand {
         grant_id: GrantId,
         now_ms: u64,
         response: Response<GrantRevocation>,
+    },
+    ActiveGrants {
+        caller_id: CallerId,
+        project_id: ProjectId,
+        now_ms: u64,
+        response: Response<Vec<Grant>>,
     },
     Authorize {
         request: AuthorizationRequest,
@@ -2204,6 +2253,15 @@ fn run_policy_command(connection: &mut Connection, command: PolicyCommand) {
             now_ms,
             response,
         } => respond(response, revoke_grant(connection, &grant_id, now_ms)),
+        PolicyCommand::ActiveGrants {
+            caller_id,
+            project_id,
+            now_ms,
+            response,
+        } => respond(
+            response,
+            active_grants(connection, &caller_id, &project_id, now_ms),
+        ),
         PolicyCommand::Authorize {
             request,
             now_ms,
@@ -2329,6 +2387,9 @@ fn run_model_command(connection: &mut Connection, command: ModelCommand) {
         ModelCommand::Get { key, response } => {
             respond(response, get_model(connection, &key));
         }
+        ModelCommand::List { response } => {
+            respond(response, list_models(connection));
+        }
     }
 }
 
@@ -2438,6 +2499,21 @@ fn get_model(connection: &Connection, key: &ModelKey) -> Result<RegisteredModel,
         .optional()?
         .ok_or_else(|| StoreError::ModelNotFound(key.id()))
         .and_then(decode_model)
+}
+
+fn list_models(connection: &Connection) -> Result<Vec<RegisteredModel>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT
+             vendor, name, path, digest, size_bytes, gguf_version,
+             gguf_tensor_count, gguf_metadata_kv_count,
+             license_id, license_url, license_digest,
+             source_kind, source_identity, registered_at_ms
+         FROM models ORDER BY model_id",
+    )?;
+    let rows = statement
+        .query_map([], model_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter().map(decode_model).collect()
 }
 
 type StoredModelRow = (
@@ -3930,6 +4006,53 @@ fn put_grant(connection: &mut Connection, put: PutGrant) -> Result<ProjectPolicy
         version: unsigned_integer(version)?,
         updated_at_ms: put.created_at_ms,
     })
+}
+
+fn active_grants(
+    connection: &Connection,
+    caller_id: &CallerId,
+    project_id: &ProjectId,
+    now_ms: u64,
+) -> Result<Vec<Grant>, StoreError> {
+    let now = sql_integer(now_ms)?;
+    let mut statement = connection.prepare(
+        "SELECT grant_id, capability, resource_kind, resource, effect, approval, expires_at_ms
+         FROM capability_grants
+         WHERE caller_id = ?1 AND project_id = ?2 AND revoked_at_ms IS NULL
+           AND (expires_at_ms IS NULL OR expires_at_ms > ?3)
+         ORDER BY created_at_ms, grant_id",
+    )?;
+    let rows = statement.query_map(
+        params![caller_id.as_str(), project_id.as_str(), now],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+            ))
+        },
+    )?;
+    let mut grants = Vec::new();
+    for row in rows {
+        let (id, capability, resource_kind, resource, effect, approval, expires_at) = row?;
+        grants.push(Grant {
+            id: GrantId::from(id),
+            caller: caller_id.clone(),
+            project: project_id.clone(),
+            capability: CapabilityName::parse(capability)
+                .map_err(|_| StoreError::InvalidState("invalid stored capability".to_owned()))?,
+            resource: parse_resource_scope(&resource_kind, resource)?,
+            effect: parse_effect(&effect)?,
+            approval: parse_approval_requirement(&approval)?,
+            expires_at_ms: expires_at.map(unsigned_integer).transpose()?,
+            revoked_at_ms: None,
+        });
+    }
+    Ok(grants)
 }
 
 fn revoke_grant(
@@ -5518,7 +5641,12 @@ fn ensure_foreign_keys(connection: &Connection) -> Result<(), StoreError> {
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
-    let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    // The version check and every outstanding migration run in one immediate
+    // transaction: a concurrent opener on a fresh database (the daemon and the
+    // CLI, or Store's own two workers) blocks on the write lock and then sees
+    // the final version, so migrations can never be applied twice.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let found: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if found > LATEST_SCHEMA_VERSION {
         return Err(StoreError::FutureSchema {
             found,
@@ -5527,11 +5655,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
     }
 
     for &(version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version > found) {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(sql)?;
         transaction.pragma_update(None, "user_version", version)?;
-        transaction.commit()?;
     }
+    transaction.commit()?;
     Ok(())
 }
 

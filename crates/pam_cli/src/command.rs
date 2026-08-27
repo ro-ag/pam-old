@@ -419,11 +419,17 @@ enum ModelCommand {
 
 #[derive(Debug, Subcommand)]
 enum AccessCommand {
-    /// Add an allow or explicit-deny grant for the current project.
+    /// Add an allow or explicit-deny grant for the current project, or for
+    /// the daemon scope with --daemon.
     Grant {
         /// Stable capability name, such as daemon.status or evidence.read.
         #[arg(value_parser = parse_capability_name)]
         capability: CapabilityName,
+        /// Grant on the daemon scope instead of the current project, for
+        /// daemon-scoped capabilities such as model.infer or
+        /// connector.configure. Works outside any project directory.
+        #[arg(long)]
+        daemon: bool,
         /// Exact resource; omit to match any resource.
         #[arg(long, value_parser = parse_resource_name)]
         resource: Option<ResourceName>,
@@ -712,6 +718,7 @@ pub(crate) enum Mode {
     },
     AccessGrant {
         capability: CapabilityName,
+        daemon: bool,
         resource: Option<ResourceName>,
         deny: bool,
         require_approval: bool,
@@ -946,6 +953,7 @@ impl Cli {
                 command:
                     AccessCommand::Grant {
                         capability,
+                        daemon,
                         resource,
                         deny,
                         require_approval,
@@ -954,6 +962,7 @@ impl Cli {
                     },
             }) => Mode::AccessGrant {
                 capability,
+                daemon,
                 resource,
                 deny,
                 require_approval,

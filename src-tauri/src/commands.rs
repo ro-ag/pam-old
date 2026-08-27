@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use pam_gui::{
-    ActivityDto, AppSettingsDto, ApprovalDecisionDto, ApprovalDecisionResponseDto, ApprovalHandle,
-    BootstrapDto, CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto,
+    AccessConfigDto, ActivityDto, AppSettingsDto, ApprovalDecisionDto, ApprovalDecisionResponseDto,
+    ApprovalHandle, BootstrapDto, CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto,
     ConnectorConfigureParams, ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto,
-    DaemonLogsDto, DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind, EvidenceDto,
-    EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle,
-    FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
-    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto,
-    ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId, ProjectHandle, SkillAuditDto,
-    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    DaemonAccessDto, DaemonLogsDto, DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
+    EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto,
+    FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId,
+    HealthDto, HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto,
+    ModelImportParams, ModelImportStatusDto, ModelInferDto, ModelInspectDto,
+    ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId,
+    ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
+    SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -326,6 +327,19 @@ pub(crate) struct ConnectorTestRequest {
     connector: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DaemonAccessRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    capability: String,
+    granted: bool,
+}
+
 fn fence(
     project_handle: ProjectHandle,
     generation: GenerationId,
@@ -508,6 +522,41 @@ pub(crate) async fn caller_registry(
     request: FencedRequest,
 ) -> Result<CallersDto, DesktopErrorDto> {
     state.core.caller_registry(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_access(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<DaemonAccessDto, DesktopErrorDto> {
+    state.core.daemon_access(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_access_config(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<AccessConfigDto, DesktopErrorDto> {
+    state.core.daemon_access_config(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn set_daemon_access(
+    state: State<'_, DesktopState>,
+    request: DaemonAccessRequest,
+) -> Result<DaemonAccessDto, DesktopErrorDto> {
+    state
+        .core
+        .set_daemon_access(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.capability,
+            request.granted,
+        )
+        .await
 }
 
 #[tauri::command]

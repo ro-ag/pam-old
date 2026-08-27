@@ -284,10 +284,15 @@ interface DownloadProgress {
   totalBytes: number;
 }
 
-// null means "not known yet" (still loading host_memory); the caller treats
-// unknown as neither a pass nor a fail.
-export function fitsMemory(minMemoryBytes: number, hostTotalBytes: number | null): boolean | null {
-  return hostTotalBytes === null ? null : hostTotalBytes >= minMemoryBytes;
+// The one uncalibrated wording, shared by the download picker and the manual
+// import result so a user never meets two phrasings for the same fact.
+export const UNCALIBRATED_NOTICE =
+  "Not in PAM's calibrated set — it may fail to load under this Mac's runtime profile.";
+
+// The reason a preset is out of reach, naming both numbers: what the artifact
+// needs, and what this Mac can devote to a model after the OS reserve.
+export function tooLargeReason(expectedSizeBytes: number, hostModelBudgetBytes: number): string {
+  return `Needs ${formatModelSize(expectedSizeBytes)}; this Mac can devote ${formatModelSize(hostModelBudgetBytes)} to a model.`;
 }
 
 // The curated path: pick a preset, review its license, download it. PAM
@@ -305,8 +310,8 @@ function PresetDownload({
   refreshTick?: number;
 }) {
   const [presets, setPresets] = useState<ModelPresetDto[] | null>(null);
+  const [hostModelBudgetBytes, setHostModelBudgetBytes] = useState<number | null>(null);
   const [hostMemory, setHostMemory] = useState<HostMemoryDto | null>(null);
-  const hostMemoryBytes = hostMemory?.totalBytes ?? null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -330,6 +335,7 @@ function PresetDownload({
         ]);
         if (cancelled) return;
         setPresets(presetsResponse.presets);
+        setHostModelBudgetBytes(presetsResponse.hostModelBudgetBytes);
         setHostMemory(memoryResponse);
         if (downloadStatus.presetId) {
           setSelectedId(downloadStatus.presetId);
@@ -410,7 +416,7 @@ function PresetDownload({
   }, [phase, bridge, onImported]);
 
   const selected = presets?.find((preset) => preset.id === selectedId) ?? null;
-  const fits = selected ? fitsMemory(selected.minMemoryBytes, hostMemoryBytes) : null;
+  const fits = selected?.fitsHost ?? null;
   const busy = phase === "running";
 
   const startDownload = async () => {
@@ -459,7 +465,10 @@ function PresetDownload({
           {hostMemory !== null && hostMemory.totalBytes < hostMemory.supportedMinimumBytes && (
             <p className="model-fit-warn model-host-notice">
               PAM's local model is built for machines with {formatHostMemory(hostMemory.supportedMinimumBytes)} of
-              memory or more; this Mac reports {formatHostMemory(hostMemory.totalBytes)}.
+              memory or more; this Mac reports {formatHostMemory(hostMemory.totalBytes)}
+              {hostModelBudgetBytes === null
+                ? "."
+                : `, leaving ${formatModelSize(hostModelBudgetBytes)} for a model after the OS reserve.`}
             </p>
           )}
           <DropdownMenu.Root open={pickerOpen && !busy} onOpenChange={(open) => !busy && setPickerOpen(open)}>
@@ -487,33 +496,35 @@ function PresetDownload({
                     setProgress(null);
                   }}
                 >
-                  {presets.map((preset) => {
-                    const presetFits = fitsMemory(preset.minMemoryBytes, hostMemoryBytes);
-                    return (
-                      <DropdownMenu.RadioItem
-                        key={preset.id}
-                        className="project-menu-item model-preset-item"
-                        value={preset.id}
-                        textValue={preset.label}
-                      >
-                        <span>
-                          <strong>{preset.label}</strong>
-                          <small>
-                            {preset.paramsLabel} · {preset.quantLabel} · {formatModelSize(preset.expectedSizeBytes)} ·{" "}
-                            {preset.licenseId}
-                          </small>
-                          <small className={presetFits === false ? "model-fit-warn" : undefined}>
-                            {presetFits === null
+                  {presets.map((preset) => (
+                    // A preset this Mac cannot run stays visible but
+                    // unselectable, with the reason — never hidden, never
+                    // downloadable behind a warning.
+                    <DropdownMenu.RadioItem
+                      key={preset.id}
+                      className="project-menu-item model-preset-item"
+                      value={preset.id}
+                      textValue={preset.label}
+                      disabled={!preset.fitsHost}
+                    >
+                      <span>
+                        <strong>{preset.label}</strong>
+                        <small>
+                          {preset.paramsLabel} · {preset.quantLabel} · {formatModelSize(preset.expectedSizeBytes)} ·{" "}
+                          {preset.licenseId}
+                        </small>
+                        <small className={preset.fitsHost ? undefined : "model-fit-warn"}>
+                          {preset.fitsHost
+                            ? "Runs on this Mac"
+                            : hostModelBudgetBytes === null
                               ? "Checking this Mac's memory…"
-                              : presetFits
-                                ? "Runs on this Mac"
-                                : `Needs ~${formatHostMemory(preset.minMemoryBytes)} memory; this Mac has ${formatHostMemory(hostMemoryBytes ?? 0)}`}
-                          </small>
-                        </span>
-                        <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-                      </DropdownMenu.RadioItem>
-                    );
-                  })}
+                              : tooLargeReason(preset.expectedSizeBytes, hostModelBudgetBytes)}
+                        </small>
+                        {!preset.calibrated && <small className="model-fit-warn">{UNCALIBRATED_NOTICE}</small>}
+                      </span>
+                      <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
+                    </DropdownMenu.RadioItem>
+                  ))}
                 </DropdownMenu.RadioGroup>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
@@ -527,10 +538,13 @@ function PresetDownload({
               </div>
               <p className="model-note">{selected.licenseUrl}</p>
               <p className="model-note">{selected.licenseNoticeText}</p>
-              {fits === false && (
+              {fits === false && hostModelBudgetBytes !== null && (
                 <p className="model-fit-warn" role="status">
-                  Needs ~{formatHostMemory(selected.minMemoryBytes)} memory; this Mac has {formatHostMemory(hostMemoryBytes ?? 0)}.
+                  {tooLargeReason(selected.expectedSizeBytes, hostModelBudgetBytes)}
                 </p>
+              )}
+              {!selected.calibrated && (
+                <p className="model-fit-warn" role="status">{UNCALIBRATED_NOTICE}</p>
               )}
               <label className="model-import-consent">
                 <input
@@ -1146,19 +1160,31 @@ export function ModelPanel({
   refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
-  const offline = daemon.state === "stopped";
+  const verifySequence = useRef(0);
+  // A daemon that is up but still hashing and mapping its model answers
+  // nothing at all, so health reads unreachable while the load runs. The
+  // desktop reports that phase from the process it started; it outranks the
+  // health read, which cannot tell "loading" from "gone".
+  const loading = modelStatus?.status === "ok" && modelStatus.loading;
+  const offline = daemon.state === "stopped" && !loading;
   const loaded = modelStatus?.status === "ok" ? modelStatus.loaded : null;
   const registered = modelStatus?.status === "ok" ? modelStatus.registered : [];
+  // The daemon keeps serving when its model fails to load, and keeps saying
+  // why for as long as it runs — a 2.6 s toast is not a report. A paused
+  // daemon has no live reason to show.
+  const loadFailure = !offline && modelStatus?.status === "ok" ? modelStatus.loadFailure : null;
 
   // A verify result only ever applies to the model it measured; once the
   // loaded model changes (e.g. a restart with a different one), the stale
   // pass/fail line must not keep rendering next to the new identity.
   useEffect(() => {
+    verifySequence.current += 1;
     setVerify({ state: "idle" });
   }, [loaded?.modelId]);
   const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
 
   const runVerify = async (modelId: string) => {
+    const sequence = ++verifySequence.current;
     setVerify({ state: "running" });
     const startedAt = performance.now();
     try {
@@ -1168,6 +1194,9 @@ export function ModelPanel({
         [{ role: "user", content: "Reply with a single word: ready." }],
         16,
       );
+      // A response that outlived its model (the loaded model changed while
+      // the round-trip was in flight) must not credit the new identity.
+      if (sequence !== verifySequence.current) return;
       const ms = Math.round(performance.now() - startedAt);
       if (response.status === "ok") {
         setVerify({ state: "pass", ms, tokens: response.usage.emittedOutputTokens });
@@ -1178,11 +1207,14 @@ export function ModelPanel({
         });
       }
     } catch (error) {
+      if (sequence !== verifySequence.current) return;
       setVerify({ state: "fail", detail: presentError(error) });
     }
   };
 
-  const pill = offline || !modelStatus || modelStatus.status !== "ok"
+  const pill = loading
+    ? { label: "loading", tone: "elevated" }
+    : offline || !modelStatus || modelStatus.status !== "ok"
     ? { label: offline ? "unreachable" : !modelStatus ? "checking" : "unreachable", tone: offline || modelStatus ? "attention" : "not-reported" }
     : loaded
       ? { label: "loaded", tone: "healthy" }
@@ -1217,8 +1249,24 @@ export function ModelPanel({
         </div>
         <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
       </div>
+      {loadFailure && <p className="model-verify is-fail" role="alert">{loadFailure}</p>}
       {offline ? (
-        <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+        registered.length > 0 ? (
+          <div className="model-runtime">
+            <p className="model-note">
+              PAM is paused, so nothing is loaded right now. Start it with a registered model to
+              chat and verify.
+            </p>
+            <div className="access-list model-rows">{registered.map(restartRow)}</div>
+          </div>
+        ) : (
+          <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+        )
+      ) : loading ? (
+        <p className="panel-empty" role="status">
+          PAM is starting: the model is still loading. Checking and loading a large model takes a
+          few minutes, and this panel updates when it finishes.
+        </p>
       ) : !modelStatus ? (
         <p className="panel-empty">Checking the local model…</p>
       ) : modelStatus.status !== "ok" ? (

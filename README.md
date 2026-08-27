@@ -138,28 +138,28 @@ Register a caller and grant only the capabilities needed for the current
 project:
 
 ```sh
-cargo run -p pam_cli -- caller register
-cargo run -p pam_cli -- access grant daemon.status --resource daemon
-cargo run -p pam_cli -- access grant brief.read
+cargo run --bin pam -- caller register
+cargo run --bin pam -- access grant daemon.status --resource daemon
+cargo run --bin pam -- access grant brief.read
 ```
 
 Run the daemon from an initialized project in one terminal:
 
 ```sh
-cargo run -p pam_cli -- daemon
+cargo run --bin pam -- daemon
 ```
 
 Then, from a second terminal:
 
 ```sh
-cargo run -p pam_cli -- status
-cargo run -p pam_cli -- brief
+cargo run --bin pam -- status
+cargo run --bin pam -- brief
 ```
 
 The daemon runs in the foreground and shuts down cleanly on Ctrl-C. If an
 interrupted daemon leaves stale local endpoint state, recover it explicitly
-with `cargo run -p pam_cli -- daemon --recover`. The native GUI boundary is
-available as `cargo run -p pam_cli -- gui`. `pam brief` requires `ptrack` to be
+with `cargo run --bin pam -- daemon --recover`. The native GUI boundary is
+available as `cargo run --bin pam -- gui`. `pam brief` requires `ptrack` to be
 installed and initialized for that exact project root; otherwise it reports the
 source as unavailable. Durable request observers use `pam wait <request-id>` and
 `pam result <request-id>`. A brief's exact source can be inspected with
@@ -172,8 +172,8 @@ If policy returns an approval challenge, decide it and retry that same
 operation with the explicit one-time receipt:
 
 ```sh
-cargo run -p pam_cli -- approval approve <approval-id>
-cargo run -p pam_cli -- status --approval-id <approval-id>
+cargo run --bin pam -- approval approve <approval-id>
+cargo run --bin pam -- status --approval-id <approval-id>
 ```
 
 `--approval-id <ID>` is available on the single-request `status`, `brief`,
@@ -196,7 +196,7 @@ accepted license snapshot; if policy denies the import, run the exact recovery
 grant printed by PAM and retry the same command:
 
 ```sh
-cargo run -p pam_cli -- model import \
+cargo run --bin pam -- model import \
   qwen/qwen3-coder-30b-a3b-instruct-q4-k-s \
   --path /absolute/path/to/Qwen3-Coder-30B-A3B-Instruct-Q4_K_S.gguf \
   --digest sha256:56a7d00783419bcb0ae566253c371bcb3678261bb79881a553539f5679864db4 \
@@ -213,11 +213,11 @@ grant is added; retry the identical request after granting it.
 
 ```sh
 # Terminal 1
-cargo run -p pam_cli -- daemon \
+cargo run --bin pam -- daemon \
   --model qwen/qwen3-coder-30b-a3b-instruct-q4-k-s
 
 # Terminal 2
-cargo run -p pam_cli -- model generate \
+cargo run --bin pam -- model generate \
   qwen/qwen3-coder-30b-a3b-instruct-q4-k-s \
   'Explain this Rust compiler error and propose the smallest safe fix.' \
   --tokens 256

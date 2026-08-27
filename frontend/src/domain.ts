@@ -525,7 +525,19 @@ export interface ModelFailureDto {
 }
 
 export type ModelStatusDto =
-  | { status: "ok"; loaded: ModelSummaryDto | null; registered: ModelSummaryDto[] }
+  | {
+      status: "ok";
+      loaded: ModelSummaryDto | null;
+      registered: ModelSummaryDto[];
+      /** Why the running daemon is serving without the model it was started
+       * with; null when a model is loaded, none was requested, or the daemon
+       * is unreachable. Lasts as long as that daemon does. */
+      loadFailure: string | null;
+      /** The daemon this GUI started is running but has not answered yet: it
+       * is still hashing and mapping its model. A loading daemon cannot say
+       * so itself — it only starts accepting once the load is in. */
+      loading: boolean;
+    }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
 export interface ChatMessageDto {
@@ -605,13 +617,25 @@ export interface ModelPresetDto {
   licenseId: string;
   licenseUrl: string;
   licenseNoticeText: string;
-  minMemoryBytes: number;
+  /** True when this exact artifact is in PAM's measured, known-good set. */
+  calibrated: boolean;
+  /**
+   * Whether this Mac can run the preset, decided in Rust against the same
+   * budget the daemon admits a model with. True when the host memory probe
+   * is unavailable.
+   */
+  fitsHost: boolean;
   paramsLabel: string;
   quantLabel: string;
 }
 
 export interface ModelPresetsDto {
   presets: ModelPresetDto[];
+  /**
+   * The largest artifact this Mac can devote to a model: its runtime ceiling
+   * less the projection contingency. Null when the host memory probe failed.
+   */
+  hostModelBudgetBytes: number | null;
 }
 
 export type ModelDownloadDto =
@@ -690,6 +714,17 @@ export type ConnectorTestDto =
   | { status: "ok"; connectorId: string; result: "passed" | "failed"; detail: string }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+export interface DaemonCapabilityDto {
+  capability: string;
+  name: string;
+  summary: string;
+  granted: boolean;
+}
+
+export interface DaemonAccessDto {
+  capabilities: DaemonCapabilityDto[];
+}
+
 export interface PamBridge {
   readonly mode: BridgeMode;
   bootstrap(): Promise<BootstrapResponse>;
@@ -699,6 +734,9 @@ export interface PamBridge {
   daemonLogs(fence: CommandFence, limit?: number): Promise<DaemonLogsDto>;
   daemonStats(fence: CommandFence, days?: number): Promise<DaemonStatsDto>;
   callerRegistry(fence: CommandFence): Promise<CallersDto>;
+  daemonAccess(fence: CommandFence): Promise<DaemonAccessDto>;
+  daemonAccessConfig(fence: CommandFence): Promise<AccessConfigDto>;
+  setDaemonAccess(fence: CommandFence, capability: string, granted: boolean): Promise<DaemonAccessDto>;
   connectorRegistry(fence: CommandFence): Promise<ConnectorsDto>;
   connectorConfigure(fence: CommandFence, params: ConnectorConfigureParams): Promise<ConnectorConfigureDto>;
   connectorTest(fence: CommandFence, connector: string): Promise<ConnectorTestDto>;
@@ -740,3 +778,6 @@ export const MAX_EVIDENCE_TEXT = 4_096;
 export const MAX_FLOW_SOURCE = 128_000;
 export const MAX_CHAT_MESSAGES = 100;
 export const CHAT_MAX_OUTPUT_TOKENS = 512;
+// The model DTOs do not expose a context size, so the chat drawer sends
+// history under this fixed estimated-token budget (reply reserve included).
+export const CHAT_CONTEXT_TOKEN_BUDGET = 4_096;

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AccessConfigDto,
   ActivityDto,
   AppSettingsDto,
   BootstrapResponse,
@@ -11,6 +12,7 @@ import type {
   ConnectorConfigureParams,
   ConnectorTestDto,
   ConnectorsDto,
+  DaemonAccessDto,
   DaemonLogsDto,
   DaemonStatsDto,
   EvidenceDto,
@@ -121,6 +123,16 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     callerRegistry: (fence) =>
       invokeCommand<CallersDto>("caller_registry", request(flatFence(fence))),
+    daemonAccess: (fence) =>
+      invokeCommand<DaemonAccessDto>("daemon_access", request(flatFence(fence))),
+    daemonAccessConfig: (fence) =>
+      invokeCommand<AccessConfigDto>("daemon_access_config", request(flatFence(fence))),
+    setDaemonAccess: (fence, capability, granted) =>
+      invokeCommand<DaemonAccessDto>("set_daemon_access", request({
+        ...flatFence(fence),
+        capability,
+        granted,
+      })),
     connectorRegistry: (fence) =>
       invokeCommand<ConnectorsDto>("connector_registry", request(flatFence(fence))),
     connectorConfigure: (fence, params: ConnectorConfigureParams) =>

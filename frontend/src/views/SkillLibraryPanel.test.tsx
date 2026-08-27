@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { CommandFence, ProjectSummaryDto, SkillLibraryDto } from "../domain";
+import type { CommandFence, SkillLibraryDto } from "../domain";
 import { fixtureBridge } from "../fixtures";
 import { SkillLibraryPanel } from "./SkillLibraryPanel";
 
@@ -16,10 +16,6 @@ const daemonFence: CommandFence = {
   generation: "daemon",
   operationId: "44444444-4444-4444-8444-444444444444",
 };
-
-const projects: ProjectSummaryDto[] = [
-  { handle: "11111111-1111-4111-8111-111111111111", name: "payments-api", location: "/work/payments-api" },
-];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -448,7 +444,6 @@ describe("SkillLibraryPanel", () => {
   });
 
   it("lists and installs globally under the daemon authority while gating assignment", async () => {
-    const user = userEvent.setup();
     const bridge = fixtureBridge();
     const nativeManage = bridge.manageSkillLibrary.bind(bridge);
     const fences: CommandFence[] = [];
@@ -456,15 +451,7 @@ describe("SkillLibraryPanel", () => {
       fences.push(structuredClone(requestFence));
       return nativeManage(requestFence, action);
     });
-    const onSelectProject = vi.fn();
-    render(
-      <SkillLibraryPanel
-        bridge={bridge}
-        fence={daemonFence}
-        projects={projects}
-        onSelectProject={onSelectProject}
-      />,
-    );
+    render(<SkillLibraryPanel bridge={bridge} fence={daemonFence} />);
 
     const entries = await screen.findByLabelText("Canonical library entries");
     expect(within(entries).getByText("review-changes")).toBeInTheDocument();
@@ -476,18 +463,10 @@ describe("SkillLibraryPanel", () => {
     }
     expect(screen.queryByRole("combobox", { name: "Library entry" })).not.toBeInTheDocument();
     expect(within(entries).queryByText("not inspected")).not.toBeInTheDocument();
-    expect(screen.getByText(/Pick a project to manage targets/)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /payments-api/ }));
-    expect(onSelectProject).toHaveBeenCalledWith(projects[0]);
-    expect(fences.every((requestFence) => requestFence.projectHandle === "daemon" && requestFence.generation === "daemon")).toBe(true);
-  });
-
-  it("hides the picker but keeps the assignment hint when no project is registered", async () => {
-    render(<SkillLibraryPanel bridge={fixtureBridge()} fence={daemonFence} projects={[]} onSelectProject={vi.fn()} />);
-
-    expect(await screen.findByText(/Pick a project to manage targets/)).toBeInTheDocument();
+    expect(screen.getByText(/PAM has none open/)).toBeInTheDocument();
+    // No project identity anywhere: the gate explains itself, it never offers a pick.
     expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
+    expect(fences.every((requestFence) => requestFence.projectHandle === "daemon" && requestFence.generation === "daemon")).toBe(true);
   });
 
   it("keeps form fields across a same-project generation rotation while refreshing the library", async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CommandFence, PamBridge } from "../domain";
@@ -134,7 +134,7 @@ describe("FlowsView visual editor", () => {
     expect(await screen.findByText(/Valid · 1 dry-run steps/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith("Flow saved durably inside the project boundary"));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("Flow saved durably in the shared flow library"));
     expect(order).toEqual(["compose", "validate", "save"]);
     expect(bridge.validateFlow).toHaveBeenCalledWith(expect.anything(), expect.any(String), composedSource);
   });
@@ -213,7 +213,7 @@ describe("FlowsView fence rotations", () => {
     expect(sourceTextarea()).toBeEnabled();
   });
 
-  it("resets the editor when the project itself switches", async () => {
+  it("keeps the editor when the project itself switches, because the library is global", async () => {
     const bridge = fixtureBridge();
     const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
     const user = userEvent.setup();
@@ -234,7 +234,73 @@ describe("FlowsView fence rotations", () => {
     );
 
     await waitFor(() => expect(loadWorkspace).toHaveBeenCalledTimes(2));
-    expect(sourceTextarea().value).toBe("");
-    expect(screen.getByRole("heading", { name: "Select a definition" })).toBeInTheDocument();
+    expect(sourceTextarea().value).toBe("# unsaved draft");
+    expect(screen.getByRole("heading", { name: "after-merge-checks.toml" })).toBeInTheDocument();
+    // Every catalog command still speaks the daemon authority, never a project fence.
+    for (const [requestFence] of loadWorkspace.mock.calls) {
+      expect(requestFence).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    }
+  });
+
+  it("keeps the newest open when an earlier one is still in flight", async () => {
+    const bridge = fixtureBridge();
+    const gates: Array<() => void> = [];
+    const names = new Map<string, string>();
+    const nameFor = (handle: string) => {
+      if (!names.has(handle)) names.set(handle, names.size === 0 ? "flow-a.toml" : "flow-b.toml");
+      return names.get(handle) as string;
+    };
+    bridge.openFlow = vi.fn(async (requestFence, flowHandle) => {
+      const fileName = nameFor(flowHandle);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return {
+        fence: { ...requestFence },
+        data: {
+          handle: `document:${flowHandle}`,
+          identity: { fileName, id: fileName.replace(".toml", ""), revision: 1, digest: "sha256:fixture" },
+          source: `# ${fileName}\n`,
+        },
+      };
+    });
+    const user = userEvent.setup();
+    render(<FlowsView bridge={bridge} fence={fence} onError={vi.fn()} onToast={vi.fn()} />);
+    await screen.findByRole("region", { name: "Flow workspace" });
+
+    await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await user.click(screen.getByRole("button", { name: /release-confidence/ }));
+    // The stale open resolves last; the newest document still wins.
+    await act(async () => { gates[1](); gates[0](); });
+
+    expect(await screen.findByRole("heading", { name: "flow-b.toml" })).toBeInTheDocument();
+    expect(sourceTextarea().value).toBe("# flow-b.toml\n");
+  });
+});
+
+describe("FlowsView operation identity", () => {
+  it("spends a fresh operation on each command of an open", async () => {
+    const bridge = fixtureBridge();
+    const openFlow = vi.spyOn(bridge, "openFlow");
+    const flowGraph = vi.spyOn(bridge, "flowGraph");
+
+    await openAfterMerge(bridge);
+
+    expect(openFlow).toHaveBeenCalledTimes(1);
+    expect(flowGraph).toHaveBeenCalledTimes(1);
+    // Reusing one operation across two daemon commands trips the replay guard.
+    expect(flowGraph.mock.calls[0][0].operationId).not.toBe(openFlow.mock.calls[0][0].operationId);
+  });
+
+  it("spends a fresh operation on compose and on validate", async () => {
+    const bridge = fixtureBridge();
+    const flowCompose = vi.spyOn(bridge, "flowCompose");
+    const validateFlow = vi.spyOn(bridge, "validateFlow");
+
+    const { user } = await openAfterMerge(bridge);
+    await user.click(screen.getByRole("button", { name: "Validate" }));
+    await screen.findByText(/Valid ·/);
+
+    expect(flowCompose).toHaveBeenCalledTimes(1);
+    expect(validateFlow).toHaveBeenCalledTimes(1);
+    expect(validateFlow.mock.calls[0][0].operationId).not.toBe(flowCompose.mock.calls[0][0].operationId);
   });
 });

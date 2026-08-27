@@ -6,8 +6,9 @@ use std::{
 };
 
 use pam_model::{
-    RuntimeError, RuntimeHostAdmission, RuntimeHostSnapshot, RuntimeMemoryPressure,
-    RuntimeSwapTrend,
+    APPLICATION_RESERVE_BYTES, RuntimeError, RuntimeHostAdmission, RuntimeHostSnapshot,
+    RuntimeMemoryPressure, RuntimeSwapTrend, host_projection_contingency_bytes,
+    required_os_reserve,
 };
 
 const SYSCTL_PATH: &str = "/usr/sbin/sysctl";
@@ -16,10 +17,6 @@ const MAX_SYSCTL_OUTPUT_BYTES: usize = 256;
 const MAX_VM_STAT_OUTPUT_BYTES: usize = 16 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const SWAP_TREND_INTERVAL: Duration = Duration::from_millis(250);
-const GIB: u64 = 1024 * 1024 * 1024;
-const MIN_OS_RESERVE_BYTES: u64 = 8 * GIB;
-const PAM_APPLICATION_RESERVE_BYTES: u64 = GIB;
-const PROJECTION_CONTINGENCY_BYTES: u64 = GIB;
 
 #[derive(Debug, Default)]
 pub(crate) struct MacosRuntimeHostAdmission;
@@ -139,20 +136,20 @@ pub(super) fn parse_snapshot(
             / 100,
     )
     .map_err(|_| invalid_snapshot())?;
-    let twenty_percent = total_bytes / 5 + u64::from(!total_bytes.is_multiple_of(5));
-    let reserved_os_bytes = MIN_OS_RESERVE_BYTES.max(twenty_percent);
     let pressure = match pressure_level {
         1 => RuntimeMemoryPressure::Normal,
         2 => RuntimeMemoryPressure::Warning,
         4 => RuntimeMemoryPressure::Critical,
         _ => RuntimeMemoryPressure::Unknown,
     };
+    // Every reserve is derived from this host's physical total by pam_model,
+    // the same source the model ceiling uses; nothing here is a fixed size.
     RuntimeHostSnapshot::new(
         total_bytes,
         available_bytes,
-        reserved_os_bytes,
-        PAM_APPLICATION_RESERVE_BYTES,
-        PROJECTION_CONTINGENCY_BYTES,
+        required_os_reserve(total_bytes),
+        APPLICATION_RESERVE_BYTES,
+        host_projection_contingency_bytes(total_bytes),
         pressure,
         swap_trend,
     )

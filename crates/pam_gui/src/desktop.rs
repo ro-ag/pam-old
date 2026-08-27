@@ -19,16 +19,17 @@ use pam_protocol::{
     ActivityDaySummary, ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult,
     CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
     ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
-    DaemonStatsResult, FailureCode, LogSeverity, MAX_MODEL_OUTPUT_TOKENS, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary,
-    ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
+    DaemonStatsResult, FailureCode, FlowProjectRoot, LogSeverity, MAX_MODEL_OUTPUT_TOKENS,
+    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
+    ModelSummary, ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
 };
+use pam_store::Store;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    access_config::{AccessConfigState, AccessConfigView},
+    access_config::{AccessConfigState, AccessConfigView, load_access_config},
     control_center::{
         HealthState, MAX_PROJECTS, bounded_name, load_credential, load_project_health_access,
         load_project_surfaces, probe_health_authenticated, project_name,
@@ -39,6 +40,7 @@ use crate::{
         CurrentView, EvidencePreview, EvidenceState, OutcomeView, PendingApproval, RunView,
         TimelineFact, TimelineKind, decide_current_approval, load_evidence,
     },
+    daemon_access::{DaemonAccessDto, read_daemon_access, update_daemon_access},
     flow_editor::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
@@ -72,10 +74,22 @@ const MAX_DETAILS_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_PATH_BYTES: usize = 4 * 1024;
 const MAX_TIMELINE_FACTS: usize = 256;
 const MAX_EVIDENCE_HANDLES: usize = 256;
-/// Hashing and loading a multi-GB GGUF legitimately takes tens of seconds,
-/// so the post-spawn startup poll gets a generous bound.
-const STARTUP_TIMEOUT: Duration = Duration::from_mins(2);
+/// The post-spawn startup poll's fixed allowance: enough for the daemon to
+/// open its store, bind, and answer health when no model is involved.
+const STARTUP_BASE_TIMEOUT: Duration = Duration::from_mins(2);
+/// On top of the base allowance, one minute per this many bytes of the
+/// requested model's artifact: the daemon revalidates the whole GGUF digest
+/// and then maps it into the Metal runtime, which is minutes of honest work
+/// for a multi-GB file. Deliberately conservative — the budget only decides
+/// when the GUI stops waiting, never whether the daemon lives.
+const MODEL_LOAD_BYTES_PER_MINUTE: u64 = 8 * 1024 * 1024 * 1024;
+/// Whatever the artifact size, the GUI stops holding its command gate here.
+const STARTUP_TIMEOUT_CAP: Duration = Duration::from_mins(10);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Graceful daemon shutdown after a stop request is quick; this bounds the
+/// wait before the GUI kills and collects the daemon child itself.
+const DAEMON_STOP_GRACE: Duration = Duration::from_secs(5);
+const DAEMON_STOP_POLL: Duration = Duration::from_millis(50);
 const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
 const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
@@ -736,6 +750,14 @@ pub enum ModelStatusDto {
     Ok {
         loaded: Option<ModelSummaryDto>,
         registered: Vec<ModelSummaryDto>,
+        /// Why the daemon is serving without the model it was started with.
+        /// Present for as long as that daemon runs; `None` once a model is
+        /// loaded or none was requested.
+        load_failure: Option<String>,
+        /// The daemon this GUI spawned is running but has not answered yet:
+        /// its model load is still in flight. `false` for every daemon that
+        /// answered, and for one this GUI does not own a handle on.
+        loading: bool,
     },
     Blocked {
         failure: FailureDto,
@@ -883,7 +905,13 @@ pub struct ModelPresetDto {
     pub license_id: String,
     pub license_url: String,
     pub license_notice_text: String,
-    pub min_memory_bytes: u64,
+    /// True when this exact artifact is in PAM's measured, known-good set.
+    /// False is not a refusal — the picker warns, it does not hide.
+    pub calibrated: bool,
+    /// Whether this Mac can run the preset, by the daemon's own admission
+    /// arithmetic. True when the host memory probe is unavailable: PAM
+    /// refuses nothing it could not measure.
+    pub fits_host: bool,
     pub params_label: String,
     pub quant_label: String,
 }
@@ -892,6 +920,10 @@ pub struct ModelPresetDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelPresetsDto {
     pub presets: Vec<ModelPresetDto>,
+    /// The largest artifact this Mac can devote to a model: its runtime
+    /// ceiling less the projection contingency. `None` when the host memory
+    /// probe is unavailable.
+    pub host_model_budget_bytes: Option<u64>,
 }
 
 /// Starts a guided download. Unlike the fence itself going stale, business
@@ -1291,7 +1323,8 @@ impl DesktopCore {
                 Some("Open PAM from a Git repository or initialized PAM project.".to_owned()),
             ));
         };
-        let surfaces = load_surfaces(identity.id().clone()).await;
+        let surfaces =
+            load_surfaces(identity.id().clone(), request_project_root(identity.root())).await;
         let mut state = self.inner.lock().await;
         if state.activation_operation.as_ref() != Some(&operation) {
             return Err(DesktopErrorDto::stale(
@@ -1368,7 +1401,8 @@ impl DesktopCore {
                 ));
             }
         };
-        let surfaces = load_surfaces(identity.id().clone()).await;
+        let surfaces =
+            load_surfaces(identity.id().clone(), request_project_root(identity.root())).await;
 
         let mut state = self.inner.lock().await;
         if state.activation_operation.as_ref() != Some(&operation) {
@@ -1404,7 +1438,7 @@ impl DesktopCore {
     pub async fn refresh(&self, fence: CommandFence) -> DesktopResult<SnapshotDto> {
         let _command = self.command_gate.lock().await;
         let active = self.begin(&fence).await?;
-        let surfaces = load_surfaces(active.project_id.clone()).await;
+        let surfaces = load_active_surfaces(&active).await;
         self.finish_snapshot(fence, active, surfaces).await
     }
 
@@ -1448,27 +1482,14 @@ impl DesktopCore {
                 Some(error.to_string()),
             )
         })?;
-        let mut command = Command::new(executable);
-        command
-            // --recover is idempotent: it only clears a stale socket, and a
-            // live daemon still holds the ownership lock.
-            .args(["daemon", "--recover"])
-            .args(model.as_ref().map(|key| format!("--model={key}")))
-            .env(pam_platform::LAUNCH_GRANT_ENV, grant)
-            .current_dir(&spawn_root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            // A daemon that dies at startup must leave its reason somewhere:
-            // stderr lands next to the daemon's own log file.
-            .stderr(daemon_stderr_capture());
-        #[cfg(unix)]
-        command.process_group(0);
-        let mut child = command.spawn().map_err(|error| {
-            DesktopErrorDto::unavailable(
-                "PAM could not start the local daemon.",
-                Some(error.to_string()),
-            )
-        })?;
+        let mut child = daemon_start_command(&executable, model.as_deref(), &spawn_root, grant)
+            .spawn()
+            .map_err(|error| {
+                DesktopErrorDto::unavailable(
+                    "PAM could not start the local daemon.",
+                    Some(error.to_string()),
+                )
+            })?;
         let project_id = scope.project_id();
         // The startup probes authenticate as the GUI caller, exactly like
         // `daemon_health`/`model_status`. Without that credential (GUI caller
@@ -1513,21 +1534,40 @@ impl DesktopCore {
                 )
             }
         };
-        wait_for_daemon_serving(&mut child, model.as_deref(), health, model_loaded).await?;
+        // A daemon that came up without its model — or that is still loading
+        // one — is still a daemon: track the child exactly like a successful
+        // start, then report what the wait observed.
+        let budget = startup_budget(model.as_deref()).await;
+        match wait_for_daemon_serving(&mut child, model.as_deref(), budget, health, model_loaded)
+            .await?
+        {
+            DaemonStartup::Serving => {}
+            DaemonStartup::ModelMissing(failure) | DaemonStartup::StillStarting(failure) => {
+                self.track_daemon_child(child).await;
+                return Err(failure);
+            }
+        }
         match scope {
             CommandScope::Daemon => {
-                let mut state = self.inner.lock().await;
-                state.daemon_child = Some(child);
+                self.track_daemon_child(child).await;
                 Ok(None)
             }
             CommandScope::Project(active) => {
-                let surfaces = load_surfaces(active.project_id.clone()).await;
+                let surfaces = load_active_surfaces(&active).await;
                 let mut state = self.inner.lock().await;
                 ensure_active_matches(&state, &active, &fence)?;
-                state.daemon_child = Some(child);
+                replace_daemon_child(&mut state.daemon_child, child);
                 finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
             }
         }
+    }
+
+    /// Tracks a freshly started daemon child, collecting whatever handle it
+    /// replaces. Every daemon this process spawned and left running is
+    /// tracked, including one serving without its model.
+    async fn track_daemon_child(&self, child: Child) {
+        let mut state = self.inner.lock().await;
+        replace_daemon_child(&mut state.daemon_child, child);
     }
 
     /// Requests an authenticated daemon stop. Under a project fence it
@@ -1552,16 +1592,20 @@ impl DesktopCore {
         match scope {
             CommandScope::Daemon => {
                 let mut state = self.inner.lock().await;
-                reap_daemon_child(&mut state);
+                reap_daemon_child(&mut state.daemon_child);
                 Ok(None)
             }
             CommandScope::Project(active) => {
-                let surfaces =
-                    load_surfaces_with_credential(caller, credential, active.project_id.clone())
-                        .await;
+                let surfaces = load_surfaces_with_credential(
+                    caller,
+                    credential,
+                    active.project_id.clone(),
+                    request_project_root(&active.catalog.root),
+                )
+                .await;
                 let mut state = self.inner.lock().await;
                 ensure_active_matches(&state, &active, &fence)?;
-                reap_daemon_child(&mut state);
+                reap_daemon_child(&mut state.daemon_child);
                 finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
             }
         }
@@ -1584,7 +1628,7 @@ impl DesktopCore {
             (state.daemon_executable.clone(), active.catalog.root.clone())
         };
         run_gui_registration(&executable, &root).await?;
-        let surfaces = load_surfaces(active.project_id.clone()).await;
+        let surfaces = load_active_surfaces(&active).await;
         self.finish_snapshot(fence, active, surfaces).await
     }
 
@@ -1868,7 +1912,10 @@ impl DesktopCore {
     /// Loads the daemon's model surface: the loaded model and the catalog.
     ///
     /// Daemon failures are classified in the returned DTO: an explicit policy
-    /// deny is blocked, everything else unavailable.
+    /// deny is blocked, everything else unavailable. When the daemon cannot
+    /// be reached at all, the durable registered catalog still answers from
+    /// the store — a daemon that is not serving has nothing loaded, but its
+    /// registered models must stay reachable so one can be started with.
     ///
     /// # Errors
     ///
@@ -1876,24 +1923,57 @@ impl DesktopCore {
     pub async fn model_status(&self, fence: CommandFence) -> DesktopResult<ModelStatusDto> {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
-        let observed = match observatory_credential().await {
+        // `unreachable` is what separates "the daemon has no model" from
+        // "the daemon could not answer": only the second can be a load in
+        // flight, and only the spawned child handle can tell.
+        let (data, unreachable) = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_model_status(caller, credential, scope.project_id()).await
+                match load_model_status(caller, credential, scope.project_id()).await {
+                    // The registered catalog is durable store state: surface
+                    // it even when the daemon is not serving. A missing or
+                    // unreadable store keeps the original unavailable failure.
+                    observed @ ObservatoryState::Unavailable { .. } => {
+                        match registered_model_catalog().await {
+                            Some(registered) => (
+                                ModelStatusDto::Ok {
+                                    loaded: None,
+                                    registered,
+                                    // The daemon is unreachable, so it has no
+                                    // load failure to report — only the
+                                    // durable catalog survives.
+                                    load_failure: None,
+                                    // Decided under the lock below, where the
+                                    // spawned child handle lives.
+                                    loading: false,
+                                },
+                                true,
+                            ),
+                            None => (model_status_dto(observed), false),
+                        }
+                    }
+                    observed => (model_status_dto(observed), false),
+                }
             }
-            Err(state) => state,
+            Err(state) => (model_status_dto(state), false),
         };
-        let data = model_status_dto(observed);
-        let state = self.inner.lock().await;
+        let mut state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
-        Ok(data)
+        if !unreachable {
+            return Ok(data);
+        }
+        Ok(mark_model_loading(data, &mut state.daemon_child))
     }
 
     /// Runs one policy-gated direct inference on the embedded runtime.
     ///
-    /// A missing or zero `max_output_tokens` requests the default budget and
-    /// larger requests are clamped to the protocol maximum. Policy and
-    /// approval refusals are classified as blocked in the returned DTO with
-    /// recovery text; everything else is unavailable.
+    /// Inference can run for minutes, so it never takes the command gate:
+    /// fence authorization and the post-exchange staleness check synchronize
+    /// through the state lock alone, and the daemon policy-gates and
+    /// serializes the generation itself. A missing or zero
+    /// `max_output_tokens` requests the default budget and larger requests
+    /// are clamped to the protocol maximum. Policy and approval refusals are
+    /// classified as blocked in the returned DTO with recovery text;
+    /// everything else is unavailable.
     ///
     /// # Errors
     ///
@@ -1907,7 +1987,6 @@ impl DesktopCore {
         messages: Vec<ModelMessageDto>,
         max_output_tokens: Option<u32>,
     ) -> DesktopResult<ModelInferDto> {
-        let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
         let messages = messages
             .into_iter()
@@ -2083,9 +2162,15 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Lists the curated, pre-verified model download presets. Static data:
+    /// Lists the curated, pre-verified model download presets, each already
+    /// judged against this host. Static data plus one host memory probe:
     /// works under either the daemon authority or an active project, exactly
     /// like [`Self::model_status`].
+    ///
+    /// The fit verdict is computed here, not in the frontend, so the picker
+    /// and the daemon's load-time admission share one rule. A failed probe
+    /// leaves the budget `None` and every preset marked as fitting — PAM
+    /// refuses nothing it could not measure.
     ///
     /// # Errors
     ///
@@ -2093,11 +2178,13 @@ impl DesktopCore {
     pub async fn model_presets(&self, fence: CommandFence) -> DesktopResult<ModelPresetsDto> {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
+        let host_total_bytes = host_memory_total_bytes().ok();
         let data = ModelPresetsDto {
             presets: model_presets::CATALOG
                 .iter()
-                .map(model_preset_dto)
+                .map(|preset| model_preset_dto(preset, host_total_bytes))
                 .collect(),
+            host_model_budget_bytes: host_total_bytes.map(model_presets::host_model_budget_bytes),
         };
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
@@ -2405,6 +2492,82 @@ impl DesktopCore {
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
+    }
+
+    /// Reads the GUI caller's daemon-scope capability grants.
+    ///
+    /// The grants are daemon-global, so this read carries no project identity
+    /// and needs no active project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the daemon authority fence is invalid or
+    /// reused, the GUI caller identity is unreadable, or durable state is
+    /// unavailable.
+    pub async fn daemon_access(&self, fence: CommandFence) -> DesktopResult<DaemonAccessDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let (state_path, caller) = daemon_access_identity()?;
+        read_daemon_access(state_path, caller).await
+    }
+
+    /// Reads the daemon's observed access boundary: TLS roots, proxy
+    /// environment, `NO_PROXY`, and PAC state.
+    ///
+    /// The boundary is daemon-global, so this read carries no project identity
+    /// and needs no active project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the daemon authority fence is invalid or
+    /// its operation UUID was replayed. Every other failure is classified in
+    /// the returned DTO.
+    pub async fn daemon_access_config(
+        &self,
+        fence: CommandFence,
+    ) -> DesktopResult<AccessConfigDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let access = match caller_id(CallerKind::Gui) {
+            Err(error) => AccessConfigState::Unavailable {
+                code: None,
+                detail: error.to_string(),
+                recovery: None,
+            },
+            Ok(caller) => match load_credential(caller.clone()).await {
+                Err(detail) => AccessConfigState::Unavailable {
+                    code: None,
+                    detail,
+                    recovery: Some(GUI_REGISTRATION_RECOVERY.to_owned()),
+                },
+                Ok(credential) => {
+                    load_access_config(caller, credential, ProjectId::daemon_scope()).await
+                }
+            },
+        };
+        Ok(access_dto(access))
+    }
+
+    /// Grants or revokes one daemon-scope capability for the GUI caller.
+    ///
+    /// This is the owner's explicit, reversible act: nothing else in the GUI
+    /// writes a capability grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the daemon authority fence is invalid or
+    /// reused, the capability is not one the GUI uses, the GUI caller identity
+    /// is unreadable, or durable state is unavailable.
+    pub async fn set_daemon_access(
+        &self,
+        fence: CommandFence,
+        capability: String,
+        granted: bool,
+    ) -> DesktopResult<DaemonAccessDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let (state_path, caller) = daemon_access_identity()?;
+        update_daemon_access(state_path, caller, capability, granted).await
     }
 
     /// Converts one TOML flow document into its structured definition, locally.
@@ -2826,11 +2989,65 @@ fn daemon_stderr_log_hint() -> String {
     format!("See the daemon startup log at {location} for the failure reason.")
 }
 
+/// What the bounded startup verification observed, for a daemon that is up.
+/// Every variant leaves the child alive and the caller owning it.
+#[derive(Debug)]
+pub(crate) enum DaemonStartup {
+    /// Serving, with the requested model loaded when one was requested.
+    Serving,
+    /// Serving without the model it was started with. Carries the failure to
+    /// report once the live child is tracked.
+    ModelMissing(DesktopErrorDto),
+    /// The budget ran out with the process still running: the model load is
+    /// still in flight. Carries the notice to report once the live child is
+    /// tracked.
+    StillStarting(DesktopErrorDto),
+}
+
+/// The bounded wait for one launch. The daemon has to open its store, bind,
+/// and answer health; when it was started with a model it must additionally
+/// hash and map that artifact, so the budget grows with the artifact's size
+/// on disk. Exceeding the budget is never fatal — it only ends the GUI's
+/// wait — so the derivation stays conservative rather than exact.
+fn startup_budget_for_bytes(model_bytes: Option<u64>) -> Duration {
+    let load = model_bytes.map_or(0, |bytes| bytes.div_ceil(MODEL_LOAD_BYTES_PER_MINUTE));
+    (STARTUP_BASE_TIMEOUT + Duration::from_mins(load)).min(STARTUP_TIMEOUT_CAP)
+}
+
+/// The startup budget for a launch of `model`, sized from the registry row's
+/// recorded artifact size. An unknown or unregistered model gets the base
+/// allowance; the daemon's own store read is the authority on whether it
+/// exists at all.
+async fn startup_budget(model: Option<&str>) -> Duration {
+    let Some(model) = model else {
+        return startup_budget_for_bytes(None);
+    };
+    let size = registered_model_catalog().await.and_then(|catalog| {
+        catalog
+            .iter()
+            .find(|summary| summary.model_id == model)
+            .map(|summary| summary.size_bytes)
+    });
+    startup_budget_for_bytes(size)
+}
+
 /// Bounded post-spawn verification: the daemon must keep running AND serve
 /// authenticated health before `start_daemon` may report success. When a
 /// model was requested, that model must additionally be reported loaded —
 /// health alone is not proof, because a daemon whose model load failed
 /// still serves, just without the model.
+///
+/// A serving daemon whose model is missing is `Ok(ModelMissing)`, not an
+/// error: the daemon's own degrade path deliberately keeps it running, so
+/// killing it here would undo that. Its child stays alive for the caller to
+/// track, which then reports the carried failure.
+///
+/// The only genuine failure is a process that exited during startup, which
+/// `try_wait` has already reaped. A daemon still running when the budget
+/// expires is `Ok(StillStarting)`: it is mid-load, and killing it there is
+/// exactly what destroyed a 39 GB load mid-Metal-init (#34). Its child stays
+/// alive for the caller to track, so it never becomes an untracked daemon
+/// holding the ownership lock.
 ///
 /// Only `HealthState::Healthy` is definitive: the daemon binds its socket
 /// before loading the model, so mid-load it is alive but deaf and the health
@@ -2841,55 +3058,99 @@ fn daemon_stderr_log_hint() -> String {
 async fn wait_for_daemon_serving<H, HF, M, MF>(
     child: &mut Child,
     model: Option<&str>,
+    budget: Duration,
     mut health: H,
     mut model_loaded: M,
-) -> DesktopResult<()>
+) -> DesktopResult<DaemonStartup>
 where
     H: FnMut() -> HF,
     HF: Future<Output = HealthState>,
     M: FnMut() -> MF,
     MF: Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + budget;
     loop {
-        if let Some(status) = child.try_wait().map_err(|error| {
-            DesktopErrorDto::unavailable(
-                "PAM could not inspect the local daemon process.",
-                Some(error.to_string()),
-            )
-        })? {
-            return Err(DesktopErrorDto::unavailable(
-                format!("The local daemon exited during startup with {status}."),
-                Some(daemon_stderr_log_hint()),
-            ));
+        if let Some(status) = startup_exit_status(child)? {
+            return Err(daemon_exited_during_startup(status));
         }
         match health().await {
             HealthState::Offline | HealthState::Degraded { .. } => {}
             HealthState::Healthy { .. } => {
                 let Some(model) = model else {
-                    return Ok(());
+                    return Ok(DaemonStartup::Serving);
                 };
                 if model_loaded().await {
-                    return Ok(());
+                    return Ok(DaemonStartup::Serving);
                 }
-                return Err(DesktopErrorDto::unavailable(
+                return Ok(DaemonStartup::ModelMissing(DesktopErrorDto::unavailable(
                     format!("The local daemon is running, but the model {model} failed to load."),
                     Some(daemon_stderr_log_hint()),
-                ));
+                )));
             }
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            return Err(DesktopErrorDto::unavailable(
-                format!(
-                    "The local daemon did not start serving within {} seconds.",
-                    STARTUP_TIMEOUT.as_secs()
-                ),
-                Some(daemon_stderr_log_hint()),
-            ));
+            return match startup_exit_status(child)? {
+                Some(status) => Err(daemon_exited_during_startup(status)),
+                None => Ok(DaemonStartup::StillStarting(still_starting_notice(budget))),
+            };
         }
         tokio::time::sleep(STARTUP_POLL_INTERVAL.min(deadline - now)).await;
     }
+}
+
+/// One liveness read on the spawned daemon, with the bounded failure for a
+/// handle that cannot be inspected at all.
+fn startup_exit_status(child: &mut Child) -> DesktopResult<Option<std::process::ExitStatus>> {
+    child.try_wait().map_err(|error| {
+        DesktopErrorDto::unavailable(
+            "PAM could not inspect the local daemon process.",
+            Some(error.to_string()),
+        )
+    })
+}
+
+fn daemon_exited_during_startup(status: std::process::ExitStatus) -> DesktopErrorDto {
+    DesktopErrorDto::unavailable(
+        format!("The local daemon exited during startup with {status}."),
+        Some(daemon_stderr_log_hint()),
+    )
+}
+
+/// Not a failure: the daemon is running, it just has not finished loading.
+/// The user is told to wait rather than left with a silent unreachable pill.
+fn still_starting_notice(budget: Duration) -> DesktopErrorDto {
+    DesktopErrorDto::unavailable(
+        format!(
+            "The local daemon is still starting: it is running but had not finished loading after {} seconds.",
+            budget.as_secs()
+        ),
+        Some("Leave PAM running; the model panel reports the load when it finishes.".to_owned()),
+    )
+}
+
+/// The detached daemon launch. `--recover` is idempotent: it only clears a
+/// stale socket, and a live daemon still holds the ownership lock. A daemon
+/// that dies at startup must leave its reason somewhere, so stderr lands next
+/// to the daemon's own log file.
+fn daemon_start_command(
+    executable: &Path,
+    model: Option<&str>,
+    spawn_root: &Path,
+    grant: String,
+) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .args(["daemon", "--recover"])
+        .args(model.map(|key| format!("--model={key}")))
+        .env(pam_platform::LAUNCH_GRANT_ENV, grant)
+        .current_dir(spawn_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(daemon_stderr_capture());
+    #[cfg(unix)]
+    command.process_group(0);
+    command
 }
 
 fn gui_registration_command(executable: &Path, root: &Path) -> tokio::process::Command {
@@ -2955,7 +3216,18 @@ struct SurfaceBundle {
     access: AccessConfigState,
 }
 
-async fn load_surfaces(project_id: ProjectId) -> SurfaceBundle {
+async fn load_active_surfaces(active: &ActiveProject) -> SurfaceBundle {
+    load_surfaces(
+        active.project_id.clone(),
+        request_project_root(&active.catalog.root),
+    )
+    .await
+}
+
+async fn load_surfaces(
+    project_id: ProjectId,
+    project_root: Option<FlowProjectRoot>,
+) -> SurfaceBundle {
     let caller = match caller_id(CallerKind::Gui) {
         Ok(caller) => caller,
         Err(error) => return unavailable_bundle(error.to_string(), None, None),
@@ -2964,15 +3236,25 @@ async fn load_surfaces(project_id: ProjectId) -> SurfaceBundle {
         Ok(credential) => credential,
         Err(detail) => return gui_registration_required_bundle(detail),
     };
-    load_surfaces_with_credential(caller, credential, project_id).await
+    load_surfaces_with_credential(caller, credential, project_id, project_root).await
+}
+
+/// The project root the GUI sends alongside a project-scoped request, so the
+/// daemon can remember a human-readable location for this project ID and the
+/// activity feed can name it. Best-effort: a non-Unicode or non-canonical root
+/// is simply left off.
+fn request_project_root(root: &Path) -> Option<FlowProjectRoot> {
+    FlowProjectRoot::new(root.to_str()?).ok()
 }
 
 async fn load_surfaces_with_credential(
     caller: CallerId,
     credential: CallerCredential,
     project_id: ProjectId,
+    project_root: Option<FlowProjectRoot>,
 ) -> SurfaceBundle {
-    let (health, current, access) = load_project_surfaces(caller, credential, project_id).await;
+    let (health, current, access) =
+        load_project_surfaces(caller, credential, project_id, project_root).await;
     SurfaceBundle {
         health,
         current,
@@ -3535,11 +3817,44 @@ fn caller_dto(caller: &CallerSummary) -> CallerDto {
     }
 }
 
+/// A loading daemon cannot say so: it binds its socket, then blocks on
+/// hashing and mapping the artifact before it ever accepts a request. So an
+/// unreachable model surface plus a still-running child this GUI spawned
+/// means "loading", not "gone" — that live handle is the only honest signal
+/// available while the load runs (#34).
+fn mark_model_loading(status: ModelStatusDto, child_slot: &mut Option<Child>) -> ModelStatusDto {
+    match status {
+        ModelStatusDto::Ok {
+            loaded: None,
+            registered,
+            load_failure: None,
+            ..
+        } => ModelStatusDto::Ok {
+            loaded: None,
+            registered,
+            load_failure: None,
+            loading: daemon_child_running(child_slot),
+        },
+        other => other,
+    }
+}
+
+/// Whether the daemon child this GUI spawned is still running. `try_wait`
+/// collects it when it has exited, so a stale handle never reports live.
+fn daemon_child_running(child_slot: &mut Option<Child>) -> bool {
+    child_slot
+        .as_mut()
+        .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+}
+
 fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDto {
     match state {
         ObservatoryState::Available(result) => ModelStatusDto::Ok {
             loaded: result.loaded.as_ref().map(model_summary_dto),
             registered: result.registered.iter().map(model_summary_dto).collect(),
+            load_failure: result.load_failure.map(bounded_detail),
+            // A daemon that answered is past its load, whatever it reports.
+            loading: false,
         },
         ObservatoryState::Blocked {
             code,
@@ -3558,7 +3873,10 @@ fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDt
     }
 }
 
-fn model_preset_dto(preset: &model_presets::ModelPreset) -> ModelPresetDto {
+fn model_preset_dto(
+    preset: &model_presets::ModelPreset,
+    host_total_bytes: Option<u64>,
+) -> ModelPresetDto {
     ModelPresetDto {
         id: preset.id.to_owned(),
         label: preset.label.to_owned(),
@@ -3570,7 +3888,8 @@ fn model_preset_dto(preset: &model_presets::ModelPreset) -> ModelPresetDto {
         license_id: preset.license_id.to_owned(),
         license_url: preset.license_url.to_owned(),
         license_notice_text: preset.license_notice_text.to_owned(),
-        min_memory_bytes: preset.min_memory_bytes(),
+        calibrated: preset.calibrated(),
+        fits_host: host_total_bytes.is_none_or(|total| preset.fits_host(total)),
         params_label: preset.params_label.to_owned(),
         quant_label: preset.quant_label.to_owned(),
     }
@@ -3581,6 +3900,27 @@ fn model_summary_dto(summary: &ModelSummary) -> ModelSummaryDto {
         model_id: bounded_detail(summary.model_id().to_owned()),
         size_bytes: summary.size_bytes,
     }
+}
+
+/// Reads the durable registered-model catalog straight from the store, for
+/// when the daemon is not serving: nothing can be confirmed loaded without a
+/// live daemon read, but the registered models stay reachable.
+async fn registered_model_catalog() -> Option<Vec<ModelSummaryDto>> {
+    let state_path = user_data_dir().ok()?.join("state.sqlite3");
+    registered_model_catalog_in(state_path).await
+}
+
+async fn registered_model_catalog_in(state_path: PathBuf) -> Option<Vec<ModelSummaryDto>> {
+    let store = Store::open(state_path).ok()?;
+    let catalog = store.list_models().await.ok()?;
+    let shutdown = store.shutdown().await;
+    let summaries = catalog
+        .iter()
+        .map(|model| ModelSummary::new(model.key.id(), model.size_bytes))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    shutdown.ok()?;
+    Some(summaries.iter().map(model_summary_dto).collect())
 }
 
 fn model_infer_dto(state: ObservatoryState<ModelGenerationResult>) -> ModelInferDto {
@@ -3896,6 +4236,15 @@ fn settings_data_dir() -> DesktopResult<PathBuf> {
     })
 }
 
+/// The durable state path and the GUI caller identity the daemon-scope grant
+/// commands write as.
+fn daemon_access_identity() -> DesktopResult<(PathBuf, CallerId)> {
+    let state_path = settings_data_dir()?.join("state.sqlite3");
+    let caller = caller_id(CallerKind::Gui)
+        .map_err(|error| DesktopErrorDto::unavailable(error.to_string(), None))?;
+    Ok((state_path, caller))
+}
+
 fn settings_snapshot() -> DesktopResult<settings::AppSettingsSnapshot> {
     let data_dir = settings_data_dir()?;
     let home = settings::resolve_home()
@@ -4190,13 +4539,40 @@ fn bounded_utf8(mut value: String, maximum: usize) -> String {
     value
 }
 
-fn reap_daemon_child(state: &mut DesktopState) {
-    let exited = state
-        .daemon_child
-        .as_mut()
-        .is_some_and(|child| child.try_wait().ok().flatten().is_some());
-    if exited {
-        state.daemon_child = None;
+/// Collects the spawned daemon child after a stop request. The graceful
+/// shutdown gets a bounded grace period; whatever is still running after that
+/// is killed, and the child is always waited on — dropping the handle without
+/// a wait would leave a zombie once the process exits, and an untracked live
+/// daemon would block a later start on the ownership lock.
+fn reap_daemon_child(child_slot: &mut Option<Child>) {
+    let Some(mut child) = child_slot.take() else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + DAEMON_STOP_GRACE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(DAEMON_STOP_POLL);
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+}
+
+/// Replaces the tracked daemon child, always collecting the previous one: an
+/// already-exited child is reaped and a still-running one is killed first, so
+/// a replaced daemon never outlives its handle as a zombie.
+fn replace_daemon_child(child_slot: &mut Option<Child>, child: Child) {
+    if let Some(mut previous) = child_slot.replace(child) {
+        if !matches!(previous.try_wait(), Ok(Some(_))) {
+            let _ = previous.kill();
+        }
+        let _ = previous.wait();
     }
 }
 
@@ -4244,19 +4620,40 @@ pub(crate) fn model_status_dto_for_test(
 }
 
 #[cfg(test)]
+pub(crate) async fn registered_model_catalog_in_for_test(
+    state_path: PathBuf,
+) -> Option<Vec<ModelSummaryDto>> {
+    registered_model_catalog_in(state_path).await
+}
+
+#[cfg(test)]
 pub(crate) async fn wait_for_daemon_serving_for_test<H, HF, M, MF>(
     child: &mut Child,
     model: Option<&str>,
+    budget: Duration,
     health: H,
     model_loaded: M,
-) -> DesktopResult<()>
+) -> DesktopResult<DaemonStartup>
 where
     H: FnMut() -> HF,
     HF: Future<Output = HealthState>,
     M: FnMut() -> MF,
     MF: Future<Output = bool>,
 {
-    wait_for_daemon_serving(child, model, health, model_loaded).await
+    wait_for_daemon_serving(child, model, budget, health, model_loaded).await
+}
+
+#[cfg(test)]
+pub(crate) fn mark_model_loading_for_test(
+    status: ModelStatusDto,
+    child_slot: &mut Option<Child>,
+) -> ModelStatusDto {
+    mark_model_loading(status, child_slot)
+}
+
+#[cfg(test)]
+pub(crate) fn startup_budget_for_bytes_for_test(model_bytes: Option<u64>) -> Duration {
+    startup_budget_for_bytes(model_bytes)
 }
 
 #[cfg(test)]
@@ -4264,6 +4661,16 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn reap_daemon_child_for_test(child_slot: &mut Option<Child>) {
+    reap_daemon_child(child_slot);
+}
+
+#[cfg(test)]
+pub(crate) fn replace_daemon_child_for_test(child_slot: &mut Option<Child>, child: Child) {
+    replace_daemon_child(child_slot, child);
 }
 
 #[cfg(test)]
@@ -4461,6 +4868,11 @@ pub(crate) async fn reserve_for_test(
     fence: &CommandFence,
 ) -> DesktopResult<()> {
     core.begin(fence).await.map(drop)
+}
+
+#[cfg(test)]
+pub(crate) fn command_gate_for_test(core: &DesktopCore) -> Arc<Mutex<()>> {
+    Arc::clone(&core.command_gate)
 }
 
 #[cfg(test)]
