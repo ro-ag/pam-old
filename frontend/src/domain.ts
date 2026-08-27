@@ -569,6 +569,9 @@ export interface ModelImportStatusDto {
   stage: "hashing" | "registering" | null;
   hashedBytes: number;
   totalBytes: number;
+  /** Meaningful on "complete": whether the artifact is in PAM's calibrated
+   * set. Uncalibrated imports still register, but loading them is untested. */
+  calibrated: boolean;
   failure: ModelFailureDto | null;
 }
 

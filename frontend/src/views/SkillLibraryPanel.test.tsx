@@ -489,4 +489,48 @@ describe("SkillLibraryPanel", () => {
     expect(await screen.findByText(/Pick a project to manage targets/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
   });
+
+  it("keeps form fields across a same-project generation rotation while refreshing the library", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const manage = vi.spyOn(bridge, "manageSkillLibrary");
+    const { rerender } = render(<SkillLibraryPanel bridge={bridge} fence={fence} />);
+
+    const entry = await screen.findByLabelText("Library entry ID", { selector: 'input[name="install-entry-id"]' });
+    const localPath = screen.getByLabelText("Local source path");
+    await user.type(entry, "draft-entry");
+    await user.type(localPath, "/private/team/draft.md");
+
+    rerender(
+      <SkillLibraryPanel bridge={bridge} fence={{ ...fence, generation: "33333333-3333-4333-8333-333333333333" }} />,
+    );
+
+    // The generation rotation reloads the library in place…
+    await waitFor(() =>
+      expect(manage.mock.calls.filter(([, action]) => action.action === "load")).toHaveLength(2),
+    );
+    // …but user-entered form fields survive.
+    expect(screen.getByLabelText("Library entry ID", { selector: 'input[name="install-entry-id"]' })).toHaveValue("draft-entry");
+    expect(screen.getByLabelText("Local source path")).toHaveValue("/private/team/draft.md");
+  });
+
+  it("clears the forms when the project itself switches", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const { rerender } = render(<SkillLibraryPanel bridge={bridge} fence={fence} />);
+
+    const entry = await screen.findByLabelText("Library entry ID", { selector: 'input[name="install-entry-id"]' });
+    await user.type(entry, "draft-entry");
+
+    rerender(
+      <SkillLibraryPanel
+        bridge={bridge}
+        fence={{ ...fence, projectHandle: "project:two", generation: "33333333-3333-4333-8333-333333333333" }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Library entry ID", { selector: 'input[name="install-entry-id"]' })).toHaveValue(""),
+    );
+  });
 });

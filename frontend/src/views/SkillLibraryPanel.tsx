@@ -388,14 +388,24 @@ export function SkillLibraryPanel({ bridge, fence, projects, onSelectProject }: 
     }
   }, [bridge]);
 
+  const previousProjectHandle = useRef<string | null>(null);
   useEffect(() => {
-    setAdoptEntryId("");
-    setArtifactId("");
-    setInstallEntryId("");
-    setSourcePath("");
-    setGitUrl("");
-    setArtifactPath("");
-    void load(true);
+    // Only a project switch clears the forms; a same-project generation
+    // rotation (⌘R, daemon commands) refreshes the data in place so
+    // user-entered fields and the current selection survive.
+    const projectChanged = previousProjectHandle.current !== fence.projectHandle;
+    previousProjectHandle.current = fence.projectHandle;
+    if (projectChanged) {
+      setAdoptEntryId("");
+      setArtifactId("");
+      setInstallEntryId("");
+      setSourcePath("");
+      setGitUrl("");
+      setArtifactPath("");
+      void load(true);
+    } else {
+      void load();
+    }
     void loadObservedArtifacts();
     return () => {
       requestSequence.current += 1;

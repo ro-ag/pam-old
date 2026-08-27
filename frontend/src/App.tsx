@@ -696,9 +696,9 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
             >
               {state.activeView === "control-center" && (
                 <ControlCenterView
-                  key={`control-center:${refreshTick}`}
                   bridge={bridge}
                   daemon={daemon}
+                  refreshTick={refreshTick}
                   catalog={state.catalog.projects}
                   modelStatus={modelStatus}
                   modelBusy={busy}
@@ -715,7 +715,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                 : projectPlaceholder("Access", "Narrow capabilities, visible to the developer."))}
               {state.activeView === "skills" && (
                 <SkillsView
-                  key={state.activeFence ? `${state.activeFence.projectHandle}:${state.activeFence.generation}` : `skills:daemon:${refreshTick}`}
+                  key={state.activeFence ? `skills:${state.activeFence.projectHandle}` : "skills:daemon"}
                   bridge={bridge}
                   fence={state.activeFence}
                   projects={state.catalog.projects}
@@ -725,7 +725,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               )}
               {state.activeView === "flows" && (
                 <FlowsView
-                  key={state.activeFence ? `${state.activeFence.projectHandle}:${state.activeFence.generation}` : `flows:daemon:${refreshTick}`}
+                  key={state.activeFence ? `flows:${state.activeFence.projectHandle}` : "flows:daemon"}
                   bridge={bridge}
                   fence={state.activeFence}
                   contextBar={projectContextBar}

@@ -125,10 +125,38 @@ export function FlowsView({ bridge, fence: fenceProp, contextBar, onError, onToa
     }
   }, [bridge, isCurrentRequest]);
 
+  // A generation rotation (⌘R, activate, daemon lifecycle) re-fetches the
+  // catalog without touching the editor: draft, definition, undo history,
+  // and review state all survive. Runs on its own sequence so an in-flight
+  // open/validate/save is not invalidated by a background refresh.
+  const reloadSequence = useRef(0);
+  const reloadWorkspace = useCallback(async () => {
+    const sequence = ++reloadSequence.current;
+    const requestFence = withOperation(fenceRef.current);
+    try {
+      const response = await bridge.loadFlowWorkspace(requestFence);
+      if (sequence !== reloadSequence.current || !sameAuthority(requestFence, fenceRef.current)) return;
+      if (!sameFence(requestFence, response.fence)) return;
+      setWorkspace(response.data);
+    } catch {
+      // A background refresh failure keeps the current workspace on screen;
+      // explicit actions surface their own errors.
+    }
+  }, [bridge]);
+
+  const previousProjectHandle = useRef<string | null>(null);
   useEffect(() => {
-    void load();
-    return () => { requestSequence.current += 1; };
-  }, [load, fence.projectHandle, fence.generation]);
+    // Only a project switch resets the editor; a same-project generation
+    // rotation is a soft reload.
+    const projectChanged = previousProjectHandle.current !== fence.projectHandle;
+    previousProjectHandle.current = fence.projectHandle;
+    if (projectChanged) void load();
+    else void reloadWorkspace();
+    return () => {
+      requestSequence.current += 1;
+      reloadSequence.current += 1;
+    };
+  }, [load, reloadWorkspace, fence.projectHandle, fence.generation]);
 
   const open = async (flowHandle: string) => {
     const sequence = ++requestSequence.current;
