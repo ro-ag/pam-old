@@ -178,13 +178,14 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                 </button>
               </article>
             </div>
-            {revealError && <p className="connector-note" role="alert">{revealError}</p>}
+            {revealError && <p className="panel-body connector-note" role="alert">{revealError}</p>}
           </section>
 
           <section className="panel" aria-labelledby="logs-heading">
             <div className="panel-title">
               <div><span className="eyebrow">Diagnostics</span><h2 id="logs-heading">Logs</h2></div>
             </div>
+            <div className="panel-body">
             <p className="connector-note">
               {formatBytes(settings.logsSizeBytes)} on disk today. PAM also keeps a live, bounded window
               of recent lines in memory — see it in{" "}
@@ -214,6 +215,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                 </button>
               </span>
             )}
+            </div>
           </section>
         </>
       )}
