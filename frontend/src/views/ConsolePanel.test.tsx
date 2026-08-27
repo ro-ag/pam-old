@@ -1,30 +1,19 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { withDaemonOperation } from "../bridge";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
-import { selectControlCenter, selectDaemonView } from "../selectors";
-import { ConsoleView, filterEntries, formatConsoleLine } from "./ConsoleView";
+import { ConsolePanel, filterEntries, formatConsoleLine } from "./ConsolePanel";
 
-async function consoleProps(scenario: FixtureScenario = "solved") {
-  const bridge = fixtureBridge(scenario);
-  const { snapshot, catalog } = await bridge.bootstrap();
-  return {
-    bridge,
-    daemon: snapshot
-      ? selectControlCenter(snapshot.data, catalog, true).daemon
-      : selectDaemonView(await bridge.daemonHealth(withDaemonOperation())),
-    pending: false,
-    onStartDaemon: vi.fn(),
-  };
+function consoleProps(scenario: FixtureScenario = "solved") {
+  return { bridge: fixtureBridge(scenario) };
 }
 
-describe("ConsoleView", () => {
+describe("ConsolePanel", () => {
   it("renders the daemon diagnostics oldest first", async () => {
-    const props = await consoleProps();
-    render(<ConsoleView {...props} />);
+    const props = consoleProps();
+    render(<ConsolePanel {...props} />);
 
-    expect(screen.getByRole("heading", { name: "Console" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Debug console" })).toBeInTheDocument();
     expect(await screen.findByText(/PAM daemon ready/)).toBeInTheDocument();
     expect(screen.getByText(/queued operation failed/)).toBeInTheDocument();
     expect(screen.getAllByText("info", { selector: ".state-pill" })).toHaveLength(2);
@@ -36,8 +25,8 @@ describe("ConsoleView", () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    const props = await consoleProps();
-    render(<ConsoleView {...props} />);
+    const props = consoleProps();
+    render(<ConsolePanel {...props} />);
     await screen.findByText(/PAM daemon ready/);
 
     await user.click(screen.getByRole("button", { name: "error" }));
@@ -53,9 +42,9 @@ describe("ConsoleView", () => {
 
   it("always loads the log under the exact daemon authority and refreshes on demand", async () => {
     const user = userEvent.setup();
-    const props = await consoleProps();
+    const props = consoleProps();
     const spy = vi.spyOn(props.bridge, "daemonLogs");
-    render(<ConsoleView {...props} />);
+    render(<ConsolePanel {...props} />);
     await screen.findByText(/PAM daemon ready/);
 
     expect(spy.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
@@ -63,19 +52,9 @@ describe("ConsoleView", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
 
-  it("offers a start affordance while PAM is paused", async () => {
-    const user = userEvent.setup();
-    const props = await consoleProps("offline");
-    render(<ConsoleView {...props} />);
-
-    expect(screen.getByRole("heading", { name: "PAM is paused" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Start PAM/ }));
-    expect(props.onStartDaemon).toHaveBeenCalledTimes(1);
-  });
-
   it("explains an empty log without alarm", async () => {
-    const props = await consoleProps("empty");
-    render(<ConsoleView {...props} />);
+    const props = consoleProps("empty");
+    render(<ConsolePanel {...props} />);
 
     expect(await screen.findByText(/No diagnostics yet/)).toBeInTheDocument();
   });

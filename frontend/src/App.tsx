@@ -41,10 +41,9 @@ import {
   RecoveryScreen,
 } from "./components/Surfaces";
 import { ActivityView } from "./views/ActivityView";
-import { ConnectionsView } from "./views/ConnectionsView";
-import { ConsoleView } from "./views/ConsoleView";
-import { ControlCenterView } from "./views/ControlCenterView";
 import { FlowsView } from "./views/FlowsView";
+import { ModelsView } from "./views/ModelsView";
+import { OverviewView } from "./views/OverviewView";
 import { AccessView } from "./views/ProjectViews";
 import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
@@ -120,7 +119,7 @@ function sameAuthority(left: CommandFence, right: CommandFence): boolean {
   return left.projectHandle === right.projectHandle && left.generation === right.generation;
 }
 
-export function App({ bridge, initialView = "control-center", initialTheme, initialThemeMode }: AppProps) {
+export function App({ bridge, initialView = "overview", initialTheme, initialThemeMode }: AppProps) {
   const [initialLayout] = useState(readInitialLayout);
   const [theme, setTheme] = useState<PamTheme>(() => initialTheme ?? readPersistedPamTheme(initialLayout.storage));
   const [themeMode, setThemeMode] = useState<PamThemeMode>(() => initialThemeMode ?? readPersistedPamThemeMode(initialLayout.storage));
@@ -410,22 +409,20 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
         }
         if (activeOverlay(effectiveOverlays)) return;
         const view = event.key === "1"
-          ? "control-center"
+          ? "overview"
           : event.key === "2"
-            ? "access"
+            ? "models"
             : event.key === "3"
-              ? "skills"
+              ? "flows"
               : event.key === "4"
-                ? "flows"
+                ? "skills"
                 : event.key === "5"
-                  ? "activity"
+                  ? "access"
                   : event.key === "6"
-                    ? "console"
+                    ? "activity"
                     : event.key === "7"
-                      ? "callers"
-                      : event.key === "8"
-                        ? "settings"
-                        : null;
+                      ? "settings"
+                      : null;
         if (view) { event.preventDefault(); dispatch({ type: "navigate", view }); }
         if (event.key.toLowerCase() === "r") { event.preventDefault(); refresh(); }
       }
@@ -585,14 +582,13 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     openOverlay({ id: "command", kind: "command", authority: overlayAuthority });
   };
   const commands: CommandPaletteCommand[] = [
-    { id: "view-control-center", label: "Open Control Center", description: "Show daemon health, activity, the local model, and requests per caller.", shortcut: "⌘1" },
-    { id: "view-access", label: "Open Access", description: "Show the capabilities PAM is authorized to use.", shortcut: "⌘2" },
-    { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘3" },
-    { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘4" },
-    { id: "view-activity", label: "Open Activity", description: "Show daemon health and the recent activity feed.", shortcut: "⌘5" },
-    { id: "view-console", label: "Open Console", description: "Show the daemon's diagnostic log for debugging.", shortcut: "⌘6" },
-    { id: "view-callers", label: "Open Connections", description: "Show the callers and connectors linked to the daemon.", shortcut: "⌘7" },
-    { id: "view-settings", label: "Open Settings", description: "Show where PAM keeps things, and clear its logs.", shortcut: "⌘8" },
+    { id: "view-overview", label: "Open Overview", description: "Show daemon health, the activity heatmap, and per-project usage.", shortcut: "⌘1" },
+    { id: "view-models", label: "Open Models", description: "Show the local model, its load progress, and how to add another.", shortcut: "⌘2" },
+    { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘3" },
+    { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘4" },
+    { id: "view-access", label: "Open Access", description: "Show the capabilities PAM uses, its callers, and its connectors.", shortcut: "⌘5" },
+    { id: "view-activity", label: "Open Activity", description: "Show the recent activity feed and the daemon's debug console.", shortcut: "⌘6" },
+    { id: "view-settings", label: "Open Settings", description: "Show where PAM keeps things, and clear its logs.", shortcut: "⌘7" },
     ...(projectActive
       ? [{ id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." }]
       : []),
@@ -604,23 +600,21 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
       : { id: "refresh", label: "Refresh daemon", description: "Probe daemon health and reload the global views.", shortcut: "⌘R" },
   ];
   const runCommand = (id: string) => {
-    const view = id === "view-control-center"
-      ? "control-center"
-      : id === "view-access"
-        ? "access"
-        : id === "view-skills"
-          ? "skills"
-          : id === "view-flows"
-            ? "flows"
-            : id === "view-activity"
-              ? "activity"
-              : id === "view-console"
-                ? "console"
-                : id === "view-callers"
-                  ? "callers"
-                  : id === "view-settings"
-                    ? "settings"
-                    : null;
+    const view = id === "view-overview"
+      ? "overview"
+      : id === "view-models"
+        ? "models"
+        : id === "view-flows"
+          ? "flows"
+          : id === "view-skills"
+            ? "skills"
+            : id === "view-access"
+              ? "access"
+              : id === "view-activity"
+                ? "activity"
+                : id === "view-settings"
+                  ? "settings"
+                  : null;
     if (view) {
       dispatch({ type: "navigate", view });
       closeActiveOverlay();
@@ -673,26 +667,36 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.24, ease: [0.33, 1, 0.68, 1] }}
             >
-              {state.activeView === "control-center" && (
-                <ControlCenterView
+              {state.activeView === "overview" && (
+                <OverviewView
                   bridge={bridge}
                   daemon={daemon}
                   refreshTick={refreshTick}
                   catalog={state.catalog.projects}
                   modelStatus={modelStatus}
+                  onOpenModels={() => dispatch({ type: "navigate", view: "models" })}
+                />
+              )}
+              {state.activeView === "models" && (
+                <ModelsView
+                  bridge={bridge}
+                  daemon={daemon}
+                  refreshTick={refreshTick}
+                  modelStatus={modelStatus}
                   modelBusy={busy}
                   onOpenModelChat={openModelChat}
                   onStartWithModel={startWithModel}
                   onModelImported={() => { showToast("Model registered"); reloadModelStatus(); }}
-                  registrationNeeded={projectData?.current.recoveryAction === "register-caller"}
-                  registrationBusy={busy}
-                  onRegisterCaller={registerGuiCaller}
                 />
               )}
               {state.activeView === "access" && (
                 <AccessView
                   key={`access:${refreshTick}`}
                   bridge={bridge}
+                  daemon={daemon}
+                  registrationNeeded={projectData?.current.recoveryAction === "register-caller"}
+                  registrationBusy={busy}
+                  onRegisterCaller={registerGuiCaller}
                 />
               )}
               {state.activeView === "skills" && (
@@ -718,35 +722,20 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
                   projects={state.catalog.projects}
                   bridge={bridge}
                   pending={busy}
-                  modelStatus={modelStatus}
                   evidence={projectData?.current.latestOutcome?.brief ? {
                     projectName: projectData.project.name,
                     handles: projectData.current.latestOutcome.brief.evidenceHandles,
                     truncated: projectData.current.latestOutcome.brief.evidenceTruncated,
                   } : null}
                   onEvidence={(handle) => void loadEvidence(handle)}
-                  onReloadModel={reloadModelStatus}
-                  onOpenModelChat={openModelChat}
                   onStartDaemon={toggleDaemon}
                 />
-              )}
-              {state.activeView === "console" && (
-                <ConsoleView
-                  key={`console:${refreshTick}`}
-                  daemon={daemon}
-                  bridge={bridge}
-                  pending={busy}
-                  onStartDaemon={toggleDaemon}
-                />
-              )}
-              {state.activeView === "callers" && (
-                <ConnectionsView key={`connections:${refreshTick}`} bridge={bridge} />
               )}
               {state.activeView === "settings" && (
                 <SettingsView
                   key={`settings:${refreshTick}`}
                   bridge={bridge}
-                  onOpenConsole={() => dispatch({ type: "navigate", view: "console" })}
+                  onOpenConsole={() => dispatch({ type: "navigate", view: "activity" })}
                 />
               )}
             </motion.div>

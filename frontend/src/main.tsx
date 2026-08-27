@@ -10,9 +10,9 @@ import "./styles.css";
 const explicitFixtureMode = import.meta.env.DEV && import.meta.env.MODE === "fixture";
 const query = explicitFixtureMode ? new URLSearchParams(window.location.search) : null;
 const bridge = explicitFixtureMode ? createFixtureBridge(fixtureScenario(query?.get("scenario"))) : createTauriBridge();
-const viewIds: readonly ViewId[] = ["control-center", "access", "skills", "flows", "activity", "console", "callers", "settings"];
+const viewIds: readonly ViewId[] = ["overview", "models", "flows", "skills", "access", "activity", "settings"];
 const requestedView = query?.get("view");
-const initialView: ViewId = viewIds.find((view) => view === requestedView) ?? "control-center";
+const initialView: ViewId = viewIds.find((view) => view === requestedView) ?? "overview";
 const themeStorage = (() => {
   try { return window.localStorage; } catch { return null; }
 })();

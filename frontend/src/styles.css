@@ -1131,6 +1131,8 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
   box-shadow: none;
 }
 .project-stat:last-child { border-right: 0; }
+/* The model tile is the one stat that navigates; it keeps the strip's shape. */
+button.project-stat { cursor: pointer; text-align: left; }
 .project-stat:hover { transform: none; background: var(--pam-surface); box-shadow: none; }
 .project-stat-icon { display: grid; width: calc(36px * var(--density)); height: calc(36px * var(--density)); flex: 0 0 calc(36px * var(--density)); place-items: center; border-radius: 10px; color: var(--pam-ice); background: var(--pam-ice-soft); }
 .project-stat-icon--attention { color: var(--pam-copper); background: color-mix(in srgb, var(--pam-copper) 14%, transparent); }

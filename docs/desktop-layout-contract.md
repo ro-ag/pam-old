@@ -8,13 +8,13 @@ Ventisquero provides Mist light and Bedrock dark, with Ice actions and
 restrained copper events. Viña del Mar provides Dawn light and Night dark,
 with violet actions and restrained coral events. Inter carries interface text;
 Ventisquero uses Archivo for display and IBM Plex Mono for data, while Viña
-uses Space Grotesk for display and JetBrains Mono for data. All eight views
+uses Space Grotesk for display and JetBrains Mono for data. All seven views
 share one shell and one spatial grammar in all four appearances. A visible
 surface must never combine tokens from both families.
 
 ## Authorities
 
-- View and content authority: `frontend/src/App.tsx` (the eight-view switch),
+- View and content authority: `frontend/src/App.tsx` (the seven-view switch),
   `frontend/src/selectors.ts`, and the typed daemon responses.
 - Theme authority: `frontend/src/styles.css` owns both families' semantic
   token maps (the `modernization` layer), `frontend/src/theme.ts` owns family,
@@ -29,29 +29,40 @@ shell geometry below. Typed daemon responses own every displayed fact.
 
 ## Views and navigation
 
-The app has exactly eight views, switched in `App.tsx`:
+The app has exactly six primary views plus Settings, switched in `App.tsx`.
+Every one of them is global: none renders a project selector, project name,
+breadcrumb, or project-shaped empty state. The only surface that shows project
+identity is the activity/caller log, and it does so as a per-row label.
 
-1. **Control Center** (`control-center`) — daemon health, the 26-week activity
-   heatmap, the local model runtime, requests per caller, and per-project
-   usage. Global-first: it renders with zero projects.
-2. **Access** (`access`) — the active project's authorized capabilities.
-3. **Skills** (`skills`) — inventory, canonical library, and audit as tabs in
-   one panel.
-4. **Flows** (`flows`) — the flow catalog beside a source/visual editor with a
+1. **Overview** (`overview`) — daemon health, the 26-week activity heatmap,
+   per-project usage, and one read-only local-model tile (identity plus a
+   LOADED / ON DECK / UNREACHABLE pill) that navigates to Models. Global-first:
+   it renders with zero projects.
+2. **Models** (`models`) — the single home for the local model: load state and
+   identity, the phase-aware load meter (elapsed time while the artifact is
+   verified, a high-water bar while weights map in), Verify and Chat, the
+   registered catalog with start/restart rows, and — reachable at all times,
+   whatever is registered or loaded — the curated download picker and the
+   manual GGUF import. Presets this Mac cannot run stay visible and disabled
+   with the reason.
+3. **Flows** (`flows`) — the flow catalog beside a source/visual editor with a
    review inspector.
-5. **Activity** (`activity`) — daemon health summary, the bounded recent
-   activity feed, and the latest outcome's evidence handles.
-6. **Console** (`console`) — the daemon's diagnostic log.
-7. **Connections** (`callers`) — registered callers and dormant connectors as
-   tabs in one panel.
-8. **Settings** (`settings`) — storage locations and log clearing.
+4. **Skills** (`skills`) — inventory, canonical library, and audit as tabs in
+   one panel.
+5. **Access** (`access`) — daemon-scope capability grants, the observed
+   boundary, the registered callers and the connectors (two-up on wide
+   viewports, tabbed otherwise), and requests per caller with the GUI-caller
+   registration recovery.
+6. **Activity** (`activity`) — daemon health summary, the bounded recent
+   activity feed, the latest outcome's evidence handles, and the daemon's
+   debug console.
 
-The sidebar's primary nav lists the first seven in order, with a separator
-before Activity; Settings is a gear item in the sidebar footer. Keyboard:
-⌘1–⌘8 select views in the order above, ⌘K opens the command palette, ⌘R
-refreshes, and Escape closes the active overlay. The project-shaped views
-(Access, Skills, Flows) render the project context bar in their header; with
-no active project they render a project-picker placeholder instead.
+**Settings** (`settings`) — storage locations and log clearing.
+
+The sidebar's primary nav lists the six in order, with a separator before
+Activity; Settings is a gear item in the sidebar footer. Keyboard: ⌘1–⌘7
+select views in the order above (⌘7 is Settings), ⌘K opens the command
+palette, ⌘R refreshes, and Escape closes the active overlay.
 
 ## Shell geometry and density
 
@@ -82,7 +93,9 @@ scrolling and horizontal shell scrolling are failures.
 The canvas body is a vertical flex column: content blocks size to content and
 the last block stretches so tall windows keep no dead tail. Content blocks
 are `.panel` surfaces with a 12px radius, a 1px `--pam-line` boundary, and no
-elevation; hierarchy comes from grouping and whitespace.
+elevation; hierarchy comes from grouping and whitespace. `.panel` carries no
+padding of its own — `.panel-title` and `.access-list article` supply the 20px
+gutter, and loose content inside a panel is wrapped in `.panel-body`.
 
 Comfortable spacing tokens are `4 / 8 / 12 / 16 / 20 / 24 / 32px`. Compact
 density is a real alternate scale, not another name for comfortable:
@@ -95,12 +108,12 @@ family and variant and persists the same way.
 
 ## Sidebar, toolbar, and canvas anatomy
 
-The sidebar order is PAM identity (mark, name, and app version), active
-project switcher, primary navigation, then the footer with daemon
-control/restart, utility buttons, and the Settings gear. Active state,
-labels, counts, and full project names must not depend on hover. Long names
-truncate in the shell but expose their full accessible name. The daemon
-control reflects the probed daemon lifecycle and can pause/resume PAM.
+The sidebar order is PAM identity (mark, name, and app version), primary
+navigation, then the footer with daemon control/restart, utility buttons, and
+the Settings gear. There is no project switcher. Active state, labels, and
+counts must not depend on hover. Long labels truncate in the shell but expose
+their full accessible name. The daemon control reflects the probed daemon
+lifecycle and can pause/resume PAM.
 
 The toolbar is the canvas's 52px top row; its icon controls are 34px square.
 The left group holds the sidebar toggle and breadcrumb; the right group holds
@@ -111,11 +124,12 @@ dialogs share the selected tokens. On macOS the window uses an overlay
 titlebar with a hidden native title, explicit drag regions, and a
 traffic-light-safe sidebar inset.
 
-Each view renders inside `.canvas`, the scrollable canvas body. Control
-Center opens with a `.project-overview` stat strip (one bordered strip with
-internal dividers, auto-fit `minmax(176px, 1fr)` tiles) followed by the
-full-width heatmap panel; the heatmap fills the panel width at desktop sizes
-and scrolls horizontally only when the panel is narrower than its content.
+Each view renders inside `.canvas`, the scrollable canvas body. Overview
+opens with a `.project-overview` stat strip (one bordered strip with internal
+dividers, auto-fit `minmax(176px, 1fr)` tiles, the last of which is the
+navigating model tile) followed by the full-width heatmap panel; the heatmap
+fills the panel width at desktop sizes and scrolls horizontally only when the
+panel is narrower than its content.
 The Flows workspace is a two-column grid — a catalog column
 `clamp(190px, 29%, 320px)` and the editor — and the visual editor splits into
 canvas plus a step inspector of `clamp(230px, 34%, 420px)`; percentage tracks
@@ -145,8 +159,9 @@ scrim uses the theme's `--pam-overlay` token with a backdrop blur.
 
 The layout assumes a 2K-class desktop window; nothing in the shipping UI
 requires a narrow viewport. At 1360px and above, wide viewports use a
-list+detail grammar instead of stacking: Skills and Connections place their
-paired panels in a two-column `wide-split` grid
+list+detail grammar instead of stacking: Skills, and Access for its
+callers/connectors pair, place their paired panels in a two-column
+`wide-split` grid
 (`minmax(360px, 0.9fr) | minmax(420px, 1.1fr)`), and the Access and Activity
 lists flow their rows two-up (`repeat(2, minmax(380px, 1fr))`), with their
 empty and status rows spanning both columns (`grid-column: 1 / -1`). This

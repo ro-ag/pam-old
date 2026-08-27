@@ -1,6 +1,7 @@
 import {
   ArrowClockwise,
   BookOpen,
+  Brain,
   Check,
   Circle,
   Gear,
@@ -8,14 +9,12 @@ import {
   LockSimple,
   MagnifyingGlass,
   MoonStars,
-  PlugsConnected,
   Power,
   Pulse,
   Queue,
   SidebarSimple,
   SquaresFour,
   SunHorizon,
-  Terminal,
 } from "@phosphor-icons/react";
 import { DropdownMenu, Tooltip, VisuallyHidden } from "radix-ui";
 import {
@@ -47,13 +46,12 @@ export function appVersionLabel(value: unknown): string {
 }
 
 export const navItems: ReadonlyArray<{ id: ViewId; label: string; icon: typeof Pulse }> = [
-  { id: "control-center", label: "Control Center", icon: SquaresFour },
-  { id: "access", label: "Access", icon: LockSimple },
-  { id: "skills", label: "Skills", icon: BookOpen },
+  { id: "overview", label: "Overview", icon: SquaresFour },
+  { id: "models", label: "Models", icon: Brain },
   { id: "flows", label: "Flows", icon: GitBranch },
+  { id: "skills", label: "Skills", icon: BookOpen },
+  { id: "access", label: "Access", icon: LockSimple },
   { id: "activity", label: "Activity", icon: Pulse },
-  { id: "console", label: "Console", icon: Terminal },
-  { id: "callers", label: "Connections", icon: PlugsConnected },
 ];
 
 export function StatusDot({ state = "coral" }: { state?: "coral" | "aqua" | "muted" }) {
@@ -151,7 +149,7 @@ export function Sidebar({
             >
               <Icon size={21} weight={activeView === id ? "bold" : "regular"} aria-hidden="true" />
               {!collapsed && <span>{label}</span>}
-              {!collapsed && id === "control-center" && queueCount > 0 && (
+              {!collapsed && id === "overview" && queueCount > 0 && (
                 <span className="nav-count" aria-label={`${queueCount} queued`}>
                   {queueCount}
                 </span>
