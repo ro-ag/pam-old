@@ -36,6 +36,25 @@ export function SkillInventoryPanel({ bridge, fence, refreshTick = 0 }: SkillInv
   );
 }
 
+// Global scopes (user home, plugins, system, PAM-managed) always take
+// priority over project scopes: a project artifact whose name matches a
+// global one is shadowed and never wins the agent's attention.
+const GLOBAL_SCOPES = new Set(["managed", "system", "user", "plugin"]);
+
+function renderArtifact(artifact: SkillInventoryDataDto["artifacts"][number], shadowed: boolean) {
+  return (
+    <article key={artifact.id}>
+      <span className="access-icon"><PuzzlePiece size={20} /></span>
+      <div>
+        <strong>{artifact.name}</strong>
+        <p>{artifact.logicalPath}</p>
+        <small>{label(artifact.kind)} · {label(artifact.scope)} · {label(artifact.loadSemantics)}{shadowed ? " · shadowed by global" : ""}</small>
+      </div>
+      <span className="state-pill">{label(artifact.origin)}</span>
+    </article>
+  );
+}
+
 function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventoryPanelProps) {
   const inventoryQuery = useQuery({
     queryKey: ["skill-inventory", fence.projectHandle, fence.generation, refreshTick],
@@ -51,6 +70,9 @@ function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventor
   const inventory = inventoryQuery.data ?? null;
   const error = inventoryQuery.error ? presentError(inventoryQuery.error) : null;
   const loading = inventoryQuery.isPending;
+  const globalArtifacts = inventory?.artifacts.filter((artifact) => GLOBAL_SCOPES.has(artifact.scope)) ?? [];
+  const projectArtifacts = inventory?.artifacts.filter((artifact) => !GLOBAL_SCOPES.has(artifact.scope)) ?? [];
+  const globalNames = new Set(globalArtifacts.map((artifact) => artifact.name));
 
   return (
     <section className="panel skill-inventory-panel" aria-labelledby="skill-inventory-heading">
@@ -76,17 +98,18 @@ function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventor
             <p className="panel-empty">No supported agent artifacts were found in this scope.</p>
           ) : (
             <div className="skill-inventory-list">
-              {inventory.artifacts.map((artifact) => (
-                <article key={artifact.id}>
-                  <span className="access-icon"><PuzzlePiece size={20} /></span>
-                  <div>
-                    <strong>{artifact.name}</strong>
-                    <p>{artifact.logicalPath}</p>
-                    <small>{label(artifact.kind)} · {label(artifact.scope)} · {label(artifact.loadSemantics)}</small>
-                  </div>
-                  <span className="state-pill">{label(artifact.origin)}</span>
-                </article>
-              ))}
+              {globalArtifacts.length > 0 && (
+                <>
+                  <p className="skill-inventory-group">Global — wins over same-name project skills</p>
+                  {globalArtifacts.map((artifact) => renderArtifact(artifact, false))}
+                </>
+              )}
+              {projectArtifacts.length > 0 && (
+                <>
+                  <p className="skill-inventory-group">This project</p>
+                  {projectArtifacts.map((artifact) => renderArtifact(artifact, globalNames.has(artifact.name)))}
+                </>
+              )}
             </div>
           )}
           {inventory.truncated && <p className="skill-inventory-truncated">Showing {inventory.artifacts.length} of {inventory.total} artifacts. The native response is bounded.</p>}

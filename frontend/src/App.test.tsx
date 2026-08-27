@@ -273,8 +273,9 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("button", { name: "payments-api" }));
     await user.click(await screen.findByRole("menuitemradio", { name: /ledger-web/ }));
 
-    // Activation lands on the Control Center, which carries no project claims.
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching ledger-web");
+    // Activation stays on the Skills view; the project-keyed remount drops
+    // the prior project's audit.
+    expect(await screen.findByText("Now watching ledger-web")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(priorAuditSummary)).not.toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Skills" }));
@@ -462,7 +463,7 @@ describe("daemon observatory", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("status")).toHaveTextContent("Now watching ledger-web");
 
-    // Activation lands on the Control Center; the switcher returns in Access.
+    // Activation stays on the Access view, where the switcher now shows ledger-web.
     await user.click(screen.getByRole("button", { name: "Access" }));
     const ledgerSwitcher = await screen.findByRole("button", { name: "ledger-web" });
     ledgerSwitcher.focus();
@@ -614,8 +615,8 @@ describe("daemon observatory", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /^docs/ }));
     await act(async () => { docsGate.resolve(); });
     expect(await screen.findByRole("status")).toHaveTextContent("Now watching docs");
-    // The docs activation wins and navigates home to the Control Center.
-    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
+    // The docs activation wins and the user stays on the Access view.
+    expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
 
     await act(async () => { ledgerGate.resolve(); });
     expect(screen.queryByText("Now watching ledger-web")).not.toBeInTheDocument();
@@ -757,7 +758,7 @@ describe("daemon observatory", () => {
 
     await user.click(screen.getByRole("button", { name: "payments-api" }));
     await user.click(screen.getByRole("menuitemradio", { name: /ledger-web/ }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching ledger-web");
+    expect(await screen.findByText("Now watching ledger-web")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Flows" }));
     await screen.findByRole("region", { name: "Flow workspace" });
     expect(await screen.findByRole("heading", { name: "Select a definition" })).toBeInTheDocument();
@@ -1106,8 +1107,9 @@ describe("global-first workspace", () => {
     expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /payments-api/ }));
-    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching payments-api");
+    // Activation keeps the user on Skills; the view re-scopes to the project.
+    expect(await screen.findByRole("heading", { name: "Skills" })).toBeInTheDocument();
+    expect(await screen.findByText("Now watching payments-api")).toBeInTheDocument();
   });
 
   it("offers an inline picker without an active project and activates the selection", async () => {
@@ -1120,8 +1122,9 @@ describe("global-first workspace", () => {
     expect(await screen.findByRole("heading", { name: "Pick a project to bring its queue into view." })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /payments-api/ }));
 
-    expect(await screen.findByRole("heading", { name: "Control center" })).toBeInTheDocument();
-    expect(await screen.findByRole("status")).toHaveTextContent("Now watching payments-api");
+    // Activation keeps the user on the Access view, now scoped to the pick.
+    expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
+    expect(await screen.findByText("Now watching payments-api")).toBeInTheDocument();
   });
 
   it("runs the daemon lifecycle from the global pill and re-probes health", async () => {

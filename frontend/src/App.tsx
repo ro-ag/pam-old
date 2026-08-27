@@ -443,8 +443,10 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     if (project.handle === state.data?.project.handle) return;
     const operationId = nextOperationId();
     const pendingFence = { projectHandle: project.handle, generation: "", operationId };
-    void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`)
-      .then((activated) => { if (activated) dispatch({ type: "navigate", view: "control-center" }); });
+    // Stay on the current view: views re-scope to the new project through
+    // project-keyed remounts and the snapshot refresh, so switching projects
+    // never yanks the user away from what they were doing.
+    void executeDataCommand(pendingFence, () => bridge.activateProject(project.handle, operationId), `Now watching ${project.name}`);
     if (mobileSidebarOpen) toggleSidebar();
   };
   // Daemon lifecycle always runs under the daemon authority. The response is

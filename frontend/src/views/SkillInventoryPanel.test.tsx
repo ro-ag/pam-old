@@ -17,13 +17,13 @@ const secondFence: CommandFence = {
   operationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
 };
 
-function artifact(name: string, id: string) {
+function artifact(name: string, id: string, scope = "project") {
   return {
     id: `artifact:sha256:${id.repeat(64)}`,
     name,
     logicalPath: `.claude/skills/${name}/SKILL.md`,
     kind: "skill",
-    scope: "project",
+    scope,
     origin: "claude_code",
     loadSemantics: "model_selected",
     contentHash: `sha256:${id.repeat(64)}`,
@@ -81,6 +81,30 @@ describe("SkillInventoryPanel", () => {
 
     expect(await screen.findByText("No supported agent artifacts were found in this scope.")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("No inventory drift detected");
+  });
+
+  it("groups global artifacts ahead of project ones and shadows same-name project skills", async () => {
+    const bridge = fixtureBridge();
+    bridge.loadSkillInventory = vi.fn(async (fence) => ({
+      fence,
+      data: inventory({
+        artifacts: [
+          artifact("project-only", "b"),
+          artifact("review", "c", "user"),
+          artifact("review", "d"),
+        ],
+        total: 3,
+      }),
+    }));
+    render(<SkillInventoryPanel bridge={bridge} fence={firstFence} />);
+
+    const globalHeading = await screen.findByText("Global — wins over same-name project skills");
+    const projectHeading = screen.getByText("This project");
+    expect(globalHeading.compareDocumentPosition(projectHeading)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    const [globalReview, projectReview] = screen.getAllByText("review");
+    expect(globalReview.compareDocumentPosition(projectReview)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByText(/shadowed by global/)).toBeInTheDocument();
   });
 
   it("keeps scan failure in the panel and retries", async () => {
