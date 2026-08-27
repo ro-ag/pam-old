@@ -962,6 +962,27 @@ pub struct ModelDownloadStatusDto {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupPhaseDto {
+    Verifying,
+    Loading,
+}
+
+/// The live model load of a daemon start in flight. `model_id` and `phase`
+/// are `None` when no start is loading a registered model, which is what an
+/// idle meter renders as. `loaded_bytes` is only meaningful in the `Loading`
+/// phase; the verification phase reports `elapsed_seconds` instead.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonStartupProgressDto {
+    pub model_id: Option<String>,
+    pub phase: Option<StartupPhaseDto>,
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+    pub elapsed_seconds: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostMemoryDto {
     pub total_bytes: u64,
@@ -1114,6 +1135,7 @@ pub struct DesktopCore {
     command_gate: Arc<Mutex<()>>,
     downloads: Arc<ModelDownloadManager>,
     imports: Arc<ModelImportManager>,
+    startup_progress: StartupProgressCell,
 }
 
 impl fmt::Debug for DesktopCore {
@@ -1191,6 +1213,7 @@ impl DesktopCore {
             command_gate: Arc::new(Mutex::new(())),
             downloads: ModelDownloadManager::new(),
             imports: ModelImportManager::new(),
+            startup_progress: StartupProgressCell::default(),
         }
     }
 
@@ -1537,8 +1560,8 @@ impl DesktopCore {
         // A daemon that came up without its model — or that is still loading
         // one — is still a daemon: track the child exactly like a successful
         // start, then report what the wait observed.
-        let budget = startup_budget(model.as_deref()).await;
-        match wait_for_daemon_serving(&mut child, model.as_deref(), budget, health, model_loaded)
+        match self
+            .verify_daemon_startup(&mut child, model.as_deref(), health, model_loaded)
             .await?
         {
             DaemonStartup::Serving => {}
@@ -1562,12 +1585,82 @@ impl DesktopCore {
         }
     }
 
+    /// The bounded post-spawn wait for one launch. One registry read sizes
+    /// both the startup budget and the load meter's denominator, and the
+    /// wait publishes its samples into this core's shared progress cell.
+    async fn verify_daemon_startup<H, HF, M, MF>(
+        &self,
+        child: &mut Child,
+        model: Option<&str>,
+        health: H,
+        model_loaded: M,
+    ) -> DesktopResult<DaemonStartup>
+    where
+        H: FnMut() -> HF,
+        HF: Future<Output = HealthState>,
+        M: FnMut() -> MF,
+        MF: Future<Output = bool>,
+    {
+        let model_bytes = registered_model_size(model).await;
+        wait_for_daemon_serving(
+            child,
+            model,
+            startup_budget_for_bytes(model_bytes),
+            health,
+            model_loaded,
+            &self.startup_progress,
+            model_bytes,
+        )
+        .await
+    }
+
     /// Tracks a freshly started daemon child, collecting whatever handle it
     /// replaces. Every daemon this process spawned and left running is
     /// tracked, including one serving without its model.
     async fn track_daemon_child(&self, child: Child) {
         let mut state = self.inner.lock().await;
         replace_daemon_child(&mut state.daemon_child, child);
+    }
+
+    /// Reads the live model-load progress of a daemon start in flight, so a
+    /// multi-minute load shows a moving meter instead of a bare spinner.
+    ///
+    /// This never takes the command gate: `start_daemon` holds it for the
+    /// whole load, so a progress read queued behind it could only ever report
+    /// a load that had already finished. Fence authorization and the
+    /// staleness check synchronize through the state lock alone, exactly like
+    /// `model_infer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn daemon_startup_progress(
+        &self,
+        fence: CommandFence,
+    ) -> DesktopResult<DaemonStartupProgressDto> {
+        let scope = self.begin_scoped(&fence).await?;
+        let progress = read_startup_progress(&self.startup_progress);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(progress.map_or(
+            DaemonStartupProgressDto {
+                model_id: None,
+                phase: None,
+                loaded_bytes: 0,
+                total_bytes: 0,
+                elapsed_seconds: 0,
+            },
+            |progress| DaemonStartupProgressDto {
+                model_id: Some(progress.model_id),
+                phase: Some(match progress.phase {
+                    StartupPhase::Verifying => StartupPhaseDto::Verifying,
+                    StartupPhase::Loading => StartupPhaseDto::Loading,
+                }),
+                loaded_bytes: progress.loaded_bytes,
+                total_bytes: progress.total_bytes,
+                elapsed_seconds: progress.elapsed_seconds,
+            },
+        ))
     }
 
     /// Requests an authenticated daemon stop. Under a project fence it
@@ -3014,21 +3107,137 @@ fn startup_budget_for_bytes(model_bytes: Option<u64>) -> Duration {
     (STARTUP_BASE_TIMEOUT + Duration::from_mins(load)).min(STARTUP_TIMEOUT_CAP)
 }
 
-/// The startup budget for a launch of `model`, sized from the registry row's
-/// recorded artifact size. An unknown or unregistered model gets the base
-/// allowance; the daemon's own store read is the authority on whether it
-/// exists at all.
-async fn startup_budget(model: Option<&str>) -> Duration {
-    let Some(model) = model else {
-        return startup_budget_for_bytes(None);
-    };
-    let size = registered_model_catalog().await.and_then(|catalog| {
+/// The recorded artifact size for `model`, from its registry row. It sizes
+/// both the startup budget and the load meter's denominator. An unknown or
+/// unregistered model has none; the daemon's own store read is the authority
+/// on whether it exists at all.
+async fn registered_model_size(model: Option<&str>) -> Option<u64> {
+    let model = model?;
+    registered_model_catalog().await.and_then(|catalog| {
         catalog
             .iter()
             .find(|summary| summary.model_id == model)
             .map(|summary| summary.size_bytes)
-    });
-    startup_budget_for_bytes(size)
+    })
+}
+
+/// What a start is doing right now, inferred from the child alone — no new
+/// protocol message, no IPC into a daemon that answers nothing yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StartupPhase {
+    /// Revalidating the artifact: a full-file SHA-256 that streams the GGUF,
+    /// so resident memory says nothing at all about how far it has got. The
+    /// GUI reports elapsed time here rather than a bar stuck at zero.
+    Verifying,
+    /// Mapping the weights: the resident-memory ramp is a real signal.
+    Loading,
+}
+
+/// One sample of a start's model load. `loaded_bytes` is the high-water
+/// resident set size clamped to the artifact size, and is zero for the whole
+/// verification phase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StartupProgress {
+    pub(crate) model_id: String,
+    pub(crate) phase: StartupPhase,
+    pub(crate) loaded_bytes: u64,
+    pub(crate) total_bytes: u64,
+    pub(crate) elapsed_seconds: u64,
+}
+
+/// The resident-memory reading that separates a start's two phases. Measured
+/// on a 39.2 GB artifact: 155 seconds flat at ~67 MB while it was hashed,
+/// then 7.3 GB on the very next sample once the weights began mapping. A
+/// gigabyte sits far above the hashing floor and far below the first mapping
+/// sample, so the crossing is unambiguous.
+///
+/// ponytail: a fixed floor, so an artifact smaller than it stays in the
+/// verification phase for its whole start. Those load in seconds — there is
+/// no multi-minute wait to meter.
+const LOAD_PHASE_RSS_FLOOR: u64 = 1024 * 1024 * 1024;
+
+/// Folds one start's resident-memory samples into what the GUI shows.
+pub(crate) struct StartupSampler {
+    model_id: String,
+    total_bytes: u64,
+    observed_peak: u64,
+}
+
+impl StartupSampler {
+    pub(crate) const fn new(model_id: String, total_bytes: u64) -> Self {
+        Self {
+            model_id,
+            total_bytes,
+            observed_peak: 0,
+        }
+    }
+
+    /// Folds one resident-memory reading in.
+    ///
+    /// The reported value is the high-water mark, never the raw reading:
+    /// resident memory is not monotonic and does not converge on the artifact
+    /// size, because the Metal backend releases mapped pages as it settles. A
+    /// measured 39.2 GB load peaked at 31.7 GB and settled at 15.8 GB, so a
+    /// bar driven by the raw reading would walk backwards and none of them
+    /// would ever reach the artifact size.
+    pub(crate) fn fold(&mut self, resident_bytes: u64, elapsed: Duration) -> StartupProgress {
+        self.observed_peak = self.observed_peak.max(resident_bytes);
+        let loading = self.observed_peak >= LOAD_PHASE_RSS_FLOOR;
+        StartupProgress {
+            model_id: self.model_id.clone(),
+            phase: if loading {
+                StartupPhase::Loading
+            } else {
+                StartupPhase::Verifying
+            },
+            loaded_bytes: if loading {
+                self.observed_peak.min(self.total_bytes)
+            } else {
+                0
+            },
+            total_bytes: self.total_bytes,
+            elapsed_seconds: elapsed.as_secs(),
+        }
+    }
+}
+
+/// Where a start publishes its progress and `daemon_startup_progress` reads
+/// it. A plain `std` mutex, never a tokio one: every access is a single
+/// clone or store, so no guard is ever held across an await.
+pub(crate) type StartupProgressCell = Arc<std::sync::Mutex<Option<StartupProgress>>>;
+
+pub(crate) fn read_startup_progress(cell: &StartupProgressCell) -> Option<StartupProgress> {
+    cell.lock().expect("startup progress lock").clone()
+}
+
+/// The spawned daemon's resident set size in bytes, or `None` when it cannot
+/// be read.
+///
+/// ponytail: shells out to `ps` rather than binding libc or a process crate,
+/// exactly like the `sysctl` host-memory probe. RSS is a progress *signal*,
+/// not an accounting of loaded weights: the daemon's own model status stays
+/// authoritative for "loaded".
+#[cfg(target_os = "macos")]
+fn process_resident_bytes(pid: u32) -> Option<u64> {
+    let output = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // macOS `ps` reports the resident set in KiB.
+    std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(1024)
+}
+
+#[cfg(not(target_os = "macos"))]
+const fn process_resident_bytes(_pid: u32) -> Option<u64> {
+    None
 }
 
 /// Bounded post-spawn verification: the daemon must keep running AND serve
@@ -3059,8 +3268,10 @@ async fn wait_for_daemon_serving<H, HF, M, MF>(
     child: &mut Child,
     model: Option<&str>,
     budget: Duration,
-    mut health: H,
-    mut model_loaded: M,
+    health: H,
+    model_loaded: M,
+    progress: &StartupProgressCell,
+    model_bytes: Option<u64>,
 ) -> DesktopResult<DaemonStartup>
 where
     H: FnMut() -> HF,
@@ -3068,10 +3279,56 @@ where
     M: FnMut() -> MF,
     MF: Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + budget;
+    let outcome = poll_daemon_startup(
+        child,
+        model,
+        budget,
+        health,
+        model_loaded,
+        progress,
+        model_bytes,
+    )
+    .await;
+    // Serving, model missing, still starting or exited: the wait is over
+    // either way, so the meter must not linger on its last sample.
+    *progress.lock().expect("startup progress lock") = None;
+    outcome
+}
+
+/// The poll itself. Each tick samples the child's resident set size, so the
+/// GUI can show how far a load that answers nothing yet has actually got.
+async fn poll_daemon_startup<H, HF, M, MF>(
+    child: &mut Child,
+    model: Option<&str>,
+    budget: Duration,
+    mut health: H,
+    mut model_loaded: M,
+    progress: &StartupProgressCell,
+    model_bytes: Option<u64>,
+) -> DesktopResult<DaemonStartup>
+where
+    H: FnMut() -> HF,
+    HF: Future<Output = HealthState>,
+    M: FnMut() -> MF,
+    MF: Future<Output = bool>,
+{
+    let started = tokio::time::Instant::now();
+    let deadline = started + budget;
+    // A start with no model — or with one the registry has no size for — has
+    // no denominator, so it publishes nothing and the GUI keeps its plain
+    // "starting" line.
+    let mut sampler = model
+        .zip(model_bytes.filter(|bytes| *bytes > 0))
+        .map(|(model, bytes)| StartupSampler::new(model.to_owned(), bytes));
     loop {
         if let Some(status) = startup_exit_status(child)? {
             return Err(daemon_exited_during_startup(status));
+        }
+        if let Some(sampler) = sampler.as_mut()
+            && let Some(resident) = process_resident_bytes(child.id())
+        {
+            *progress.lock().expect("startup progress lock") =
+                Some(sampler.fold(resident, started.elapsed()));
         }
         match health().await {
             HealthState::Offline | HealthState::Degraded { .. } => {}
@@ -4633,6 +4890,8 @@ pub(crate) async fn wait_for_daemon_serving_for_test<H, HF, M, MF>(
     budget: Duration,
     health: H,
     model_loaded: M,
+    progress: &StartupProgressCell,
+    model_bytes: Option<u64>,
 ) -> DesktopResult<DaemonStartup>
 where
     H: FnMut() -> HF,
@@ -4640,7 +4899,16 @@ where
     M: FnMut() -> MF,
     MF: Future<Output = bool>,
 {
-    wait_for_daemon_serving(child, model, budget, health, model_loaded).await
+    wait_for_daemon_serving(
+        child,
+        model,
+        budget,
+        health,
+        model_loaded,
+        progress,
+        model_bytes,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -4832,6 +5100,7 @@ pub(crate) fn active_core_at_for_test(
         command_gate: Arc::new(Mutex::new(())),
         downloads: ModelDownloadManager::new(),
         imports: ModelImportManager::new(),
+        startup_progress: StartupProgressCell::default(),
     }
 }
 

@@ -17,6 +17,7 @@ import type {
   ActivityDayDto,
   DaemonLogEntryDto,
   DaemonLogsDto,
+  DaemonStartupProgressDto,
   DaemonStatsDto,
   EvidenceDataDto,
   ProjectUsageDto,
@@ -290,6 +291,7 @@ export const fixtureScenarios = [
   "model-infer-blocked",
   "model-none",
   "model-on-deck",
+  "model-loading",
   "model-download-fail",
   "connector-unconfigured",
   "connector-blocked",
@@ -730,6 +732,11 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     scenario === "model-none" || scenario === "model-on-deck" || scenario === "model-download-fail"
       ? null
       : loadedModel;
+  // A start in flight publishes its child's resident memory against the
+  // registered artifact size; each poll advances it like the desktop's
+  // sampler does, first through the flat verification phase and then up the
+  // mapping ramp.
+  let startupElapsedSeconds = 0;
   // One download at a time, tracked globally like the real daemon; each poll
   // advances it a fixed step so a fixture-driven UI shows real progress.
   let download: {
@@ -880,6 +887,11 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       });
     },
     async modelStatus(_fence): Promise<ModelStatusDto> {
+      // A daemon mid-load answers nothing, so the desktop reports the phase
+      // from the child it spawned.
+      if (scenario === "model-loading") {
+        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: true });
+      }
       // The registered catalog is durable store state: the desktop answers it
       // even while the daemon is paused, with nothing confirmable as loaded.
       if (!daemonRunning) {
@@ -1305,6 +1317,22 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       if (model) modelLoaded = modelCatalog.find((entry) => entry.modelId === model) ?? null;
       if (isDaemonFence(fence)) return null;
       return fenceResponse(rotatedFence(fence.operationId), snapshot(requireActive(), daemonRunning, scenario));
+    },
+    async daemonStartupProgress(_fence): Promise<DaemonStartupProgressDto> {
+      if (scenario !== "model-loading") {
+        return { modelId: null, phase: null, loadedBytes: 0, totalBytes: 0, elapsedSeconds: 0 };
+      }
+      startupElapsedSeconds += 20;
+      // The first three polls hash the artifact (resident memory flat), then
+      // the weights map in and settle short of the artifact size.
+      const mapped = Math.min(0.4, Math.max(0, (startupElapsedSeconds - 60) / 400));
+      return {
+        modelId: loadedModel.modelId,
+        phase: mapped > 0 ? "loading" : "verifying",
+        loadedBytes: Math.round(loadedModel.sizeBytes * mapped),
+        totalBytes: loadedModel.sizeBytes,
+        elapsedSeconds: startupElapsedSeconds,
+      };
     },
     async stopDaemon(fence) {
       daemonRunning = false;

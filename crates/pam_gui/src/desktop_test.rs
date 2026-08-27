@@ -22,17 +22,18 @@ use super::{
         DesktopErrorKind, DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto,
         FlowComposeDto, FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId,
         HealthDto, ModelDownloadDto, ModelInspectDto, ModelStatusDto, ModelSummaryDto, OperationId,
-        ProjectHandle, TimelineKindDto, access_dto_for_test, active_core_at_for_test,
-        active_core_for_test, activity_dto_for_test, approval_current_for_test,
-        approval_failure_retains_handle_for_test, bootstrap_with_catalog_for_test,
-        bounded_detail_for_test, callers_dto_for_test, clamp_model_output_tokens_for_test,
-        command_gate_for_test, connector_configure_dto_for_test, connector_test_dto_for_test,
-        connectors_dto_for_test, current_dto_for_test, daemon_start_cwd_for_test,
-        evidence_dto_for_test, failure_kind_for_test, flow_compose_data_for_test,
-        flow_graph_data_for_test, flow_workspace_at_for_test, gui_registration_current_for_test,
+        ProjectHandle, StartupPhase, StartupProgress, StartupProgressCell, StartupSampler,
+        TimelineKindDto, access_dto_for_test, active_core_at_for_test, active_core_for_test,
+        activity_dto_for_test, approval_current_for_test, approval_failure_retains_handle_for_test,
+        bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
+        clamp_model_output_tokens_for_test, command_gate_for_test,
+        connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
+        current_dto_for_test, daemon_start_cwd_for_test, evidence_dto_for_test,
+        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
+        flow_workspace_at_for_test, gui_registration_current_for_test,
         manage_skill_library_without_io_for_test, mark_model_loading_for_test,
         model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        reap_daemon_child_for_test, registered_model_catalog_in_for_test,
+        read_startup_progress, reap_daemon_child_for_test, registered_model_catalog_in_for_test,
         registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
         reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
         switch_authority_for_test, wait_for_daemon_serving_for_test,
@@ -1540,6 +1541,8 @@ async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
         std::time::Duration::from_secs(30),
         || async { HealthState::Offline },
         || async { false },
+        &StartupProgressCell::default(),
+        None,
     )
     .await
     .unwrap_err();
@@ -1582,6 +1585,8 @@ async fn a_serving_daemon_without_the_requested_model_is_reported_alive_and_not_
             }
         },
         || async { false },
+        &StartupProgressCell::default(),
+        None,
     )
     .await
     .unwrap();
@@ -1647,6 +1652,8 @@ async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
             }
         },
         || async { true },
+        &StartupProgressCell::default(),
+        None,
     )
     .await;
 
@@ -1680,6 +1687,8 @@ async fn a_daemon_still_loading_at_the_deadline_is_reported_starting_and_not_kil
             }
         },
         || async { false },
+        &StartupProgressCell::default(),
+        None,
     )
     .await
     .unwrap();
@@ -1725,6 +1734,201 @@ fn the_startup_budget_scales_with_the_artifact_size_on_disk() {
         startup_budget_for_bytes_for_test(Some(u64::MAX)),
         std::time::Duration::from_mins(10)
     );
+}
+
+/// A load that answers nothing must still be visible: while the wait runs,
+/// the spawned child's resident set size is published against the registered
+/// artifact size, so the GUI can render a real meter instead of a spinner.
+/// The health probe reads the cell mid-wait — that is exactly when the GUI's
+/// off-gate poll would.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_model_load_publishes_progress_while_the_wait_is_still_running() {
+    let (executable, directory) = fake_daemon_script("load-progress", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let cell = StartupProgressCell::default();
+    let observed: std::sync::Arc<std::sync::Mutex<Option<StartupProgress>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let total = 64 * 1024 * 1024 * 1024;
+    let probe_cell = std::sync::Arc::clone(&cell);
+    let probe_observed = std::sync::Arc::clone(&observed);
+
+    let outcome = wait_for_daemon_serving_for_test(
+        &mut child,
+        Some("vendor/model"),
+        std::time::Duration::from_secs(30),
+        move || {
+            let cell = std::sync::Arc::clone(&probe_cell);
+            let observed = std::sync::Arc::clone(&probe_observed);
+            async move {
+                *observed.lock().unwrap() = read_startup_progress(&cell);
+                HealthState::Healthy {
+                    daemon_version: "test".to_owned(),
+                    queue_depth: 0,
+                }
+            }
+        },
+        || async { true },
+        &cell,
+        Some(total),
+    )
+    .await
+    .unwrap();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(outcome, DaemonStartup::Serving));
+    let sample = observed
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("a model load must publish progress while the wait runs");
+    assert_eq!(sample.model_id, "vendor/model");
+    assert_eq!(sample.total_bytes, total);
+    // A `sleep` sits far below the mapping floor, exactly like a daemon still
+    // hashing its artifact: that reads as verification, not as 0% of a load.
+    assert_eq!(sample.phase, StartupPhase::Verifying);
+    assert_eq!(sample.loaded_bytes, 0);
+    // The wait is over: a finished start must not leave a meter behind.
+    assert_eq!(read_startup_progress(&cell), None);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Phase 1 of a start is a full-file SHA-256 revalidation that streams the
+/// artifact, so resident memory sits on a flat floor for minutes. Measured on
+/// a 39.2 GB GGUF: ~67 MB for 155 of the 191 seconds. Reporting that as 0% of
+/// a load is worse than no meter — a bar stuck at zero reads as a hang — so
+/// it is reported as verification, with the elapsed time.
+#[test]
+fn a_streaming_integrity_check_reports_verification_and_not_a_stalled_bar() {
+    let mut sampler = StartupSampler::new("vendor/model".to_owned(), 39_234_725_888);
+
+    let first = sampler.fold(28_704 * 1024, std::time::Duration::from_secs(0));
+    let flat = sampler.fold(66_992 * 1024, std::time::Duration::from_secs(150));
+
+    assert_eq!(first.phase, StartupPhase::Verifying);
+    assert_eq!(flat.phase, StartupPhase::Verifying);
+    assert_eq!(flat.loaded_bytes, 0, "a streaming hash is not 0% of a load");
+    assert_eq!(flat.elapsed_seconds, 150);
+}
+
+/// Phase 2 maps the weights, and its resident memory is neither monotonic nor
+/// convergent: the same measured load ramped to 31.7 GB, then fell back to
+/// 15.4 GB and settled at 15.75 GB against a 39.2 GB artifact. The meter runs
+/// off the high-water mark, so it never walks backwards — and it never claims
+/// completion, because resident memory never reaches the artifact size.
+#[test]
+fn a_released_mapping_never_walks_the_load_meter_backwards() {
+    let mut sampler = StartupSampler::new("vendor/model".to_owned(), 39_234_725_888);
+
+    let floor = sampler.fold(66_928 * 1024, std::time::Duration::from_secs(156));
+    let ramp = sampler.fold(7_290_672 * 1024, std::time::Duration::from_secs(161));
+    let peak = sampler.fold(31_717_568 * 1024, std::time::Duration::from_secs(171));
+    let released = sampler.fold(15_439_344 * 1024, std::time::Duration::from_secs(186));
+    let settled = sampler.fold(15_752_400 * 1024, std::time::Duration::from_secs(191));
+
+    assert_eq!(floor.phase, StartupPhase::Verifying);
+    assert_eq!(ramp.phase, StartupPhase::Loading);
+    assert_eq!(ramp.loaded_bytes, 7_290_672 * 1024);
+    assert_eq!(released.loaded_bytes, peak.loaded_bytes);
+    assert_eq!(settled.loaded_bytes, peak.loaded_bytes);
+    assert!(
+        settled.loaded_bytes < settled.total_bytes,
+        "resident memory never accounts for the whole artifact"
+    );
+}
+
+/// Resident memory also covers runtime scratch, so on another backend it can
+/// pass the artifact size outright. The published value is clamped, keeping
+/// the rendered fraction inside [0, 1].
+#[test]
+fn published_load_progress_never_exceeds_the_artifact_size() {
+    let mut sampler = StartupSampler::new("vendor/model".to_owned(), 39_234_725_888);
+
+    let over = sampler.fold(50 * 1024 * 1024 * 1024, std::time::Duration::from_secs(200));
+
+    assert_eq!(over.phase, StartupPhase::Loading);
+    assert_eq!(over.loaded_bytes, over.total_bytes);
+}
+
+/// A start with no model has nothing to meter: no denominator, no sample,
+/// and the GUI keeps its plain "starting" line.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_start_without_a_model_publishes_no_progress() {
+    let (executable, directory) = fake_daemon_script("no-model-progress", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let cell = StartupProgressCell::default();
+    let observed: std::sync::Arc<std::sync::Mutex<Option<StartupProgress>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let probe_cell = std::sync::Arc::clone(&cell);
+    let probe_observed = std::sync::Arc::clone(&observed);
+
+    let _ = wait_for_daemon_serving_for_test(
+        &mut child,
+        None,
+        std::time::Duration::from_secs(30),
+        move || {
+            let cell = std::sync::Arc::clone(&probe_cell);
+            let observed = std::sync::Arc::clone(&probe_observed);
+            async move {
+                *observed.lock().unwrap() = read_startup_progress(&cell);
+                HealthState::Healthy {
+                    daemon_version: "test".to_owned(),
+                    queue_depth: 0,
+                }
+            }
+        },
+        || async { true },
+        &cell,
+        None,
+    )
+    .await;
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(*observed.lock().unwrap(), None);
+    assert_eq!(read_startup_progress(&cell), None);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Every way the wait can end clears the meter — including a start that
+/// publishes nothing of its own, which must not leave the previous start's
+/// sample on screen.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_finished_wait_clears_a_stale_meter() {
+    let (executable, directory) = fake_daemon_script("stale-progress", "sleep 30");
+    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let cell = StartupProgressCell::default();
+    *cell.lock().unwrap() = Some(StartupProgress {
+        model_id: "vendor/previous".to_owned(),
+        phase: StartupPhase::Loading,
+        loaded_bytes: 7,
+        total_bytes: 11,
+        elapsed_seconds: 3,
+    });
+
+    let _ = wait_for_daemon_serving_for_test(
+        &mut child,
+        None,
+        std::time::Duration::from_secs(30),
+        || async {
+            HealthState::Healthy {
+                daemon_version: "test".to_owned(),
+                queue_depth: 0,
+            }
+        },
+        || async { true },
+        &cell,
+        None,
+    )
+    .await;
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(read_startup_progress(&cell), None);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The daemon cannot answer while it loads, so the GUI infers the phase from
@@ -1778,6 +1982,8 @@ async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() 
             }
         },
         || async { true },
+        &StartupProgressCell::default(),
+        None,
     )
     .await;
 
