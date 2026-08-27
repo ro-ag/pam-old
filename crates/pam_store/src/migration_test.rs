@@ -1160,3 +1160,42 @@ fn orphaned_foreign_key_is_refused_after_open() {
     drop(connection);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn a_concurrent_writer_only_delays_the_wal_conversion() {
+    // Converting a rollback-journal database to WAL upgrades a held shared lock
+    // to an exclusive one, and SQLite refuses that upgrade with an immediate
+    // SQLITE_BUSY — no busy handler, no waiting — while another connection
+    // holds a write lock. That is the whole first-run race between two PAM
+    // processes: whoever loses the coin flip must wait, not fail.
+    let (directory, path) = database_path("wal-conversion-wait");
+    fs::create_dir_all(&directory).unwrap();
+    let blocker = Connection::open(&path).unwrap();
+    blocker
+        .execute_batch("CREATE TABLE pre_existing(value TEXT)")
+        .unwrap();
+    let journal_mode: String = blocker
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert!(!journal_mode.eq_ignore_ascii_case("wal"));
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let opener_path = path.clone();
+    let opener = std::thread::spawn(move || open_connection(&opener_path));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    blocker.execute_batch("COMMIT").unwrap();
+    drop(blocker);
+
+    let connection = opener.join().unwrap().unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, LATEST_SCHEMA_VERSION);
+    let journal_mode: String = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal_mode, "wal");
+
+    drop(connection);
+    fs::remove_dir_all(directory).unwrap();
+}
