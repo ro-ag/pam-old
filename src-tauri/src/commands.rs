@@ -4,14 +4,14 @@ use pam_gui::{
     AccessConfigDto, ActivityDto, AppSettingsDto, ApprovalDecisionDto, ApprovalDecisionResponseDto,
     ApprovalHandle, BootstrapDto, CallersDto, CatalogDto, CommandFence, ConnectorConfigureDto,
     ConnectorConfigureParams, ConnectorCredentialAction, ConnectorTestDto, ConnectorsDto,
-    DaemonAccessDto, DaemonLogsDto, DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind,
-    EvidenceDto, EvidenceHandleDto, FlowComposeDto, FlowDefinitionHandle, FlowDocumentDto,
-    FlowDocumentHandle, FlowGraphDto, FlowReviewDto, FlowSaveDto, FlowWorkspaceDto, GenerationId,
-    HealthDto, HostMemoryDto, ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto,
-    ModelImportParams, ModelImportStatusDto, ModelInferDto, ModelInspectDto,
-    ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, OperationId,
-    ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
-    SnapshotDto,
+    DaemonAccessDto, DaemonLogsDto, DaemonStartupProgressDto, DaemonStatsDto, DesktopCore,
+    DesktopErrorDto, DesktopErrorKind, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
+    FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
+    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
+    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelImportStatusDto, ModelInferDto,
+    ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
+    OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
+    SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -391,6 +391,17 @@ pub(crate) async fn start_daemon(
         request.operation_id,
     );
     state.core.start_daemon(fence, request.model).await
+}
+
+#[tauri::command]
+pub(crate) async fn daemon_startup_progress(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<DaemonStartupProgressDto, DesktopErrorDto> {
+    state
+        .core
+        .daemon_startup_progress(request.into_fence())
+        .await
 }
 
 #[tauri::command]

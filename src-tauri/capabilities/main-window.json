@@ -10,6 +10,7 @@
     "allow-activate-project",
     "allow-refresh-project",
     "allow-start-daemon",
+    "allow-daemon-startup-progress",
     "allow-stop-daemon",
     "allow-register-gui-caller",
     "allow-decide-approval",

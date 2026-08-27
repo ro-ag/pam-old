@@ -4,6 +4,7 @@ const COMMANDS: &[&str] = &[
     "activate_project",
     "refresh_project",
     "start_daemon",
+    "daemon_startup_progress",
     "stop_daemon",
     "register_gui_caller",
     "decide_approval",

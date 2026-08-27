@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 const openDialog = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 import { withDaemonOperation } from "../bridge";
-import type { ModelStatusDto } from "../domain";
+import type { DaemonStartupProgressDto, ModelStatusDto } from "../domain";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
 import { selectControlCenter, selectDaemonView } from "../selectors";
 import {
@@ -932,6 +932,62 @@ describe("model runtime panel", () => {
     expect(within(panel).queryByText("unreachable")).not.toBeInTheDocument();
     // A load in flight is not a failure: no alert, no "PAM is paused" copy.
     expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The desktop samples the spawned daemon's resident memory off the command
+  // gate; a start that answers nothing else can still say what it is doing.
+  it("reports the artifact verification phase with elapsed time instead of a stalled bar", async () => {
+    const props = await controlCenterProps("model-on-deck");
+    // Measured on a 39.2 GB GGUF: 155 s of full-file hashing before any weight
+    // is mapped, with resident memory flat throughout.
+    const daemonStartupProgress = vi.fn(async (): Promise<DaemonStartupProgressDto> => ({
+      modelId: "qwen/qwen3-14b-instruct-q4",
+      phase: "verifying",
+      loadedBytes: 0,
+      totalBytes: 39_234_725_888,
+      elapsedSeconds: 150,
+    }));
+    render(
+      <ControlCenterView {...props} bridge={{ ...props.bridge, daemonStartupProgress }} modelBusy />,
+    );
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(await within(panel).findByText(/verifying the artifact's integrity, 2m 30s so far/)).toBeInTheDocument();
+    // No bar: a meter pinned at zero for two and a half minutes reads as a hang.
+    expect(
+      within(panel).queryByRole("progressbar", { name: "Model load progress" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("meters the weight load against the artifact size and stops polling when the start ends", async () => {
+    const props = await controlCenterProps("model-on-deck");
+    // The settled sample of the same measured load: resident memory never
+    // accounts for the whole artifact, so the bar never claims completion.
+    const daemonStartupProgress = vi.fn(async (): Promise<DaemonStartupProgressDto> => ({
+      modelId: "qwen/qwen3-14b-instruct-q4",
+      phase: "loading",
+      loadedBytes: 15_752_400 * 1024,
+      totalBytes: 39_234_725_888,
+      elapsedSeconds: 191,
+    }));
+    const bridge = { ...props.bridge, daemonStartupProgress };
+    const view = render(<ControlCenterView {...props} bridge={bridge} modelBusy />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const meter = await within(panel).findByRole("progressbar", { name: "Model load progress" });
+    expect(meter).toHaveAttribute("aria-valuenow", "41");
+    expect(within(panel).getByText(/16\.1 GB of 39\.2 GB in memory · 3m 11s/)).toBeInTheDocument();
+
+    // The start finishes: the meter goes away and the poll stops with it.
+    view.rerender(<ControlCenterView {...props} bridge={bridge} modelBusy={false} />);
+    await waitFor(() =>
+      expect(
+        within(panel).queryByRole("progressbar", { name: "Model load progress" }),
+      ).not.toBeInTheDocument(),
+    );
+    const settled = daemonStartupProgress.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(daemonStartupProgress).toHaveBeenCalledTimes(settled);
   });
 
   it("marks the runtime unreachable while PAM is paused with no registered model", async () => {

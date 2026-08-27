@@ -650,6 +650,18 @@ export interface ModelDownloadStatusDto {
   failure: ModelFailureDto | null;
 }
 
+/** A daemon start in flight. `modelId` and `phase` are null when no start is
+ *  loading a registered model. The verification phase streams the artifact
+ *  through a hash, so its resident memory says nothing: it reports
+ *  `elapsedSeconds` instead of bytes. */
+export interface DaemonStartupProgressDto {
+  modelId: string | null;
+  phase: "verifying" | "loading" | null;
+  loadedBytes: number;
+  totalBytes: number;
+  elapsedSeconds: number;
+}
+
 export interface HostMemoryDto {
   totalBytes: number;
   /** PAM's supported system minimum: local AI needs a 32 GiB machine. */
@@ -758,6 +770,7 @@ export interface PamBridge {
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;
   startDaemon(fence: CommandFence, model?: string): Promise<SnapshotDto | null>;
+  daemonStartupProgress(fence: CommandFence): Promise<DaemonStartupProgressDto>;
   stopDaemon(fence: CommandFence): Promise<SnapshotDto | null>;
   registerGuiCaller(fence: CommandFence): Promise<SnapshotDto>;
   decideApproval(fence: CommandFence, approvalHandle: string, decision: ApprovalDecision): Promise<ApprovalDecisionResponseDto>;

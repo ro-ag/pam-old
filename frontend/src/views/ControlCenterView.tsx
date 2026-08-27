@@ -6,6 +6,7 @@ import type {
   ActivityEventDto,
   ActivityDayDto,
   CallerDto,
+  DaemonStartupProgressDto,
   DaemonStatsDto,
   HostMemoryDto,
   ModelImportParams,
@@ -1134,6 +1135,12 @@ function ModelImportForm({
   );
 }
 
+/** Elapsed wall time for the verification phase, which has no byte signal. */
+export function formatElapsed(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+}
+
 export interface ModelPanelProps {
   bridge: PamBridge;
   daemon: DaemonView;
@@ -1160,6 +1167,7 @@ export function ModelPanel({
   refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
+  const [startup, setStartup] = useState<DaemonStartupProgressDto | null>(null);
   const verifySequence = useRef(0);
   // A daemon that is up but still hashing and mapping its model answers
   // nothing at all, so health reads unreachable while the load runs. The
@@ -1182,6 +1190,41 @@ export function ModelPanel({
     setVerify({ state: "idle" });
   }, [loaded?.modelId]);
   const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
+
+  // A start holds the desktop command gate for the whole load, so every other
+  // panel read is stuck behind it and the panel cannot tell a live eight-minute
+  // load from a hang. The desktop samples the spawned daemon's resident memory
+  // off that gate; there is no event bus here, so the GUI polls it.
+  const starting = modelBusy || loading;
+  useEffect(() => {
+    if (!starting) {
+      setStartup(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const progress = await bridge.daemonStartupProgress(withDaemonOperation());
+        if (!cancelled) setStartup(progress.modelId ? progress : null);
+      } catch {
+        // A start that cannot be metered still shows its plain "starting" line.
+        if (!cancelled) setStartup(null);
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [bridge, starting]);
+
+  // Resident memory covers mapped weights, and the runtime releases pages as
+  // it settles, so it never accounts for the whole artifact: the bar is capped
+  // short of 100% and only the daemon's own "loaded" report ends the wait.
+  const startupPercent = startup && startup.totalBytes > 0
+    ? Math.min(99, Math.round((startup.loadedBytes / startup.totalBytes) * 100))
+    : 0;
 
   const runVerify = async (modelId: string) => {
     const sequence = ++verifySequence.current;
@@ -1250,6 +1293,30 @@ export function ModelPanel({
         <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
       </div>
       {loadFailure && <p className="model-verify is-fail" role="alert">{loadFailure}</p>}
+      {startup?.phase === "verifying" && (
+        <p className="model-note" role="status">
+          Checking {startup.modelId} — verifying the artifact's integrity, {formatElapsed(startup.elapsedSeconds)} so far.
+          Loading starts once the whole file is hashed.
+        </p>
+      )}
+      {startup?.phase === "loading" && (
+        <div className="model-download-progress">
+          <div
+            className="model-download-track"
+            role="progressbar"
+            aria-label="Model load progress"
+            aria-valuenow={startupPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="model-download-fill" style={{ width: `${startupPercent}%` }} />
+          </div>
+          <small>
+            Loading {startup.modelId} — {formatModelSize(startup.loadedBytes)} of{" "}
+            {formatModelSize(startup.totalBytes)} in memory · {formatElapsed(startup.elapsedSeconds)}
+          </small>
+        </div>
+      )}
       {offline ? (
         registered.length > 0 ? (
           <div className="model-runtime">

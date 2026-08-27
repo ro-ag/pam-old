@@ -14,6 +14,7 @@ import type {
   ConnectorsDto,
   DaemonAccessDto,
   DaemonLogsDto,
+  DaemonStartupProgressDto,
   DaemonStatsDto,
   EvidenceDto,
   FlowComposeDto,
@@ -212,6 +213,10 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         ...flatFence(fence),
         ...(model === undefined ? {} : { model }),
       })),
+    // Never behind the command gate: `start_daemon` holds it for the whole
+    // load, and there is no event bus in this codebase, so the GUI polls.
+    daemonStartupProgress: (fence) =>
+      invokeCommand<DaemonStartupProgressDto>("daemon_startup_progress", request(flatFence(fence))),
     stopDaemon: (fence) =>
       invokeCommand<SnapshotDto | null>("stop_daemon", request(flatFence(fence))),
     registerGuiCaller: (fence) =>

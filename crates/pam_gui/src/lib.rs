@@ -52,9 +52,9 @@ pub use desktop::{
     ApprovalDecisionDispositionDto, ApprovalDecisionDto, ApprovalDecisionResponseDto,
     ApprovalHandle, BootstrapDto, CallerDto, CallersDto, CatalogDto, CommandFence,
     ConnectorConfigureDto, ConnectorConfigureParams, ConnectorSummaryDto, ConnectorTestDto,
-    ConnectorsDto, CurrentDto, DaemonLogEntryDto, DaemonLogsDto, DaemonStatsDto, DesktopCore,
-    DesktopErrorDto, DesktopErrorKind, DesktopResult, EvidenceDataDto, EvidenceDto,
-    EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowDefinitionDto,
+    ConnectorsDto, CurrentDto, DaemonLogEntryDto, DaemonLogsDto, DaemonStartupProgressDto,
+    DaemonStatsDto, DesktopCore, DesktopErrorDto, DesktopErrorKind, DesktopResult, EvidenceDataDto,
+    EvidenceDto, EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto, FlowDefinitionDto,
     FlowDefinitionHandle, FlowDocumentDataDto, FlowDocumentDto, FlowDocumentHandle, FlowDryRunDto,
     FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto, FlowReviewDataDto, FlowReviewDto,
     FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto, FlowVersionDiffLineDto, FlowWorkspaceDataDto,
@@ -64,7 +64,7 @@ pub use desktop::{
     ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
     ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto,
     ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto,
-    SnapshotDto, SnapshotFence, TimelineFactDto, TimelineKindDto,
+    SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto, TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential
