@@ -3,7 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::mpsc,
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use pam_core::{
@@ -54,6 +54,7 @@ use crate::{
 const COMMAND_CAPACITY: usize = 64;
 const EVIDENCE_COMMAND_CAPACITY: usize = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const WAL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 const FLOW_OPERATION_KIND: &str = "flow_run";
 const STATUS_OPERATION_KIND: &str = "status";
 const LEGACY_STATUS_OPERATION_KIND: &str = "daemon_status";
@@ -5599,17 +5600,43 @@ pub(super) fn open_connection(path: &Path) -> Result<Connection, StoreError> {
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     ensure_integrity(&connection)?;
-    let journal_mode: String =
-        connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
-    if !journal_mode.eq_ignore_ascii_case("wal") {
-        return Err(StoreError::InvalidState(format!(
-            "journal mode {journal_mode}"
-        )));
-    }
+    ensure_wal(&connection)?;
     apply_migrations(&mut connection)?;
     ensure_integrity(&connection)?;
     ensure_foreign_keys(&connection)?;
     Ok(connection)
+}
+
+/// Puts the database into WAL mode, waiting out a concurrent opener.
+///
+/// Converting a rollback-journal database to WAL needs a brief exclusive lock,
+/// and `SQLite` does not run the busy handler for that step: a second opener of a
+/// fresh database (the GUI spawning a daemon next to a running CLI, or `Store`'s
+/// own two workers) gets `SQLITE_BUSY` immediately instead of waiting. Retry
+/// until the same deadline `busy_timeout` gives every other statement; once the
+/// winner commits the conversion the pragma is a no-op and returns `wal`.
+fn ensure_wal(connection: &Connection) -> Result<(), StoreError> {
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        let attempt = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        });
+        match attempt {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(mode) => return Err(StoreError::InvalidState(format!("journal mode {mode}"))),
+            Err(error) if is_busy(&error) && Instant::now() < deadline => {
+                thread::sleep(WAL_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 fn ensure_integrity(connection: &Connection) -> Result<(), StoreError> {
