@@ -142,7 +142,7 @@ const DEFAULT_MODEL_DEADLINE: Duration = Duration::from_mins(5);
 const MAX_MODEL_DEADLINE: Duration = Duration::from_mins(10);
 
 #[derive(Clone)]
-struct LoadedModelService {
+pub(super) struct LoadedModelService {
     key: ModelKey,
     size_bytes: u64,
     service: ModelService,
@@ -403,7 +403,8 @@ where
     );
     let mut server = ServerTransport::bind(&config.endpoint).await?;
     connectors.warm(log.clone());
-    let (loaded_model, model_worker) = start_model_service(&store, config.model.clone()).await?;
+    let (loaded_model, model_worker) =
+        start_model_service(&store, config.model.clone(), &log).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
     let (scheduler_tx, scheduler_rx) = mpsc::channel::<()>(SCHEDULER_CAPACITY);
     let mut handlers = JoinSet::new();
@@ -553,17 +554,24 @@ where
 async fn start_model_service(
     store: &Store,
     key: Option<ModelKey>,
+    log: &DaemonLog,
 ) -> Result<(Option<LoadedModelService>, Option<ModelWorker>), DaemonError> {
     let Some(key) = key else {
         return Ok((None, None));
     };
+    // Store failures are misconfiguration or integrity problems and stay
+    // fatal; only an actual runtime load failure degrades below.
     let registered = store.model(key.clone()).await?;
     let size_bytes = registered.size_bytes;
-    let runtime = tokio::task::spawn_blocking(move || {
+    let runtime = match tokio::task::spawn_blocking(move || {
         MacosLlamaCppRuntime::load(registered, Arc::new(MacosRuntimeHostAdmission))
     })
     .await
-    .map_err(DaemonError::Handler)??;
+    {
+        Ok(Ok(runtime)) => runtime,
+        Ok(Err(error)) => return Ok(degrade_after_model_load_failure(log, &error)),
+        Err(error) => return Err(DaemonError::Handler(error)),
+    };
     let runtime: Arc<dyn ModelRuntime> = Arc::new(runtime);
     let (service, worker) = ModelService::start(runtime);
     Ok((
@@ -580,12 +588,29 @@ async fn start_model_service(
 async fn start_model_service(
     store: &Store,
     key: Option<ModelKey>,
+    log: &DaemonLog,
 ) -> Result<(Option<LoadedModelService>, Option<ModelWorker>), DaemonError> {
     let Some(key) = key else {
         return Ok((None, None));
     };
     let _ = store.model(key).await?;
-    Err(RuntimeError::InitializationFailed("embedded llama.cpp is available only on macOS").into())
+    Ok(degrade_after_model_load_failure(
+        log,
+        &RuntimeError::InitializationFailed("embedded llama.cpp is available only on macOS"),
+    ))
+}
+
+/// A model that cannot load must not stop the daemon: log the full error —
+/// the GUI captures daemon stderr and the CLI prints it — and keep serving
+/// without a model (inference answers `NotFound`, status reports none loaded).
+pub(super) fn degrade_after_model_load_failure(
+    log: &DaemonLog,
+    error: &RuntimeError,
+) -> (Option<LoadedModelService>, Option<ModelWorker>) {
+    let message = format!("model load failed; the daemon will serve without a model: {error}");
+    eprintln!("{message}");
+    log.error(message);
+    (None, None)
 }
 
 async fn deliver_outbound(

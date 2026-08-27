@@ -11,7 +11,7 @@ use pam_core::{
     ApprovalId, CallerCredential, CallerId, ContentDigest, EvidenceHandle, GrantId, IdempotencyKey,
     ProjectId, RequestId,
 };
-use pam_model::{RuntimeFinishReason, RuntimeResponse, RuntimeUsage};
+use pam_model::{RuntimeError, RuntimeFinishReason, RuntimeResponse, RuntimeUsage};
 use pam_platform::{ClientTransport, LocalEndpoint};
 use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, MAX_RESOURCE_NAME_BYTES, ResourceName,
@@ -33,10 +33,12 @@ use tokio::sync::oneshot;
 
 use super::lifecycle::{
     BriefProvider, DaemonConfig, Ownership, approval_recovery, cancellation_presentation,
-    clamp_activity_limit, grant_recovery, model_runtime_result, model_status_result,
-    policy_resource, prepare_endpoint, protocol_activity_event, protocol_caller_summary,
-    protocol_project_current, request_audit_event_id, request_preflight, serve_until_with_delay,
+    clamp_activity_limit, degrade_after_model_load_failure, grant_recovery, model_runtime_result,
+    model_status_result, policy_resource, prepare_endpoint, protocol_activity_event,
+    protocol_caller_summary, protocol_project_current, request_audit_event_id, request_preflight,
+    serve_until_with_delay,
 };
+use crate::logging::{DaemonLog, LogLevel};
 use crate::{
     DaemonError, ExchangeError, request_exchange, request_exchange_streaming, request_status,
 };
@@ -378,6 +380,28 @@ fn stale_socket_reports_recovery_command() {
     .unwrap_err();
     assert!(matches!(error, DaemonError::StaleState(_)));
     assert_eq!(error.recovery_action(), Some("pam gui"));
+
+    let _ = fs::remove_dir_all(runtime);
+}
+
+#[test]
+fn model_load_failure_degrades_to_serving_without_model() {
+    let runtime = test_runtime("model-load-degrade");
+    let _ = fs::remove_dir_all(&runtime);
+    fs::create_dir_all(&runtime).unwrap();
+    let log = DaemonLog::open(&runtime);
+
+    let (loaded_model, model_worker) = degrade_after_model_load_failure(
+        &log,
+        &RuntimeError::InitializationFailed("disk-full load failure"),
+    );
+
+    assert!(loaded_model.is_none());
+    assert!(model_worker.is_none());
+    let entries = log.recent(1);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].level, LogLevel::Error);
+    assert!(entries[0].message.contains("disk-full load failure"));
 
     let _ = fs::remove_dir_all(runtime);
 }
