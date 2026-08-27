@@ -58,4 +58,17 @@ describe("DaemonAccessPanel", () => {
     expect((await row("connector.test")).getByRole("alert")).toHaveTextContent("PAM could not record this capability grant.");
     expect((await row("connector.test")).getByText("not granted")).toBeInTheDocument();
   });
+
+  it("tells its host to re-read after a grant and after a revoke", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("connector-blocked");
+    const onGrantsChanged = vi.fn();
+    render(<DaemonAccessPanel bridge={bridge} onGrantsChanged={onGrantsChanged} />);
+
+    await user.click((await row("connector.test")).getByRole("button", { name: "Grant" }));
+    await waitFor(() => expect(onGrantsChanged).toHaveBeenCalledTimes(1));
+
+    await user.click((await row("model.infer")).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(onGrantsChanged).toHaveBeenCalledTimes(2));
+  });
 });

@@ -6,12 +6,19 @@ import { presentError } from "../state";
 
 export interface DaemonAccessPanelProps {
   bridge: PamBridge;
+  /**
+   * Called after a grant or revoke lands. The observed boundary next to this
+   * panel is a separate daemon read whose verdicts depend on these grants, so
+   * without this it keeps its pre-grant answer — telling the owner to run the
+   * very CLI command the button they just pressed already ran.
+   */
+  onGrantsChanged?: () => void;
 }
 
 // Daemon-scope grants belong to this PAM window, not to any project, so this
 // panel always speaks the daemon authority and carries no project identity.
 // Nothing here is written until the owner presses Grant.
-export function DaemonAccessPanel({ bridge }: DaemonAccessPanelProps) {
+export function DaemonAccessPanel({ bridge, onGrantsChanged }: DaemonAccessPanelProps) {
   const [capabilities, setCapabilities] = useState<DaemonCapabilityDto[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
@@ -43,6 +50,7 @@ export function DaemonAccessPanel({ bridge }: DaemonAccessPanelProps) {
       const response = await bridge.setDaemonAccess(withDaemonOperation(), capability, granted);
       if (sequence !== requestSequence.current) return;
       setCapabilities(response.capabilities);
+      onGrantsChanged?.();
     } catch (error) {
       if (sequence === requestSequence.current) {
         setRowErrors((current) => ({ ...current, [capability]: presentError(error) }));
@@ -50,7 +58,7 @@ export function DaemonAccessPanel({ bridge }: DaemonAccessPanelProps) {
     } finally {
       if (sequence === requestSequence.current) setPending(null);
     }
-  }, [bridge]);
+  }, [bridge, onGrantsChanged]);
 
   return (
     <section className="panel" aria-labelledby="daemon-access-heading">
