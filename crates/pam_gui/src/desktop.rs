@@ -23,6 +23,7 @@ use pam_protocol::{
     ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary,
     ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
 };
+use pam_store::Store;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -1872,7 +1873,10 @@ impl DesktopCore {
     /// Loads the daemon's model surface: the loaded model and the catalog.
     ///
     /// Daemon failures are classified in the returned DTO: an explicit policy
-    /// deny is blocked, everything else unavailable.
+    /// deny is blocked, everything else unavailable. When the daemon cannot
+    /// be reached at all, the durable registered catalog still answers from
+    /// the store — a daemon that is not serving has nothing loaded, but its
+    /// registered models must stay reachable so one can be started with.
     ///
     /// # Errors
     ///
@@ -1880,13 +1884,26 @@ impl DesktopCore {
     pub async fn model_status(&self, fence: CommandFence) -> DesktopResult<ModelStatusDto> {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
-        let observed = match observatory_credential().await {
+        let data = match observatory_credential().await {
             Ok((caller, credential)) => {
-                load_model_status(caller, credential, scope.project_id()).await
+                match load_model_status(caller, credential, scope.project_id()).await {
+                    // The registered catalog is durable store state: surface
+                    // it even when the daemon is not serving. A missing or
+                    // unreadable store keeps the original unavailable failure.
+                    observed @ ObservatoryState::Unavailable { .. } => {
+                        match registered_model_catalog().await {
+                            Some(registered) => ModelStatusDto::Ok {
+                                loaded: None,
+                                registered,
+                            },
+                            None => model_status_dto(observed),
+                        }
+                    }
+                    observed => model_status_dto(observed),
+                }
             }
-            Err(state) => state,
+            Err(state) => model_status_dto(state),
         };
-        let data = model_status_dto(observed);
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -3598,6 +3615,27 @@ fn model_summary_dto(summary: &ModelSummary) -> ModelSummaryDto {
     }
 }
 
+/// Reads the durable registered-model catalog straight from the store, for
+/// when the daemon is not serving: nothing can be confirmed loaded without a
+/// live daemon read, but the registered models stay reachable.
+async fn registered_model_catalog() -> Option<Vec<ModelSummaryDto>> {
+    let state_path = user_data_dir().ok()?.join("state.sqlite3");
+    registered_model_catalog_in(state_path).await
+}
+
+async fn registered_model_catalog_in(state_path: PathBuf) -> Option<Vec<ModelSummaryDto>> {
+    let store = Store::open(state_path).ok()?;
+    let catalog = store.list_models().await.ok()?;
+    let shutdown = store.shutdown().await;
+    let summaries = catalog
+        .iter()
+        .map(|model| ModelSummary::new(model.key.id(), model.size_bytes))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    shutdown.ok()?;
+    Some(summaries.iter().map(model_summary_dto).collect())
+}
+
 fn model_infer_dto(state: ObservatoryState<ModelGenerationResult>) -> ModelInferDto {
     match state {
         ObservatoryState::Available(result) => ModelInferDto::Ok {
@@ -4293,6 +4331,13 @@ pub(crate) fn model_status_dto_for_test(
     state: ObservatoryState<ModelStatusResult>,
 ) -> ModelStatusDto {
     model_status_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) async fn registered_model_catalog_in_for_test(
+    state_path: PathBuf,
+) -> Option<Vec<ModelSummaryDto>> {
+    registered_model_catalog_in(state_path).await
 }
 
 #[cfg(test)]

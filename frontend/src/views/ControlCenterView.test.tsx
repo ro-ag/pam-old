@@ -835,8 +835,24 @@ describe("model runtime panel", () => {
     ).toBeInTheDocument();
   }, 10_000);
 
-  it("marks the runtime unreachable while PAM is paused", async () => {
+  it("keeps the registered catalog startable while PAM is paused", async () => {
     const props = await controlCenterProps("offline");
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText("unreachable")).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/PAM is paused, so nothing is loaded right now/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(panel).getAllByRole("button", { name: "Start PAM with this model" })[0],
+    );
+    expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
+  });
+
+  it("marks the runtime unreachable while PAM is paused with no registered model", async () => {
+    const props = await controlCenterProps("offline");
+    props.modelStatus = { status: "ok", loaded: null, registered: [] };
     render(<ControlCenterView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });

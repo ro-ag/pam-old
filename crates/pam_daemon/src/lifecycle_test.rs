@@ -20,8 +20,9 @@ use pam_policy::{
 use pam_protocol::{
     BriefProvenance, BriefResult, CancellationDisposition, Event, EvidenceRedaction,
     EvidenceRetention, ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FRAME_SIZE,
-    ModelMessage, ModelRole, OperationTruth, ProjectRequestState, RequestEnvelope, RequestPayload,
-    ResultBody, ResultPayload, ServerMessage, SourceAvailability, decode_server_message, encode,
+    ModelMessage, ModelRole, ModelSummary, OperationTruth, ProjectRequestState, RequestEnvelope,
+    RequestPayload, ResultBody, ResultPayload, ServerMessage, SourceAvailability,
+    decode_server_message, encode,
 };
 use pam_store::{
     AcceptRequest, ApprovalDecision, AuditEventRecord, CallerRegistration, CancelOutcome,
@@ -2799,12 +2800,12 @@ fn activity_event_summaries_drop_redacted_detail_and_retention() {
 
 #[test]
 fn model_status_reports_the_loaded_model_without_path_or_digest() {
-    let empty = model_status_result(None).unwrap();
+    let empty = model_status_result(None, Vec::new()).unwrap();
     assert!(empty.loaded.is_none());
     assert!(empty.registered.is_empty());
 
     let key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
-    let status = model_status_result(Some((&key, 42))).unwrap();
+    let status = model_status_result(Some((&key, 42)), Vec::new()).unwrap();
     let encoded = encode(&status).unwrap();
     for secret_field in [&b"path"[..], b"digest", b"license"] {
         assert!(
@@ -2817,6 +2818,35 @@ fn model_status_reports_the_loaded_model_without_path_or_digest() {
     assert_eq!(loaded.model_id(), "vendor/model-a");
     assert_eq!(loaded.size_bytes, 42);
     assert_eq!(status.registered, vec![loaded]);
+}
+
+#[test]
+fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
+    let on_deck = ModelSummary::new("vendor/model-b".to_owned(), 84).unwrap();
+    let loaded_key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
+    let loaded_entry = ModelSummary::new("vendor/model-a".to_owned(), 42).unwrap();
+
+    // Nothing loaded: the catalog still surfaces every registered model, so a
+    // registered-but-not-loaded model stays reachable.
+    let status = model_status_result(None, vec![on_deck.clone()]).unwrap();
+    assert!(status.loaded.is_none());
+    assert_eq!(status.registered, vec![on_deck.clone()]);
+
+    // Loaded and listed: the catalog entry is not duplicated.
+    let status = model_status_result(
+        Some((&loaded_key, 42)),
+        vec![loaded_entry.clone(), on_deck.clone()],
+    )
+    .unwrap();
+    assert_eq!(status.loaded, Some(loaded_entry.clone()));
+    assert_eq!(
+        status.registered,
+        vec![loaded_entry.clone(), on_deck.clone()]
+    );
+
+    // Loaded but absent from the catalog: the serving model is never hidden.
+    let status = model_status_result(Some((&loaded_key, 42)), vec![on_deck.clone()]).unwrap();
+    assert_eq!(status.registered, vec![on_deck, loaded_entry]);
 }
 
 #[test]

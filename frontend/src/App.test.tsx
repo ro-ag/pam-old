@@ -1142,4 +1142,42 @@ describe("global-first workspace", () => {
     // Bootstrap probe plus one re-probe per lifecycle action.
     await waitFor(() => expect(health).toHaveBeenCalledTimes(3));
   });
+
+  it("restarts the daemon with a registered model from the Control Center", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("model-on-deck");
+    const stop = vi.spyOn(bridge, "stopDaemon");
+    const start = vi.spyOn(bridge, "startDaemon");
+    render(<App bridge={bridge} />);
+
+    const panel = await screen.findByRole("region", { name: "Model runtime" });
+    await user.click(
+      (await within(panel).findAllByRole("button", { name: "Restart PAM with this model" }))[0],
+    );
+
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0][1]).toBe("qwen/qwen3-14b-instruct-q4");
+    // The reloaded status moves the chosen model into the loaded slot.
+    expect(await within(panel).findByText("loaded")).toBeInTheDocument();
+  });
+
+  it("starts the daemon with a registered model while PAM is paused", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("offline");
+    const stop = vi.spyOn(bridge, "stopDaemon");
+    const start = vi.spyOn(bridge, "startDaemon");
+    render(<App bridge={bridge} />);
+
+    const panel = await screen.findByRole("region", { name: "Model runtime" });
+    await user.click(
+      (await within(panel).findAllByRole("button", { name: "Start PAM with this model" }))[0],
+    );
+
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    // Already paused: no stop round-trip first.
+    expect(stop).not.toHaveBeenCalled();
+    expect(start.mock.calls[0][1]).toBe("qwen/qwen3-14b-instruct-q4");
+    expect(await within(panel).findByText("loaded")).toBeInTheDocument();
+  });
 });

@@ -5208,6 +5208,27 @@ async fn reimporting_the_same_artifact_is_idempotent_and_may_renew_consent() {
 }
 
 #[tokio::test]
+async fn model_registry_lists_every_registered_model_in_identity_order() {
+    let (directory, path) = database_path("model-list");
+    let store = Store::open(&path).unwrap();
+    assert!(store.list_models().await.unwrap().is_empty());
+
+    let qwen = registered_model(&directory.join("user-owned.gguf"));
+    let acme = RegisteredModel {
+        key: ModelKey::new("acme", "a-model").unwrap(),
+        digest: ContentDigest::from_sha256([4; 32]),
+        ..registered_model(&directory.join("other.gguf"))
+    };
+    store.put_model(qwen.clone()).await.unwrap();
+    store.put_model(acme.clone()).await.unwrap();
+
+    // Registration order is not identity order: "acme/a-model" sorts first.
+    assert_eq!(store.list_models().await.unwrap(), vec![acme, qwen]);
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
 async fn model_registry_persists_metadata_only_and_rejects_conflicts() {
     let (directory, path) = database_path("model-registry");
     let store = Store::open(&path).unwrap();

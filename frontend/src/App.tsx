@@ -565,7 +565,7 @@ export function App({ bridge, initialView = "control-center", initialTheme, init
     queueReturnFocusRef.current = returnFocusTarget ?? activeElement ?? queueButtonRef.current;
     openOverlay({ id: "queue", kind: "queue", authority: overlayAuthority });
   };
-  const chatModelId = modelStatus?.status === "ok"
+  const chatModelId = daemon.state !== "stopped" && modelStatus?.status === "ok"
     ? (modelStatus.loaded ?? modelStatus.registered[0])?.modelId ?? null
     : null;
   const openModelChat = (modelId: string, returnFocusTarget?: HTMLElement) => {

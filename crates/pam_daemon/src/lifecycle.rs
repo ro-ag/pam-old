@@ -1046,7 +1046,7 @@ async fn handle_incoming(
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
         (Capability::ModelStatus, RequestPayload::ModelStatus) => {
-            handle_model_status(&request, incoming, &outbound, loaded_model.as_ref()).await
+            handle_model_status(&request, incoming, &store, &outbound, loaded_model.as_ref()).await
         }
         (Capability::ConnectorList, RequestPayload::ConnectorList) => {
             handle_connector_list(&request, incoming, &store, &outbound, &connectors).await
@@ -2576,10 +2576,27 @@ async fn handle_caller_list(
 async fn handle_model_status(
     request: &RequestEnvelope,
     incoming: IncomingRequest,
+    store: &Store,
     outbound: &mpsc::Sender<Outbound>,
     loaded: Option<&LoadedModelService>,
 ) -> Result<(), DaemonError> {
-    let message = match model_status_result(loaded.map(|model| (&model.key, model.size_bytes))) {
+    let catalog = match store.list_models().await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let registered = catalog
+        .iter()
+        .map(|model| ModelSummary::new(model.key.id(), model.size_bytes))
+        .collect::<Result<Vec<_>, _>>();
+    let message = match registered.and_then(|registered| {
+        model_status_result(
+            loaded.map(|model| (&model.key, model.size_bytes)),
+            registered,
+        )
+    }) {
         Ok(result) => ServerMessage::Result(success_result(
             request,
             OperationTruth::Observed,
@@ -2588,7 +2605,7 @@ async fn handle_model_status(
         Err(_) => ServerMessage::Result(failure_result(
             request,
             FailureCode::Internal,
-            "the loaded model identity cannot be represented in the status contract",
+            "a known model identity cannot be represented in the status contract",
         )),
     };
     send_routed(outbound, incoming, vec![message], None).await;
@@ -3053,20 +3070,26 @@ fn bounded_connector_detail(mut detail: String) -> String {
 
 /// Maps the daemon's model surface into the caller-facing status contract.
 ///
-/// The registered catalog is limited to the models this daemon has resolved
-/// from the durable registry.
-// ponytail: only the configured model is resolvable today; a full catalog
-// needs a registry listing API in the store.
+/// `registered` carries the full durable registry catalog, so a model that is
+/// imported but not loaded stays reachable. A loaded model the catalog does
+/// not list is still reported: the status never hides what is actually
+/// serving.
 pub(super) fn model_status_result(
     loaded: Option<(&ModelKey, u64)>,
+    registered: Vec<ModelSummary>,
 ) -> Result<ModelStatusResult, pam_protocol::ProtocolContractError> {
     let loaded = loaded
         .map(|(key, size_bytes)| ModelSummary::new(key.id(), size_bytes))
         .transpose()?;
-    Ok(ModelStatusResult {
-        registered: loaded.clone().into_iter().collect(),
-        loaded,
-    })
+    let mut registered = registered;
+    if let Some(loaded) = &loaded
+        && !registered
+            .iter()
+            .any(|model| model.model_id() == loaded.model_id())
+    {
+        registered.push(loaded.clone());
+    }
+    Ok(ModelStatusResult { registered, loaded })
 }
 
 pub(super) fn protocol_caller_summary(registration: CallerRegistration) -> CallerSummary {

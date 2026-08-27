@@ -1225,7 +1225,17 @@ export function ModelPanel({
         <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
       </div>
       {offline ? (
-        <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+        registered.length > 0 ? (
+          <div className="model-runtime">
+            <p className="model-note">
+              PAM is paused, so nothing is loaded right now. Start it with a registered model to
+              chat and verify.
+            </p>
+            <div className="access-list model-rows">{registered.map(restartRow)}</div>
+          </div>
+        ) : (
+          <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+        )
       ) : !modelStatus ? (
         <p className="panel-empty">Checking the local model…</p>
       ) : modelStatus.status !== "ok" ? (

@@ -4,8 +4,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use pam_core::{CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId};
+use pam_core::{
+    CallerCredential, CallerId, ContentDigest, GrantId, IdempotencyKey, ProjectId, RequestId,
+};
 use pam_daemon::{DaemonConfig, request_exchange, serve_until};
+use pam_model::{GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, RegisteredModel};
 use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceScope};
 use pam_protocol::{
@@ -72,6 +75,31 @@ fn model_status_request(request_id: &str, caller_id: &str, credential: &str) -> 
         IdempotencyKey::new(format!("{request_id}-key")),
     )
     .authenticated(CallerCredential::new(credential))
+}
+
+fn seeded_registered_model(path: PathBuf) -> RegisteredModel {
+    RegisteredModel {
+        key: ModelKey::new("qwen", "seeded-model").unwrap(),
+        path,
+        digest: ContentDigest::from_sha256([7; 32]),
+        size_bytes: 64,
+        gguf: GgufMetadata {
+            version: 3,
+            tensor_count: 17,
+            metadata_kv_count: 29,
+            architecture: None,
+            model_name: None,
+            license: None,
+        },
+        license: LicenseSnapshot::new(
+            "Apache-2.0",
+            "https://example.test/license",
+            ContentDigest::from_sha256([8; 32]),
+        )
+        .unwrap(),
+        source: ModelSource::Local,
+        registered_at_ms: 5,
+    }
 }
 
 async fn start_daemon(
@@ -263,7 +291,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() {
+async fn model_status_reports_the_registered_catalog_and_deny_overridable() {
     let runtime = test_runtime("model-status-round-trip");
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let state_path = endpoint.runtime_dir().join("state.sqlite3");
@@ -276,6 +304,11 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
     )
     .await
     .unwrap();
+    // A model that is registered but not loaded still crosses the status
+    // contract — this is what the GUI's restart-with-model surface lists.
+    seed.put_model(seeded_registered_model(runtime.join("seeded.gguf")))
+        .await
+        .unwrap();
     // model.status is a baseline capability, so denial coverage needs an
     // explicit deny grant.
     seed.put_grant(PutGrant {
@@ -299,8 +332,8 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
     wait_until_ready(&endpoint).await;
 
-    // A daemon started without a model reports an empty surface as a baseline
-    // read.
+    // A daemon started without a loaded model still reports the registered
+    // catalog as a baseline read.
     let exchange = request_exchange(
         &endpoint,
         &model_status_request("model-status", "observatory-test", TEST_CREDENTIAL),
@@ -308,6 +341,15 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
     )
     .await
     .unwrap();
+    let encoded = encode(&exchange.result).unwrap();
+    for secret_field in [&b"seeded.gguf"[..], b"digest", b"license"] {
+        assert!(
+            !encoded
+                .windows(secret_field.len())
+                .any(|window| window == secret_field),
+            "model paths, digests, and license material never cross the status contract"
+        );
+    }
     let ResultBody::Success {
         truth,
         payload: ResultPayload::ModelStatus(status),
@@ -317,7 +359,12 @@ async fn model_status_reports_nothing_loaded_as_baseline_and_deny_overridable() 
     };
     assert_eq!(truth, OperationTruth::Observed);
     assert!(status.loaded.is_none());
-    assert!(status.registered.is_empty());
+    let registered: Vec<_> = status
+        .registered
+        .iter()
+        .map(|model| (model.model_id(), model.size_bytes))
+        .collect();
+    assert_eq!(registered, [("qwen/seeded-model", 64)]);
 
     // An explicit deny grant overrides the baseline allowance.
     let denied = request_exchange(

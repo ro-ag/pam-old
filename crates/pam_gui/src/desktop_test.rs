@@ -21,19 +21,20 @@ use super::{
         CommandFence, ConnectorConfigureParams, CurrentDto, DesktopCore, DesktopErrorKind,
         DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto, FlowComposeDto,
         FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId, HealthDto,
-        ModelDownloadDto, ModelInspectDto, OperationId, ProjectHandle, TimelineKindDto,
-        access_dto_for_test, active_core_at_for_test, active_core_for_test, activity_dto_for_test,
-        approval_current_for_test, approval_failure_retains_handle_for_test,
+        ModelDownloadDto, ModelInspectDto, ModelSummaryDto, OperationId, ProjectHandle,
+        TimelineKindDto, access_dto_for_test, active_core_at_for_test, active_core_for_test,
+        activity_dto_for_test, approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
-        clamp_model_output_tokens_for_test, command_gate_for_test, connector_configure_dto_for_test,
-        connector_test_dto_for_test, connectors_dto_for_test, current_dto_for_test,
-        daemon_start_cwd_for_test, evidence_dto_for_test, failure_kind_for_test,
-        flow_compose_data_for_test, flow_graph_data_for_test, flow_workspace_at_for_test,
-        gui_registration_current_for_test, manage_skill_library_without_io_for_test,
-        model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        reap_daemon_child_for_test, registration_contract_for_test, registration_failure_detail,
-        replace_daemon_child_for_test, reserve_daemon_for_test, reserve_for_test,
-        switch_authority_for_test, wait_for_daemon_serving_for_test,
+        clamp_model_output_tokens_for_test, command_gate_for_test,
+        connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
+        current_dto_for_test, daemon_start_cwd_for_test, evidence_dto_for_test,
+        failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
+        flow_workspace_at_for_test, gui_registration_current_for_test,
+        manage_skill_library_without_io_for_test, model_infer_dto_for_test,
+        model_status_dto_for_test, post_save_reload_error_for_test, reap_daemon_child_for_test,
+        registered_model_catalog_in_for_test, registration_contract_for_test,
+        registration_failure_detail, replace_daemon_child_for_test, reserve_daemon_for_test,
+        reserve_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -606,6 +607,53 @@ fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
         serde_json::to_value(dto).unwrap(),
         serde_json::json!({ "status": "ok", "loaded": null, "registered": [] })
     );
+}
+
+#[tokio::test]
+async fn registered_model_catalog_reads_the_durable_store_directly() {
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-model-catalog-{}", uuid::Uuid::new_v4()));
+    let state_path = directory.join("state.sqlite3");
+    std::fs::create_dir_all(&directory).unwrap();
+    let store = pam_store::Store::open(&state_path).unwrap();
+    store
+        .put_model(pam_model::RegisteredModel {
+            key: pam_model::ModelKey::new("qwen", "seeded").unwrap(),
+            path: directory.join("seeded.gguf"),
+            digest: ContentDigest::from_sha256([7; 32]),
+            size_bytes: 64,
+            gguf: pam_model::GgufMetadata {
+                version: 3,
+                tensor_count: 17,
+                metadata_kv_count: 29,
+                architecture: None,
+                model_name: None,
+                license: None,
+            },
+            license: pam_model::LicenseSnapshot::new(
+                "Apache-2.0",
+                "https://example.test/license",
+                ContentDigest::from_sha256([8; 32]),
+            )
+            .unwrap(),
+            source: pam_model::ModelSource::Local,
+            registered_at_ms: 5,
+        })
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let catalog = registered_model_catalog_in_for_test(state_path)
+        .await
+        .expect("a readable store yields its catalog");
+    assert_eq!(
+        catalog,
+        vec![ModelSummaryDto {
+            model_id: "qwen/seeded".to_owned(),
+            size_bytes: 64,
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[tokio::test]

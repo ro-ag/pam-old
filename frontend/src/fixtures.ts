@@ -648,7 +648,9 @@ function snapshot(project: ProjectSummaryDto, daemonRunning: boolean, scenario: 
     data.access = { status: "unavailable", failure };
   }
   if (scenario === "offline") {
-    return solvedSnapshot(project, false);
+    // The daemon can be started from a paused fixture (e.g. "Start PAM with
+    // this model"); snapshots then report the now-running daemon.
+    return solvedSnapshot(project, daemonRunning);
   }
   if (scenario === "approval") {
     data.health = { status: "healthy", daemonVersion: "fixture-0.1.0", queueDepth: 0 };
@@ -866,16 +868,10 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       });
     },
     async modelStatus(_fence): Promise<ModelStatusDto> {
+      // The registered catalog is durable store state: the desktop answers it
+      // even while the daemon is paused, with nothing confirmable as loaded.
       if (!daemonRunning) {
-        return {
-          status: "unavailable",
-          failure: {
-            kind: "unavailable",
-            code: "daemon_offline",
-            detail: "PAM is paused, so the local model runtime is not reachable.",
-            recovery: "Start PAM to check on the local model.",
-          },
-        };
+        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog });
       }
       return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog });
     },

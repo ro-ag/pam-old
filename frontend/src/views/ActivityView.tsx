@@ -81,7 +81,9 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
     return () => { requestSequence.current += 1; };
   }, [load, offline, onReloadModel]);
 
-  const chatModel = modelStatus?.status === "ok"
+  // Chat needs a live daemon: a registered catalog that arrived while PAM is
+  // paused is on deck, not chattable.
+  const chatModel = !offline && modelStatus?.status === "ok"
     ? modelStatus.loaded ?? modelStatus.registered[0] ?? null
     : null;
 

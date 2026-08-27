@@ -818,6 +818,21 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Lists every registered model in stable identity order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a stored record is corrupt or durable state is
+    /// unavailable.
+    pub async fn list_models(&self) -> Result<Vec<RegisteredModel>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Model(ModelCommand::List {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Atomically replaces one project's active skill inventory with a complete scan.
     ///
     /// The store rejects incomplete reports before they reach the durable worker, so
@@ -1783,6 +1798,9 @@ enum ModelCommand {
         key: ModelKey,
         response: Response<RegisteredModel>,
     },
+    List {
+        response: Response<Vec<RegisteredModel>>,
+    },
 }
 
 enum InventoryCommand {
@@ -2329,6 +2347,9 @@ fn run_model_command(connection: &mut Connection, command: ModelCommand) {
         ModelCommand::Get { key, response } => {
             respond(response, get_model(connection, &key));
         }
+        ModelCommand::List { response } => {
+            respond(response, list_models(connection));
+        }
     }
 }
 
@@ -2438,6 +2459,21 @@ fn get_model(connection: &Connection, key: &ModelKey) -> Result<RegisteredModel,
         .optional()?
         .ok_or_else(|| StoreError::ModelNotFound(key.id()))
         .and_then(decode_model)
+}
+
+fn list_models(connection: &Connection) -> Result<Vec<RegisteredModel>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT
+             vendor, name, path, digest, size_bytes, gguf_version,
+             gguf_tensor_count, gguf_metadata_kv_count,
+             license_id, license_url, license_digest,
+             source_kind, source_identity, registered_at_ms
+         FROM models ORDER BY model_id",
+    )?;
+    let rows = statement
+        .query_map([], model_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter().map(decode_model).collect()
 }
 
 type StoredModelRow = (
