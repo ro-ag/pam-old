@@ -848,7 +848,7 @@ pub struct ModelImportStatusDto {
     pub calibrated: bool,
 }
 
-/// Pre-import preview of a candidate GGUF for the Control Center's manual
+/// Pre-import preview of a candidate GGUF for the Models view's manual
 /// import flow: identity metadata and the recommended-size floor verdict,
 /// read without hashing the file. Failures use the same bounded envelope as
 /// [`ModelImportDto`] rather than a raw error.
@@ -2181,7 +2181,7 @@ impl DesktopCore {
     }
 
     /// Previews a candidate GGUF before import: reads its bounded header and
-    /// identity metadata without hashing, so the Control Center can show the
+    /// identity metadata without hashing, so the Models view can show the
     /// architecture, model name, and floor verdict before the user commits.
     ///
     /// This is a read-only local check on the user's own filesystem, like

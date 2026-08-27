@@ -28,7 +28,7 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 4] = [
     (
         "model.infer",
         "Model inference",
-        "Chat and the Control Center model check ask the loaded model to generate.",
+        "Chat and the Models view model check ask the loaded model to generate.",
     ),
     (
         "network.diagnostics",
@@ -38,12 +38,12 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 4] = [
     (
         "connector.configure",
         "Connector configuration",
-        "Connections saves a connector's enablement, base URL, and credential.",
+        "Access saves a connector's enablement, base URL, and credential.",
     ),
     (
         "connector.test",
         "Connector self-test",
-        "Connections runs a connector's self-test against its configured host.",
+        "Access runs a connector's self-test against its configured host.",
     ),
 ];
 
@@ -223,8 +223,6 @@ fn store_error(_error: StoreError) -> DesktopErrorDto {
 fn write_error(_error: StoreError) -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
         "PAM could not record this capability grant.",
-        Some(
-            "Register this PAM window as a caller from the Control Center, then retry.".to_owned(),
-        ),
+        Some("Register this PAM window as a caller from Access, then retry.".to_owned()),
     )
 }

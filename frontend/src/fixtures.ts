@@ -780,10 +780,10 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   // Daemon-scope grants are durable owner decisions, so the fixture starts
   // ungranted and only the Access view's own action flips a row.
   const daemonCapabilities: DaemonCapabilityDto[] = [
-    { capability: "model.infer", name: "Model inference", summary: "Chat and the Control Center model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
+    { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
     { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
-    { capability: "connector.configure", name: "Connector configuration", summary: "Connections saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
-    { capability: "connector.test", name: "Connector self-test", summary: "Connections runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
+    { capability: "connector.configure", name: "Connector configuration", summary: "Access saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
+    { capability: "connector.test", name: "Connector self-test", summary: "Access runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
   ];
   const flowGraphSources = new Map<string, FlowDefinitionJson>([
     [normalizeFlowSource(flowSource), afterMergeDefinition],

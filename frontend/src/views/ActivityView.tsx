@@ -1,6 +1,5 @@
 import {
   ArrowClockwise,
-  Brain,
   CheckCircle,
   FileText,
   Power,
@@ -10,9 +9,10 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DAEMON_AUTHORITY, withDaemonOperation } from "../bridge";
-import type { ActivityDto, ActivityEventDto, ModelStatusDto, PamBridge, ProjectSummaryDto } from "../domain";
+import type { ActivityDto, ActivityEventDto, PamBridge, ProjectSummaryDto } from "../domain";
 import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
+import { ConsolePanel } from "./ConsolePanel";
 
 function formatClock(occurredAtMs: number): string {
   const date = new Date(occurredAtMs);
@@ -38,16 +38,13 @@ export interface ActivityViewProps {
   projects: ProjectSummaryDto[];
   bridge: PamBridge;
   pending: boolean;
-  modelStatus: ModelStatusDto | null;
   /** Latest terminal-result evidence for the active project, if any. */
   evidence: ActivityEvidence | null;
   onEvidence: (handle: string) => void;
-  onReloadModel: () => void;
-  onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartDaemon: () => void;
 }
 
-export function ActivityView({ daemon, projects, bridge, pending, modelStatus, evidence, onEvidence, onReloadModel, onOpenModelChat, onStartDaemon }: ActivityViewProps) {
+export function ActivityView({ daemon, projects, bridge, pending, evidence, onEvidence, onStartDaemon }: ActivityViewProps) {
   const [activity, setActivity] = useState<ActivityDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,7 +68,6 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
   }, [bridge]);
 
   useEffect(() => {
-    onReloadModel();
     if (offline) {
       setActivity(null);
       setLoadError(null);
@@ -79,13 +75,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
     }
     void load();
     return () => { requestSequence.current += 1; };
-  }, [load, offline, onReloadModel]);
-
-  // Chat needs a live daemon: a registered catalog that arrived while PAM is
-  // paused is on deck, not chattable.
-  const chatModel = !offline && modelStatus?.status === "ok"
-    ? modelStatus.loaded ?? modelStatus.registered[0] ?? null
-    : null;
+  }, [load, offline]);
 
   // Events carry the daemon's own project ID, not the GUI-local catalog
   // handle, so the two never match; the shared identity is the canonical root
@@ -140,47 +130,6 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
           <div><small>Queue depth</small><strong>{daemon.queueDepth ?? "Not reported"}</strong></div>
           {daemon.queueDepth !== null && <span className="project-stat-value">{daemon.queueDepth}</span>}
         </article>
-        <article className="project-stat group flex items-center gap-3">
-          <span className="project-stat-icon"><Brain size={21} weight="bold" /></span>
-          {!modelStatus ? (
-            <div><small>Local model</small><strong>Checking the local model…</strong></div>
-          ) : modelStatus.status !== "ok" ? (
-            <div><small>Local model</small><strong title={modelStatus.failure.detail}>{modelStatus.failure.detail}</strong></div>
-          ) : modelStatus.loaded ? (
-            <>
-              <div>
-                <small>Local model</small>
-                <strong title={modelStatus.loaded.modelId}>{modelStatus.loaded.modelId}</strong>
-                <small>{formatModelSize(modelStatus.loaded.sizeBytes)}</small>
-              </div>
-              <span className="state-pill state-pill--healthy">loaded</span>
-            </>
-          ) : modelStatus.registered.length > 0 ? (
-            <>
-              <div>
-                <small>Local model</small>
-                <strong title={modelStatus.registered[0].modelId}>{modelStatus.registered[0].modelId}</strong>
-                <small>{formatModelSize(modelStatus.registered[0].sizeBytes)}</small>
-              </div>
-              <span className="state-pill state-pill--observed">on deck</span>
-            </>
-          ) : (
-            <div>
-              <small>Local model</small>
-              <strong>No local model yet</strong>
-              <small>Import one from the Control Center whenever you are ready.</small>
-            </div>
-          )}
-          {chatModel && (
-            <button
-              type="button"
-              className="button button--secondary button--small"
-              onClick={(event) => onOpenModelChat(chatModel.modelId, event.currentTarget)}
-            >
-              Chat
-            </button>
-          )}
-        </article>
       </section>
       {offline ? (
         <section className="empty-state">
@@ -200,7 +149,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
               className="button button--secondary button--small"
               aria-label="Refresh activity"
               disabled={busy}
-              onClick={() => { void load(); onReloadModel(); }}
+              onClick={() => { void load(); }}
             >
               <ArrowClockwise className={busy ? "is-spinning" : ""} size={17} /> Refresh
             </button>
@@ -256,6 +205,7 @@ export function ActivityView({ daemon, projects, bridge, pending, modelStatus, e
           )}
         </section>
       )}
+      {!offline && <ConsolePanel bridge={bridge} />}
     </main>
   );
 }

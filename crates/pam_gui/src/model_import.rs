@@ -494,7 +494,7 @@ pub(crate) struct ModelInspectReport {
 }
 
 /// Reads a candidate GGUF's bounded header and identity metadata without
-/// hashing it, so the Control Center can preview a model before importing.
+/// hashing it, so the Models view can preview a model before importing.
 pub(crate) async fn run_model_inspect(
     path: PathBuf,
 ) -> Result<ModelInspectReport, ModelImportFailure> {

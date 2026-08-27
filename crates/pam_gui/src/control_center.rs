@@ -267,7 +267,7 @@ pub(crate) fn exchange_failure_context(error: &ExchangeError) -> (String, Option
     match health_from_exchange_error(error) {
         HealthState::Offline => (
             "PAM daemon is not running.".to_owned(),
-            Some("Start PAM from the Control Center.".to_owned()),
+            Some("Start PAM from the sidebar.".to_owned()),
         ),
         HealthState::Degraded { detail, recovery } => (detail, recovery),
         HealthState::Healthy { .. } => (error.to_string(), None),

@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-type ViewName = "control-center" | "access" | "skills" | "flows" | "activity" | "callers" | "settings";
+type ViewName = "overview" | "models" | "flows" | "skills" | "access" | "activity" | "settings";
 
 const responsiveWidths = [1_180, 960, 780, 600, 320] as const;
 const runtimeErrors = new WeakMap<Page, string[]>();
@@ -30,7 +30,7 @@ test.afterEach(async ({ page }) => {
 async function openFixture(
   page: Page,
   scenario = "solved",
-  view: ViewName = "control-center",
+  view: ViewName = "overview",
 ): Promise<void> {
   await page.goto(`/?scenario=${scenario}&view=${view}`);
   await page.locator(".app-shell").waitFor();
@@ -79,7 +79,7 @@ test.describe("responsive visual contract", () => {
     test(`keeps the solved Current surface bounded at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await openFixture(page);
-      await expect(page.getByRole("heading", { name: "Control center" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
 
       const geometry = await page.evaluate(() => {
         const rect = (selector: string) => {
@@ -238,12 +238,17 @@ test.describe("production-shaped interactions", () => {
 
   test("executes the bounded recovery action at effective 320px", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 800 });
-    await openFixture(page, "missing-credential");
-    const watch = page.locator(".project-stat", { hasText: "Watch status" });
-    await expect(watch.getByText("PAM has no native caller credential for this caller.")).toBeVisible();
-    await page.getByRole("button", { name: "Register GUI caller" }).click();
-    await expect(watch.getByText("PAM is on watch")).toBeVisible();
+    await openFixture(page, "missing-credential", "access");
+    const register = page.getByRole("button", { name: "Register GUI caller" });
+    await register.scrollIntoViewIfNeeded();
+    await expect(register).toBeVisible();
+    const box = await register.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+    await register.click();
     await expect(page.getByText("GUI caller registered")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Register GUI caller" })).toHaveCount(0);
     const horizontal = await horizontalMetrics(page);
     expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
   });
@@ -415,6 +420,23 @@ test.describe("selectable theme families and variants", () => {
   });
 });
 
+test.describe("Models view", () => {
+  test("is the one home for status, the registered catalog, and adding a model", async ({ page }) => {
+    await page.setViewportSize({ width: 1_180, height: 1_000 });
+    await openFixture(page, "solved", "models");
+    await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+    const panel = page.getByRole("region", { name: "Model runtime" });
+    await expect(panel.getByText("loaded", { exact: true })).toBeVisible();
+    // Issue #38: the curated picker and the manual import stay reachable even
+    // with a model already registered and loaded.
+    await expect(panel.getByRole("button", { name: "Choose a model" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Import model" })).toBeVisible();
+    const horizontal = await horizontalMetrics(page);
+    expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
+    await expect(page).toHaveScreenshot("models-solved-1180x1000.png");
+  });
+});
+
 test.describe("Settings view", () => {
   test("renders Storage and Logs in light and dark", async ({ page }) => {
     await page.setViewportSize({ width: 1_180, height: 800 });
@@ -440,7 +462,7 @@ test.describe("Skills audit tab", () => {
     const navigationLabels = await page.getByRole("navigation", { name: "Primary" })
       .getByRole("button")
       .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
-    expect(navigationLabels).toEqual(["Control Center", "Access", "Skills", "Flows", "Activity", "Console", "Connections"]);
+    expect(navigationLabels).toEqual(["Overview", "Models", "Flows", "Skills", "Access", "Activity"]);
     const geometry = await page.evaluate(() => {
       const width = (selector: string) => document.querySelector<HTMLElement>(selector)?.getBoundingClientRect().width ?? -1;
       const workspace = document.querySelector<HTMLElement>(".workspace")?.getBoundingClientRect();
