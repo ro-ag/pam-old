@@ -1070,6 +1070,26 @@ describe("global-first workspace", () => {
     expect(loadWorkspace.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 
+  it("keeps the flow draft across a ⌘R refresh while reloading the catalog", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge();
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
+    render(<App bridge={bridge} initialView="flows" />);
+
+    await screen.findByRole("region", { name: "Flow workspace" });
+    await user.click(await screen.findByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    const source = screen.getByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement;
+    fireEvent.change(source, { target: { value: "# unsaved draft" } });
+
+    // ⌘R refreshes the project snapshot, which rotates the fence generation.
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
+
+    await waitFor(() => expect(loadWorkspace.mock.calls.length).toBeGreaterThan(1));
+    expect((screen.getByRole("textbox", { name: "Flow TOML source" }) as HTMLTextAreaElement).value).toBe("# unsaved draft");
+  });
+
   it("serves Skills under the daemon authority and picks a project for assignment", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge();

@@ -79,6 +79,19 @@ fn calibrated_profile_accepts_every_calibrated_artifact() {
 }
 
 #[test]
+fn calibrated_admission_accepts_every_calibrated_artifact() {
+    for artifact in CALIBRATED_ARTIFACTS {
+        let contingency = calibrated_contingency(artifact.size_bytes).unwrap();
+        let admitted = artifact.size_bytes.checked_add(contingency).unwrap();
+        assert!(
+            admit_bytes(admitted).is_ok(),
+            "{} should pass admission with its calibrated contingency",
+            artifact.digest
+        );
+    }
+}
+
+#[test]
 fn calibrated_runtime_parameters_are_exact() {
     let model_params: LlamaModelParams = fixed_model_params();
     assert_eq!(model_params.n_gpu_layers(), i32::MAX);
@@ -105,7 +118,7 @@ fn calibrated_runtime_parameters_are_exact() {
     assert_eq!(profile.kv_cache_precision(), RuntimeKvCachePrecision::F16);
     assert!(!profile.kv_cache_unified());
     assert_eq!(profile.sampling(), RuntimeSampling::TopKTopPTemperature);
-    assert_eq!(profile.max_projected_bytes(), 20_000_000_000);
+    assert_eq!(profile.max_projected_bytes(), 27_000_000_000);
 }
 
 #[test]
@@ -115,12 +128,12 @@ fn projection_aggregates_all_entries_and_enforces_decimal_cap() {
     assert_eq!(projection.weight_bytes(), 11);
     assert_eq!(projection.context_bytes(), 22);
     assert_eq!(projection.compute_bytes(), 33);
-    assert!(admit_bytes(20_000_000_000).is_ok());
+    assert!(admit_bytes(27_000_000_000).is_ok());
     assert!(matches!(
-        admit_bytes(20_000_000_001),
+        admit_bytes(27_000_000_001),
         Err(RuntimeError::AdmissionRejected {
-            projected_bytes: 20_000_000_001,
-            maximum_bytes: 20_000_000_000,
+            projected_bytes: 27_000_000_001,
+            maximum_bytes: 27_000_000_000,
         })
     ));
 }

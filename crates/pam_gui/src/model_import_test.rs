@@ -218,6 +218,45 @@ async fn a_fresh_import_manager_is_idle() {
     assert_eq!(snapshot.hashed_bytes, 0);
     assert_eq!(snapshot.total_bytes, 0);
     assert!(snapshot.failure.is_none());
+    assert!(!snapshot.calibrated);
+}
+
+#[tokio::test]
+async fn a_completed_import_flags_whether_the_artifact_is_calibrated() {
+    let directory = TestDirectory::new("calibrated");
+    let path = directory.0.join("model.gguf");
+    fs::write(&path, one_tensor_gguf()).unwrap();
+
+    // The tiny test GGUF is no calibrated artifact: the import still
+    // succeeds, with the flag false.
+    let manager = ModelImportManager::new();
+    Arc::clone(&manager)
+        .start_with(params(path.clone()), |params, _progress| async move {
+            verify_and_register(params, 1, &ImportProgress::default())
+        })
+        .unwrap();
+    let complete = wait_for_terminal(&manager).await;
+    assert_eq!(complete.status, ModelImportStatusKind::Complete);
+    assert!(!complete.calibrated);
+
+    // A registration whose digest and size match a calibrated artifact
+    // exactly flips the flag.
+    let artifact = &pam_model::CALIBRATED_ARTIFACTS[0];
+    let mut registered = verify_and_register(params(path), 1, &ImportProgress::default()).unwrap();
+    registered.digest = ContentDigest::parse(format!("sha256:{}", artifact.digest)).unwrap();
+    registered.size_bytes = artifact.size_bytes;
+
+    let manager = ModelImportManager::new();
+    let registered_path = registered.path.clone();
+    Arc::clone(&manager)
+        .start_with(params(registered_path), move |_params, _progress| {
+            let registered = registered.clone();
+            async move { Ok(registered) }
+        })
+        .unwrap();
+    let complete = wait_for_terminal(&manager).await;
+    assert_eq!(complete.status, ModelImportStatusKind::Complete);
+    assert!(complete.calibrated);
 }
 
 #[tokio::test]

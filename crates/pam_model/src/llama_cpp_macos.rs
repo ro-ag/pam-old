@@ -29,7 +29,9 @@ const CONTEXT_TOKENS: u32 = 8_192;
 const BATCH_TOKENS: u32 = 512;
 const PHYSICAL_BATCH_TOKENS: u32 = 512;
 const PARALLEL_SEQUENCES: u32 = 1;
-const MAX_MODEL_ALLOCATION_BYTES: u64 = 20_000_000_000;
+// Fits the largest calibrated artifact (Q6_K, 25_092_535_456 bytes) plus its
+// 5% contingency (~26.35 GB); host admission remains the real per-machine gate.
+const MAX_MODEL_ALLOCATION_BYTES: u64 = 27_000_000_000;
 const MIN_OS_RESERVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MIN_CALIBRATED_CONTINGENCY_BYTES: u64 = 256 * 1024 * 1024;
 const INITIAL_CHAT_TEMPLATE_BYTES: usize = 4 * 1024;

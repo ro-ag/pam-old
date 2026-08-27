@@ -184,3 +184,57 @@ describe("FlowsView without an active project", () => {
     expect(loadWorkspace.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
   });
 });
+
+describe("FlowsView fence rotations", () => {
+  it("keeps the draft across a same-project generation rotation while refreshing the catalog", async () => {
+    const bridge = fixtureBridge();
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
+    const user = userEvent.setup();
+    const { rerender } = render(<FlowsView bridge={bridge} fence={fence} onError={vi.fn()} onToast={vi.fn()} />);
+    await screen.findByRole("region", { name: "Flow workspace" });
+    await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    fireEvent.change(sourceTextarea(), { target: { value: "# unsaved draft\nschema_version = 2" } });
+
+    rerender(
+      <FlowsView
+        bridge={bridge}
+        fence={{ ...fence, generation: "33333333-3333-4333-8333-333333333333" }}
+        onError={vi.fn()}
+        onToast={vi.fn()}
+      />,
+    );
+
+    // The generation rotation re-fetches the workspace in place…
+    await waitFor(() => expect(loadWorkspace).toHaveBeenCalledTimes(2));
+    // …but the unsaved draft and the open document survive.
+    expect(sourceTextarea().value).toBe("# unsaved draft\nschema_version = 2");
+    expect(sourceTextarea()).toBeEnabled();
+  });
+
+  it("resets the editor when the project itself switches", async () => {
+    const bridge = fixtureBridge();
+    const loadWorkspace = vi.spyOn(bridge, "loadFlowWorkspace");
+    const user = userEvent.setup();
+    const { rerender } = render(<FlowsView bridge={bridge} fence={fence} onError={vi.fn()} onToast={vi.fn()} />);
+    await screen.findByRole("region", { name: "Flow workspace" });
+    await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await screen.findByRole("group", { name: "Flow steps" });
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    fireEvent.change(sourceTextarea(), { target: { value: "# unsaved draft" } });
+
+    rerender(
+      <FlowsView
+        bridge={bridge}
+        fence={{ ...fence, projectHandle: "project:other", generation: "33333333-3333-4333-8333-333333333333" }}
+        onError={vi.fn()}
+        onToast={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(loadWorkspace).toHaveBeenCalledTimes(2));
+    expect(sourceTextarea().value).toBe("");
+    expect(screen.getByRole("heading", { name: "Select a definition" })).toBeInTheDocument();
+  });
+});

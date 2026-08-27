@@ -72,7 +72,10 @@ const MAX_DETAILS_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_PATH_BYTES: usize = 4 * 1024;
 const MAX_TIMELINE_FACTS: usize = 256;
 const MAX_EVIDENCE_HANDLES: usize = 256;
-const STARTUP_DELAY: Duration = Duration::from_millis(500);
+/// Hashing and loading a multi-GB GGUF legitimately takes tens of seconds,
+/// so the post-spawn startup poll gets a generous bound.
+const STARTUP_TIMEOUT: Duration = Duration::from_mins(2);
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
 const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
@@ -818,6 +821,9 @@ pub struct ModelImportStatusDto {
     pub hashed_bytes: u64,
     pub total_bytes: u64,
     pub failure: Option<FailureDto>,
+    /// True when the completed artifact is one of PAM's calibrated GGUFs.
+    /// Only meaningful on `complete`; false while idle, running, or failed.
+    pub calibrated: bool,
 }
 
 /// Pre-import preview of a candidate GGUF for the Control Center's manual
@@ -1463,18 +1469,51 @@ impl DesktopCore {
                 Some(error.to_string()),
             )
         })?;
-        tokio::time::sleep(STARTUP_DELAY).await;
-        if let Some(status) = child.try_wait().map_err(|error| {
-            DesktopErrorDto::unavailable(
-                "PAM could not inspect the local daemon process.",
-                Some(error.to_string()),
-            )
-        })? {
-            return Err(DesktopErrorDto::unavailable(
-                format!("The local daemon exited during startup with {status}."),
-                None,
-            ));
-        }
+        let project_id = scope.project_id();
+        // The startup probes authenticate as the GUI caller, exactly like
+        // `daemon_health`/`model_status`. Without that credential (GUI caller
+        // not registered yet) health stays Offline and only process liveness
+        // can end the wait early; the deadline still bounds it.
+        let startup_credential = match caller_id(CallerKind::Gui) {
+            Ok(caller) => load_credential(caller.clone())
+                .await
+                .ok()
+                .map(|credential| (caller, credential)),
+            Err(_) => None,
+        };
+        let health = || {
+            let startup_credential = startup_credential.clone();
+            let project_id = project_id.clone();
+            async move {
+                match startup_credential {
+                    Some((caller, credential)) => {
+                        probe_health_authenticated(caller, credential, project_id).await
+                    }
+                    None => HealthState::Offline,
+                }
+            }
+        };
+        let requested = model.clone();
+        let model_loaded = || {
+            let startup_credential = startup_credential.clone();
+            let project_id = project_id.clone();
+            let requested = requested.clone();
+            async move {
+                let (Some((caller, credential)), Some(requested)) = (startup_credential, requested)
+                else {
+                    return false;
+                };
+                matches!(
+                    load_model_status(caller, credential, project_id).await,
+                    ObservatoryState::Available(result)
+                        if result
+                            .loaded
+                            .as_ref()
+                            .is_some_and(|loaded| loaded.model_id() == requested)
+                )
+            }
+        };
+        wait_for_daemon_serving(&mut child, model.as_deref(), health, model_loaded).await?;
         match scope {
             CommandScope::Daemon => {
                 let mut state = self.inner.lock().await;
@@ -1962,6 +2001,7 @@ impl DesktopCore {
                     failure.recovery,
                 )
             }),
+            calibrated: snapshot.calibrated,
         };
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
@@ -2768,6 +2808,88 @@ fn daemon_stderr_capture() -> Stdio {
         .append(true)
         .open(logs.join("daemon-stderr.log"))
         .map_or_else(|_| Stdio::null(), Stdio::from)
+}
+
+/// Recovery text pointing at the spawned daemon's captured stderr log — the
+/// same file `daemon_stderr_capture` appends to. Falls back to naming the
+/// file when the data directory cannot be resolved.
+fn daemon_stderr_log_hint() -> String {
+    let location = user_data_dir().map_or_else(
+        |_| "logs/daemon-stderr.log under the PAM data directory".to_owned(),
+        |dir| {
+            dir.join("logs")
+                .join("daemon-stderr.log")
+                .display()
+                .to_string()
+        },
+    );
+    format!("See the daemon startup log at {location} for the failure reason.")
+}
+
+/// Bounded post-spawn verification: the daemon must keep running AND serve
+/// authenticated health before `start_daemon` may report success. When a
+/// model was requested, that model must additionally be reported loaded —
+/// health alone is not proof, because a daemon whose model load failed
+/// still serves, just without the model.
+///
+/// Only `HealthState::Healthy` is definitive: the daemon binds its socket
+/// before loading the model, so mid-load it is alive but deaf and the health
+/// probe's timeout disambiguation reports that as `Degraded` ("running but
+/// did not respond in time"). Treating that as serving would fail a healthy
+/// load seconds in, so `Degraded` and `Offline` both keep the poll going
+/// until the deadline.
+async fn wait_for_daemon_serving<H, HF, M, MF>(
+    child: &mut Child,
+    model: Option<&str>,
+    mut health: H,
+    mut model_loaded: M,
+) -> DesktopResult<()>
+where
+    H: FnMut() -> HF,
+    HF: Future<Output = HealthState>,
+    M: FnMut() -> MF,
+    MF: Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            DesktopErrorDto::unavailable(
+                "PAM could not inspect the local daemon process.",
+                Some(error.to_string()),
+            )
+        })? {
+            return Err(DesktopErrorDto::unavailable(
+                format!("The local daemon exited during startup with {status}."),
+                Some(daemon_stderr_log_hint()),
+            ));
+        }
+        match health().await {
+            HealthState::Offline | HealthState::Degraded { .. } => {}
+            HealthState::Healthy { .. } => {
+                let Some(model) = model else {
+                    return Ok(());
+                };
+                if model_loaded().await {
+                    return Ok(());
+                }
+                return Err(DesktopErrorDto::unavailable(
+                    format!("The local daemon is running, but the model {model} failed to load."),
+                    Some(daemon_stderr_log_hint()),
+                ));
+            }
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(DesktopErrorDto::unavailable(
+                format!(
+                    "The local daemon did not start serving within {} seconds.",
+                    STARTUP_TIMEOUT.as_secs()
+                ),
+                Some(daemon_stderr_log_hint()),
+            ));
+        }
+        tokio::time::sleep(STARTUP_POLL_INTERVAL.min(deadline - now)).await;
+    }
 }
 
 fn gui_registration_command(executable: &Path, root: &Path) -> tokio::process::Command {
@@ -4119,6 +4241,22 @@ pub(crate) fn model_status_dto_for_test(
     state: ObservatoryState<ModelStatusResult>,
 ) -> ModelStatusDto {
     model_status_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) async fn wait_for_daemon_serving_for_test<H, HF, M, MF>(
+    child: &mut Child,
+    model: Option<&str>,
+    health: H,
+    model_loaded: M,
+) -> DesktopResult<()>
+where
+    H: FnMut() -> HF,
+    HF: Future<Output = HealthState>,
+    M: FnMut() -> MF,
+    MF: Future<Output = bool>,
+{
+    wait_for_daemon_serving(child, model, health, model_loaded).await
 }
 
 #[cfg(test)]

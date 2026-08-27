@@ -38,6 +38,17 @@ async function controlCenterProps(scenario: FixtureScenario = "solved") {
   };
 }
 
+// Drives the manual GGUF import form to a submittable state.
+async function fillManualImport(panel: HTMLElement) {
+  await userEvent.click(within(panel).getByRole("button", { name: /Advanced — license details/ }));
+  await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/qwen3-4b-instruct-q4.gguf");
+  await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
+  await userEvent.type(within(panel).getByLabelText("License identifier"), "Apache-2.0");
+  await userEvent.type(within(panel).getByLabelText("License URL"), "https://example.com/license");
+  await userEvent.type(within(panel).getByLabelText("License notice"), "Apache License 2.0");
+  await userEvent.click(within(panel).getByLabelText(/I accept this model's license/));
+}
+
 describe("ControlCenterView", () => {
   it("leads with the daemon overview and never offers project selection", async () => {
     const props = await controlCenterProps();
@@ -255,6 +266,7 @@ describe("model runtime panel", () => {
       stage: "hashing",
       hashedBytes: 6_000_000_000,
       totalBytes: 18_000_000_000,
+      calibrated: true,
       failure: null,
     });
     render(<ControlCenterView {...props} />);
@@ -270,13 +282,14 @@ describe("model runtime panel", () => {
     const props = await controlCenterProps("model-none");
     vi.spyOn(props.bridge, "modelImportStatus")
       // The mount-time reattach check: nothing running yet.
-      .mockResolvedValueOnce({ status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, failure: null })
+      .mockResolvedValueOnce({ status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, calibrated: true, failure: null })
       .mockResolvedValue({
         status: "failed",
         model: "qwen/qwen3-4b-instruct-q4",
         stage: null,
         hashedBytes: 1_000,
         totalBytes: 4_600_000_000,
+        calibrated: true,
         failure: { kind: "unavailable", code: "model_import_failed", detail: "The GGUF digest changed on disk.", recovery: "Import the file again." },
       });
     render(<ControlCenterView {...props} />);
@@ -315,6 +328,78 @@ describe("model runtime panel", () => {
       await within(panel).findByText(/must be an absolute path to a GGUF file/),
     ).toBeInTheDocument();
     expect(props.onModelImported).not.toHaveBeenCalled();
+  });
+
+  it("warns when a completed manual import is outside PAM's calibrated set", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelImportStatus")
+      // The mount-time reattach check: nothing running yet.
+      .mockResolvedValueOnce({ status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, calibrated: true, failure: null })
+      .mockResolvedValue({
+        status: "complete",
+        model: "qwen/qwen3-4b-instruct-q4",
+        stage: null,
+        hashedBytes: 4_600_000_000,
+        totalBytes: 4_600_000_000,
+        calibrated: false,
+        failure: null,
+      });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await fillManualImport(panel);
+    await userEvent.click(within(panel).getByRole("button", { name: "Import model" }));
+
+    // The import still succeeds — the warning is additive, not a failure.
+    expect(
+      await within(panel).findByText(/not in PAM's calibrated set — it may fail to load under this Mac's runtime profile/),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).toHaveBeenCalled();
+  });
+
+  it("does not warn when a completed manual import is calibrated", async () => {
+    const props = await controlCenterProps("model-none");
+    vi.spyOn(props.bridge, "modelImportStatus")
+      .mockResolvedValueOnce({ status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, calibrated: true, failure: null })
+      .mockResolvedValue({
+        status: "complete",
+        model: "qwen/qwen3-4b-instruct-q4",
+        stage: null,
+        hashedBytes: 4_600_000_000,
+        totalBytes: 4_600_000_000,
+        calibrated: true,
+        failure: null,
+      });
+    render(<ControlCenterView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await fillManualImport(panel);
+    await userEvent.click(within(panel).getByRole("button", { name: "Import model" }));
+
+    await waitFor(() => expect(props.onModelImported).toHaveBeenCalled());
+    expect(within(panel).queryByText(/calibrated set/)).not.toBeInTheDocument();
+  });
+
+  it("re-fetches the mount-time loaders on a refresh tick without remounting the import form", async () => {
+    const props = await controlCenterProps("model-none");
+    const stats = vi.spyOn(props.bridge, "daemonStats");
+    const presets = vi.spyOn(props.bridge, "modelPresets");
+    const callers = vi.spyOn(props.bridge, "callerRegistry");
+    const { rerender } = render(<ControlCenterView {...props} refreshTick={0} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.type(within(panel).getByLabelText("Model identity"), "qwen/qwen3-4b-instruct-q4");
+    await waitFor(() => expect(stats).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(presets).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(callers).toHaveBeenCalledTimes(1));
+
+    rerender(<ControlCenterView {...props} refreshTick={1} />);
+
+    await waitFor(() => expect(stats).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(presets).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(callers).toHaveBeenCalledTimes(2));
+    // No remount: the in-progress form entry survives the refresh.
+    expect(within(panel).getByLabelText("Model identity")).toHaveValue("qwen/qwen3-4b-instruct-q4");
   });
 
   it("inspects a typed path on blur and prefills identity from what came back", async () => {

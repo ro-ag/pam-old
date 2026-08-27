@@ -20,7 +20,7 @@ use std::{
 use pam_core::ContentDigest;
 use pam_model::{
     ImportRequest, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelError, ModelKey,
-    RegisteredModel, import_existing, inspect_model_file,
+    RegisteredModel, import_existing, inspect_model_file, is_calibrated_artifact,
 };
 use pam_platform::user_data_dir;
 use pam_store::Store;
@@ -126,6 +126,10 @@ pub(crate) struct ModelImportSnapshot {
     pub(crate) hashed_bytes: u64,
     pub(crate) total_bytes: u64,
     pub(crate) failure: Option<ModelImportFailure>,
+    /// True when the registered artifact is a calibrated GGUF. Only
+    /// meaningful once the import completes; a warning flag, never a
+    /// rejection — uncalibrated artifacts still import successfully.
+    pub(crate) calibrated: bool,
 }
 
 impl ModelImportSnapshot {
@@ -137,6 +141,7 @@ impl ModelImportSnapshot {
             hashed_bytes: 0,
             total_bytes: 0,
             failure: None,
+            calibrated: false,
         }
     }
 }
@@ -228,6 +233,7 @@ impl ModelImportManager {
                 hashed_bytes: 0,
                 total_bytes,
                 failure: None,
+                calibrated: false,
             };
             progress
         };
@@ -242,6 +248,9 @@ impl ModelImportManager {
     fn finish(&self, model: String, outcome: Result<RegisteredModel, ModelImportFailure>) {
         let mut state = self.state.lock().unwrap();
         state.snapshot = match outcome {
+            // The digest here is the one `import_existing` re-verified against
+            // the exact registered bytes, so it doubles as the calibration
+            // check's input.
             Ok(registered) => ModelImportSnapshot {
                 status: ModelImportStatusKind::Complete,
                 model: Some(registered.key.id()),
@@ -249,6 +258,10 @@ impl ModelImportManager {
                 hashed_bytes: registered.size_bytes,
                 total_bytes: registered.size_bytes,
                 failure: None,
+                calibrated: is_calibrated_artifact(
+                    registered.digest.sha256_hex(),
+                    registered.size_bytes,
+                ),
             },
             Err(failure) => ModelImportSnapshot {
                 status: ModelImportStatusKind::Failed,
@@ -257,6 +270,7 @@ impl ModelImportManager {
                 hashed_bytes: state.progress.hashed_bytes(),
                 total_bytes: state.snapshot.total_bytes,
                 failure: Some(failure),
+                calibrated: false,
             },
         };
     }

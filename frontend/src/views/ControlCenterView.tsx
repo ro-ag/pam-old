@@ -136,7 +136,7 @@ export interface DaemonStatsState {
   loadError: string | null;
 }
 
-export function useDaemonStats(bridge: PamBridge, daemon: DaemonView): DaemonStatsState {
+export function useDaemonStats(bridge: PamBridge, daemon: DaemonView, refreshTick = 0): DaemonStatsState {
   const [stats, setStats] = useState<DaemonStatsDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -165,7 +165,7 @@ export function useDaemonStats(bridge: PamBridge, daemon: DaemonView): DaemonSta
     return () => {
       requestSequence.current += 1;
     };
-  }, [load, offline]);
+  }, [load, offline, refreshTick]);
 
   return { stats, loadError };
 }
@@ -297,9 +297,12 @@ export function fitsMemory(minMemoryBytes: number, hostTotalBytes: number | null
 function PresetDownload({
   bridge,
   onImported,
+  refreshTick = 0,
 }: {
   bridge: PamBridge;
   onImported: () => void;
+  /** Bumped by ⌘R; re-runs the mount-time fetch without a remount. */
+  refreshTick?: number;
 }) {
   const [presets, setPresets] = useState<ModelPresetDto[] | null>(null);
   const [hostMemory, setHostMemory] = useState<HostMemoryDto | null>(null);
@@ -360,8 +363,9 @@ function PresetDownload({
     return () => {
       cancelled = true;
     };
-    // Reattachment only ever happens once, on mount.
-  }, [bridge]);
+    // Reattachment runs on mount and again on each ⌘R tick; it never resets
+    // picker state the user has already chosen.
+  }, [bridge, refreshTick]);
 
   // Poll while a download is running; the daemon tracks one download at a
   // time and reports its own progress, so no local byte math is needed here.
@@ -623,9 +627,12 @@ function canonicalSpdxId(licenseId: string): string {
 function ManualImport({
   bridge,
   onImported,
+  refreshTick = 0,
 }: {
   bridge: PamBridge;
   onImported: () => void;
+  /** Bumped by ⌘R; re-runs the mount-time reattach without a remount. */
+  refreshTick?: number;
 }) {
   const [form, setForm] = useState({
     model: "",
@@ -638,6 +645,9 @@ function ManualImport({
   const [allowSmall, setAllowSmall] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [importState, setImportState] = useState<ImportState>({ state: "idle" });
+  // Set when an import completes against an artifact outside PAM's calibrated
+  // set — the registration succeeded, but loading it is not a tested path.
+  const [uncalibrated, setUncalibrated] = useState(false);
   const [inspect, setInspect] = useState<ModelInspectDto | null>(null);
   const inspectSequence = useRef(0);
   const busy = importState.state === "running";
@@ -679,8 +689,9 @@ function ManualImport({
     return () => {
       cancelled = true;
     };
-    // Reattachment only ever happens once, on mount.
-  }, [bridge]);
+    // Reattachment runs on mount and again on each ⌘R tick; a running import
+    // is picked up, everything else leaves the form untouched.
+  }, [bridge, refreshTick]);
 
   // Poll while an import is running; the manager hashes in the background
   // (off the desktop command gate) and reports its own progress, exactly
@@ -702,6 +713,7 @@ function ManualImport({
           });
         } else if (status.status === "complete") {
           setImportState({ state: "idle" });
+          setUncalibrated(status.calibrated === false);
           onImported();
         } else if (status.status === "failed") {
           setImportState({
@@ -893,6 +905,7 @@ function ManualImport({
       return;
     }
     setImportState({ state: "running", stage: "hashing", hashedBytes: 0, totalBytes: 0 });
+    setUncalibrated(false);
     const params: ModelImportParams = {
       model: form.model.trim(),
       path: form.path.trim(),
@@ -1070,6 +1083,13 @@ function ManualImport({
       {importState.state === "fail" && (
         <p className="model-verify is-fail" role="alert">{importState.detail}</p>
       )}
+      {uncalibrated && (
+        <p className="model-fit-warn" role="status">
+          Registered, but this artifact is not in PAM's calibrated set — it may fail to load under
+          this Mac's runtime profile. The calibrated presets in the download list above are the
+          tested path.
+        </p>
+      )}
     </form>
   );
 }
@@ -1079,9 +1099,11 @@ function ManualImport({
 function ModelImportForm({
   bridge,
   onImported,
+  refreshTick = 0,
 }: {
   bridge: PamBridge;
   onImported: () => void;
+  refreshTick?: number;
 }) {
   return (
     <div className="model-runtime model-setup">
@@ -1089,11 +1111,11 @@ function ModelImportForm({
         No local model is registered yet. Choose a curated model for PAM to download, or import one
         you already have.
       </p>
-      <PresetDownload bridge={bridge} onImported={onImported} />
+      <PresetDownload bridge={bridge} onImported={onImported} refreshTick={refreshTick} />
       <div className="model-setup-divider" role="separator">
         <span>or import a downloaded GGUF</span>
       </div>
-      <ManualImport bridge={bridge} onImported={onImported} />
+      <ManualImport bridge={bridge} onImported={onImported} refreshTick={refreshTick} />
     </div>
   );
 }
@@ -1107,6 +1129,8 @@ export interface ModelPanelProps {
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartWithModel: (modelId: string) => void;
   onModelImported: () => void;
+  /** Bumped by ⌘R; forwarded to the setup form's mount-time loaders. */
+  refreshTick?: number;
 }
 
 // The local model runtime, one panel on the launch view: state, identity,
@@ -1119,6 +1143,7 @@ export function ModelPanel({
   onOpenModelChat,
   onStartWithModel,
   onModelImported,
+  refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
   const offline = daemon.state === "stopped";
@@ -1243,7 +1268,7 @@ export function ModelPanel({
           <div className="access-list model-rows">{registered.map(restartRow)}</div>
         </div>
       ) : (
-        <ModelImportForm bridge={bridge} onImported={onModelImported} />
+        <ModelImportForm bridge={bridge} onImported={onModelImported} refreshTick={refreshTick} />
       )}
     </section>
   );
@@ -1307,6 +1332,8 @@ interface CallerRequestsPanelProps {
   registrationNeeded: boolean;
   registrationBusy: boolean;
   onRegisterCaller: () => void;
+  /** Bumped by ⌘R; re-runs the mount-time fetch without a remount. */
+  refreshTick?: number;
 }
 
 function CallerRequestsPanel({
@@ -1315,6 +1342,7 @@ function CallerRequestsPanel({
   registrationNeeded,
   registrationBusy,
   onRegisterCaller,
+  refreshTick = 0,
 }: CallerRequestsPanelProps) {
   const [rows, setRows] = useState<CallerRequestRow[] | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -1357,7 +1385,7 @@ function CallerRequestsPanel({
     return () => {
       requestSequence.current += 1;
     };
-  }, [load, offline]);
+  }, [load, offline, refreshTick]);
 
   return (
     <section className="panel" aria-labelledby="caller-requests-heading">
@@ -1545,6 +1573,9 @@ export interface ControlCenterViewProps {
   registrationNeeded?: boolean;
   registrationBusy?: boolean;
   onRegisterCaller?: () => void;
+  /** Bumped by ⌘R; re-runs the mount-time loaders without remounting, so
+   * in-progress form state (e.g. a manual import) survives a refresh. */
+  refreshTick?: number;
 }
 
 export function ControlCenterView({
@@ -1559,8 +1590,9 @@ export function ControlCenterView({
   registrationNeeded = false,
   registrationBusy = false,
   onRegisterCaller = () => {},
+  refreshTick = 0,
 }: ControlCenterViewProps) {
-  const { stats, loadError } = useDaemonStats(bridge, daemon);
+  const { stats, loadError } = useDaemonStats(bridge, daemon, refreshTick);
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
@@ -1579,6 +1611,7 @@ export function ControlCenterView({
         onOpenModelChat={onOpenModelChat}
         onStartWithModel={onStartWithModel}
         onModelImported={onModelImported}
+        refreshTick={refreshTick}
       />
       <CallerRequestsPanel
         bridge={bridge}
@@ -1586,6 +1619,7 @@ export function ControlCenterView({
         registrationNeeded={registrationNeeded}
         registrationBusy={registrationBusy}
         onRegisterCaller={onRegisterCaller}
+        refreshTick={refreshTick}
       />
     </main>
   );

@@ -745,6 +745,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     totalBytes: number;
     stage: "hashing" | "registering";
     status: "running" | "complete" | "failed";
+    calibrated: boolean;
     failure: ModelFailureDto | null;
   } | null = null;
   let modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
@@ -956,13 +957,14 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         totalBytes: 4_600_000_000,
         stage: "hashing",
         status: "running",
+        calibrated: true,
         failure: null,
       };
       return { status: "ok" };
     },
     async modelImportStatus(_fence): Promise<ModelImportStatusDto> {
       if (!importRun) {
-        return { status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, failure: null };
+        return { status: "idle", model: null, stage: null, hashedBytes: 0, totalBytes: 0, calibrated: true, failure: null };
       }
       if (importRun.status === "running") {
         if (importRun.stage === "hashing") {
@@ -982,6 +984,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         stage: importRun.status === "running" ? importRun.stage : null,
         hashedBytes: importRun.hashedBytes,
         totalBytes: importRun.totalBytes,
+        calibrated: importRun.calibrated,
         failure: importRun.failure,
       });
     },
