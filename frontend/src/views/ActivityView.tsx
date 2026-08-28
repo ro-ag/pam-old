@@ -12,6 +12,7 @@ import { DAEMON_AUTHORITY, withDaemonOperation } from "../bridge";
 import type { ActivityDto, ActivityEventDto, PamBridge, ProjectSummaryDto } from "../domain";
 import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
+import { shortCallerId } from "./CallersPanel";
 import { ConsolePanel } from "./ConsolePanel";
 
 function formatClock(occurredAtMs: number): string {
@@ -100,7 +101,7 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
       <div>
         <strong>{event.action}</strong>
         <p title={label.title}>
-          {formatClock(event.occurredAtMs)} · {event.callerId} · {label.text}
+          {formatClock(event.occurredAtMs)} · {shortCallerId(event.callerId)} · {label.text}
           {event.outcome && ` · ${event.outcome}`}
         </p>
       </div>

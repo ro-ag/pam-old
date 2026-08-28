@@ -190,15 +190,23 @@ function ModelStatusTile({
           ? { label: "ON DECK", tone: "observed" }
           : { label: "NONE", tone: "not-reported" };
   const identity = loaded?.modelId ?? onDeck?.modelId ?? "No local model yet";
+  // The tile is one cell of the stat strip, so the identity only reads if it
+  // gets the cell's full width: the pill shares the label's line instead of
+  // competing with it, and the vendor prefix — the same for every model in a
+  // catalogue — is dropped in favour of the name. The full id stays the
+  // tooltip.
+  const name = identity.includes("/") ? identity.slice(identity.indexOf("/") + 1) : identity;
 
   return (
-    <button type="button" className="project-stat group flex items-center gap-3" onClick={onOpenModels}>
+    <button type="button" className="project-stat model-stat group flex items-center gap-3" onClick={onOpenModels}>
       <span className="project-stat-icon"><Brain size={21} weight="bold" /></span>
       <div>
-        <small>Local model</small>
-        <strong title={identity}>{identity}</strong>
+        <small>
+          Local model
+          <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
+        </small>
+        <strong title={identity}>{name}</strong>
       </div>
-      <span className={`state-pill state-pill--${pill.tone}`}>{pill.label}</span>
     </button>
   );
 }
