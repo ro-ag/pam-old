@@ -6,11 +6,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use pam_client::{ClientExchange, StatusError};
 use pam_core::{
     ApprovalId, CallerCredential, CallerId, EvidenceHandle, GrantId, IdempotencyKey, ProjectId,
     RequestId,
 };
-use pam_daemon::{ClientExchange, StatusError};
 use pam_model::{
     ImportRequest, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelKey, import_existing,
 };
@@ -1296,7 +1296,7 @@ async fn stream_flow_exchange(
     ambiguous_retry: Option<&str>,
 ) -> i32 {
     let mut unexpected_event = false;
-    let result = pam_daemon::request_exchange_streaming(
+    let result = pam_client::request_exchange_streaming(
         &LocalEndpoint::default_for_user(),
         request,
         timeout,
@@ -1522,7 +1522,7 @@ async fn exchange(
     request: &pam_protocol::RequestEnvelope,
     timeout: Duration,
 ) -> Result<ClientExchange, StatusError> {
-    pam_daemon::request_exchange(&LocalEndpoint::default_for_user(), request, timeout).await
+    pam_client::request_exchange(&LocalEndpoint::default_for_user(), request, timeout).await
 }
 
 async fn discover_context(approval_id: Option<ApprovalId>) -> Option<RequestContext> {

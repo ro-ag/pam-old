@@ -4,10 +4,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use pam_client::{request_exchange, request_status};
 use pam_core::{
     ApprovalId, CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId,
 };
-use pam_daemon::{DaemonConfig, request_exchange, request_status, serve_until};
+use pam_daemon::{DaemonConfig, serve_until};
 use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceName, ResourceScope};
 use pam_protocol::{

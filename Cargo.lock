@@ -3051,6 +3051,7 @@ dependencies = [
  "cap-std",
  "clap",
  "directories",
+ "pam_client",
  "pam_core",
  "pam_daemon",
  "pam_flow",
@@ -3065,6 +3066,16 @@ dependencies = [
  "sha2",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "pam_client"
+version = "0.8.3"
+dependencies = [
+ "pam_core",
+ "pam_platform",
+ "pam_protocol",
+ "tokio",
 ]
 
 [[package]]
@@ -3108,6 +3119,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "nix",
+ "pam_client",
  "pam_connectors",
  "pam_core",
  "pam_flow",
@@ -3142,6 +3154,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "directories",
+ "pam_client",
  "pam_core",
  "pam_daemon",
  "pam_flow",

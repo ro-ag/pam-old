@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
+use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, EvidenceHandle, IdempotencyKey, ProjectId, RequestId};
-use pam_daemon::request_exchange;
 use pam_flow::{FlowRunResult, FlowSemanticEvent, FlowWaitReason, RunOutcome, TransitionKind};
 use pam_platform::LocalEndpoint;
 use pam_protocol::{

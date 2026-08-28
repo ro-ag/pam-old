@@ -3,8 +3,8 @@ use std::{path::Path, time::Duration};
 #[cfg(test)]
 use std::{collections::HashSet, path::PathBuf};
 
+use pam_client::{ExchangeError, request_exchange, request_status};
 use pam_core::{CallerCredential, CallerId, IdempotencyKey, ProjectId, RequestId};
-use pam_daemon::{ExchangeError, request_exchange, request_status};
 use pam_platform::{LocalEndpoint, NativeSecretBackend, SecretLocator, SecretStore};
 use pam_protocol::{FlowProjectRoot, RequestEnvelope, ResultBody, ResultPayload, StatusResult};
 use uuid::Uuid;

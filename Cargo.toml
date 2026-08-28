@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/pam_cli",
+    "crates/pam_client",
     "crates/pam_core",
     "crates/pam_protocol",
     "crates/pam_platform",
@@ -48,6 +49,7 @@ zeromq = { version = "=0.6.0", default-features = false, features = ["ipc-transp
 url = "=2.5.8"
 
 pam_cli = { path = "crates/pam_cli" }
+pam_client = { path = "crates/pam_client" }
 pam_core = { path = "crates/pam_core" }
 pam_protocol = { path = "crates/pam_protocol" }
 pam_platform = { path = "crates/pam_platform" }
