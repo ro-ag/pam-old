@@ -234,6 +234,10 @@ pub struct DaemonConfig {
     /// Holds an admitted flow preflight for deterministic saturation tests.
     #[cfg(test)]
     pub(crate) flow_preflight_delay: Duration,
+    /// Stands in for a multi-minute model load so tests can exercise the
+    /// startup window during which clients may connect.
+    #[cfg(test)]
+    pub(crate) model_load_delay: Duration,
     /// Preserves durable status fixtures used to exercise scheduler recovery.
     #[cfg(test)]
     pub(crate) status_dispatch: TestStatusDispatch,
@@ -256,6 +260,8 @@ impl Default for DaemonConfig {
             flow_preflight_capacity: FLOW_PREFLIGHT_CAPACITY,
             #[cfg(test)]
             flow_preflight_delay: Duration::ZERO,
+            #[cfg(test)]
+            model_load_delay: Duration::ZERO,
             #[cfg(test)]
             status_dispatch: TestStatusDispatch::Immediate,
         }
@@ -388,6 +394,10 @@ where
     #[cfg(not(test))]
     let flow_preflight_delay = Duration::ZERO;
     #[cfg(test)]
+    let model_load_delay = config.model_load_delay;
+    #[cfg(not(test))]
+    let model_load_delay = Duration::ZERO;
+    #[cfg(test)]
     let durable_status = config.status_dispatch == TestStatusDispatch::Durable;
     #[cfg(not(test))]
     let durable_status = false;
@@ -410,10 +420,18 @@ where
             .clone()
             .map(|override_backend| override_backend.0),
     );
-    let mut server = ServerTransport::bind(&config.endpoint).await?;
     connectors.warm(log.clone());
+    // The endpoint is the daemon's only advertisement that it can serve, so it
+    // is bound after the model is loaded rather than before. Loading a
+    // multi-GB model is minutes of work and the control center probes health
+    // throughout it; a Router socket left bound but unpolled for that long
+    // keeps every abandoned probe in its fair queue, and the accept loop then
+    // re-arms each dead peer's framed reader forever instead of serving. With
+    // nothing bound those probes fail fast and honestly, and the ownership
+    // lock taken above still keeps a second daemon out of the window.
     let (model_surface, model_worker) =
-        start_model_service(&store, config.model.clone(), &log).await?;
+        load_model(&store, config.model.clone(), &log, model_load_delay).await?;
+    let mut server = ServerTransport::bind(&config.endpoint).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
     let (scheduler_tx, scheduler_rx) = mpsc::channel::<()>(SCHEDULER_CAPACITY);
     let mut handlers = JoinSet::new();
@@ -557,6 +575,17 @@ where
     store.shutdown().await?;
     drop(ownership);
     result
+}
+
+/// Loads the model, holding the startup window open for tests.
+async fn load_model(
+    store: &Store,
+    key: Option<ModelKey>,
+    log: &DaemonLog,
+    load_delay: Duration,
+) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
+    tokio::time::sleep(load_delay).await;
+    start_model_service(store, key, log).await
 }
 
 #[cfg(target_os = "macos")]
