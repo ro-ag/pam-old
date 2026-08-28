@@ -41,7 +41,7 @@ use super::{
     },
     lifecycle::{DaemonConfig, decode_stored_result, serve_until_with_delay},
 };
-use crate::request_exchange;
+use pam_client::request_exchange;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 

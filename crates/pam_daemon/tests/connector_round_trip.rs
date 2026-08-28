@@ -6,8 +6,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId};
-use pam_daemon::{ConnectorSecretOverride, DaemonConfig, request_exchange, serve_until};
+use pam_daemon::{ConnectorSecretOverride, DaemonConfig, serve_until};
 use pam_platform::{LocalEndpoint, SecretBackend, SecretBackendError, SecretLocator};
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceScope};
 use pam_protocol::{

@@ -39,10 +39,9 @@ use super::lifecycle::{
     protocol_caller_summary, protocol_project_current, request_audit_event_id, request_preflight,
     serve_until_with_delay,
 };
+use crate::DaemonError;
 use crate::logging::{DaemonLog, LogLevel};
-use crate::{
-    DaemonError, ExchangeError, request_exchange, request_exchange_streaming, request_status,
-};
+use pam_client::{ExchangeError, request_exchange, request_exchange_streaming, request_status};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -2552,7 +2551,7 @@ async fn flow_only_observers_hide_generic_work_and_cancel_does_not_mutate_it() {
     let _ = fs::remove_dir_all(runtime);
 }
 
-fn status_queue_depth(exchange: &crate::StatusExchange) -> u64 {
+fn status_queue_depth(exchange: &pam_client::StatusExchange) -> u64 {
     let ResultBody::Success {
         payload: ResultPayload::Status(status),
         ..

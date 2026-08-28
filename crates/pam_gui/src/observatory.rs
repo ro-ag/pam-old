@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, ProjectId};
-use pam_daemon::request_exchange;
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,

@@ -71,7 +71,7 @@ fn project_catalog_keeps_current_first_and_deduplicates_canonical_roots() {
 fn timeout_with_no_daemon_process_classifies_as_offline() {
     let state = super::control_center::health_from_timeout(
         Some(pam_platform::DaemonRuntimeState::NotRunning),
-        &pam_daemon::ExchangeError::DeadlineExceeded,
+        &pam_client::ExchangeError::DeadlineExceeded,
     );
     assert_eq!(state, HealthState::Offline);
 }
@@ -80,7 +80,7 @@ fn timeout_with_no_daemon_process_classifies_as_offline() {
 fn timeout_with_a_live_daemon_reports_an_unresponsive_daemon() {
     let state = super::control_center::health_from_timeout(
         Some(pam_platform::DaemonRuntimeState::Running { pid: Some(4242) }),
-        &pam_daemon::ExchangeError::DeadlineExceeded,
+        &pam_client::ExchangeError::DeadlineExceeded,
     );
     match state {
         HealthState::Degraded { detail, recovery } => {
@@ -96,7 +96,7 @@ fn timeout_with_a_live_daemon_reports_an_unresponsive_daemon() {
 fn timeout_with_an_unreadable_probe_keeps_the_original_error() {
     let state = super::control_center::health_from_timeout(
         None,
-        &pam_daemon::ExchangeError::DeadlineExceeded,
+        &pam_client::ExchangeError::DeadlineExceeded,
     );
     match state {
         HealthState::Degraded { detail, .. } => {

@@ -9,8 +9,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use pam_client::StatusError;
 use pam_core::{ContentDigest, EvidenceHandle};
-use pam_daemon::StatusError;
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
     EvidenceChunk, EvidenceMetadata, Failure, MAX_EVIDENCE_CHUNK_SIZE, OperationTruth,
@@ -193,7 +193,7 @@ pub(crate) async fn download_evidence(
     handle: EvidenceHandle,
     request_timeout: Duration,
 ) -> Result<EvidenceDownload, EvidenceError> {
-    let inspect = pam_daemon::request_exchange(
+    let inspect = pam_client::request_exchange(
         endpoint,
         &context.inspect_evidence(handle.clone()),
         request_timeout,
@@ -218,7 +218,7 @@ pub(crate) async fn download_evidence(
         let remaining = assembler.metadata.size_bytes - offset;
         let length = remaining.clamp(1, MAX_EVIDENCE_CHUNK_SIZE as u64);
         let request = context.read_evidence(handle.clone(), offset, length)?;
-        let exchange = pam_daemon::request_exchange(endpoint, &request, request_timeout).await?;
+        let exchange = pam_client::request_exchange(endpoint, &request, request_timeout).await?;
         if !exchange.events.is_empty() {
             return Err(EvidenceError::UnexpectedEvents);
         }

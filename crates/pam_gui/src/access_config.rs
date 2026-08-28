@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, IdempotencyKey, ProjectId, RequestId};
-use pam_daemon::request_exchange;
 use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ConfigurationPresence, Failure, FailureCode, NetworkDiagnosticsResult, OperationTruth,
