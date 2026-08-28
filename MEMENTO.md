@@ -79,7 +79,7 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - scope: project
 - rule: In the pam repo, any file the memento CLI touches (MEMENTO.md via hit, AGENTS.md/CLAUDE.md via promote) must have its trailing blank line at EOF stripped before landing — the Foundation gate's git diff --check fails main on it
 - fix: Applies to ANY file in the repo, not just MEMENTO.md/AGENTS.md/CLAUDE.md — a subagent-authored source file hit it too (frontend/src/views/ModelsView.test.tsx). The Foundation job runs: git diff --check $(git hash-object -t tree /dev/null) HEAD. Check before pushing with that exact command; strip with: printf '%s\n' "$(cat FILE)" > FILE. Brief subagents to run the diff --check themselves, since Foundation fails fast and skips every other job.
-- hits: 2026-08-24, 2026-08-24, 2026-08-27
+- hits: 2026-08-24, 2026-08-24, 2026-08-27, 2026-08-28
 - cost: 20
 - status: enforced -> /Users/rodox/dev/rs/pam/AGENTS.md
 

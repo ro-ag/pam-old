@@ -317,10 +317,6 @@ UI acceptance records current native-renderer evidence on the available macOS
 host and Parallels Ubuntu guest, without claiming Windows or duplicate CPU
 architectures as independently exercised UI surfaces.
 
-The original design prototype lives in [prototype/](prototype/) with its own
-[visual QA](prototype/design-qa.md); the approved PAM Current screen remains
-the content contract for the production interface.
-
 ## Documentation
 
 - [Help &amp; documentation site](https://ro-ag.github.io/pam/) — install,

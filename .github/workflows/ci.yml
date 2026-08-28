@@ -28,7 +28,6 @@ jobs:
     outputs:
       has_cargo: ${{ steps.rust_workspace.outputs.has_cargo }}
       has_frontend: ${{ steps.frontend.outputs.has_frontend }}
-      has_prototype: ${{ steps.prototype.outputs.has_prototype }}
       rust_changed: ${{ steps.rust_changes.outputs.changed }}
     steps:
       - name: Check out repository
@@ -89,16 +88,6 @@ jobs:
             done < <(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")
           fi
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
-
-      - name: Detect interactive prototype
-        id: prototype
-        shell: bash
-        run: |
-          if [[ -f prototype/package-lock.json ]]; then
-            echo "has_prototype=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_prototype=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Detect desktop frontend
         id: frontend
@@ -495,32 +484,3 @@ jobs:
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
           retention-days: 7
-
-  prototype:
-    name: Interactive prototype
-    needs: foundation
-    if: ${{ needs.foundation.outputs.has_prototype == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: prototype
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: prototype/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit --no-fund
-
-      - name: Build prototype
-        run: npm run build
-
-      - name: Test Sites package
-        run: npm run test:sites
