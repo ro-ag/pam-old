@@ -516,8 +516,8 @@ network APIs are not implemented.
 
 - Benign presence-only metadata disclosure, confusing recovery text, or output
   instability that does not cross caller/project boundaries or hide failure.
-- A developer/test-only issue in the prototype or `cfg(test)` bypass path with
-  no route into the production binary.
+- A developer/test-only issue in a `cfg(test)` bypass path with no route into
+  the production binary.
 - Availability loss that requires the trusted local administrator to corrupt
   their own state and is recovered by documented, bounded repair.
 
