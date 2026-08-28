@@ -405,9 +405,14 @@ fn flooding_git_output_is_bounded_terminated_and_redacted() {
     let (_home, library) = library();
     let scripts = TestDirectory::new("install-git-flood");
     let executable = scripts.path().join("git-flood");
+    // One write of 128 KiB clears the 64 KiB stderr bound on the drain's first
+    // read, and the deadline is far past any scheduling delay, so the output
+    // bound is what trips even when the machine is saturated.
     write_executable(
         &executable,
-        "#!/bin/sh\nwhile :; do printf 'private-output-that-must-not-leak' >&2; done\n",
+        "#!/bin/sh\nchunk='private-output-that-must-not-leak'\n\
+         while [ ${#chunk} -lt 131072 ]; do chunk=\"$chunk$chunk\"; done\n\
+         while :; do printf '%s' \"$chunk\" >&2; done\n",
     );
     let source = ArtifactInstallSource::git("file:///unused", "skill.md").unwrap();
     let error = install_git_artifact_with_execution(
@@ -415,7 +420,7 @@ fn flooding_git_output_is_bounded_terminated_and_redacted() {
         entry("flood"),
         &source,
         &executable,
-        Duration::from_secs(2),
+        Duration::from_mins(1),
     )
     .unwrap_err();
     assert_eq!(error, ArtifactInstallError::GitOutputTooLarge);
@@ -435,13 +440,16 @@ fn oversized_git_workspace_is_terminated_reaped_and_removed() {
         "#!/bin/sh\ndd if=/dev/zero of=oversized.pack bs=1024 count=32 2>/dev/null\nsleep 30\n",
     );
     let source = ArtifactInstallSource::git("file:///unused", "skill.md").unwrap();
+    // The workspace grows to four times its bound before the fake git sleeps,
+    // and the deadline is far past any spawn delay, so the workspace bound is
+    // what trips even when the machine is saturated.
     assert_eq!(
         install_git_artifact_with_execution_limits(
             &library,
             entry("workspace-overflow"),
             &source,
             &executable,
-            Duration::from_secs(2),
+            Duration::from_mins(1),
             8 * 1024,
         )
         .unwrap_err(),
