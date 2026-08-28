@@ -411,7 +411,9 @@ async fn daemon_scope_grant_authorizes_the_access_boundary_read() {
             ProjectId::daemon_scope(),
             IdempotencyKey::from("scope-network-key"),
         )),
-        Duration::from_secs(2),
+        // Reading the native trust store is a security-server round trip, not a
+        // durable read like the other daemon-scope probes in this file.
+        KEYCHAIN_EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
