@@ -594,7 +594,11 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 
 @layer product-views {
-.flow-workspace { display: grid; height: calc(100% - 85px); min-height: 420px; grid-template-columns: clamp(190px, 29%, 320px) minmax(0, 1fr); }
+/* Fixed pane widths, not percentages: on a 2K window a percentage track grows
+   with the viewport and the same catalog reflows at every width. 300px holds a
+   catalog row (27px icon + a 10px mono flow id) without ellipsis; the leftover
+   width goes to the editor. Both panes still collapse at their breakpoints. */
+.flow-workspace { display: grid; height: calc(100% - 85px); min-height: 420px; grid-template-columns: 300px minmax(0, 1fr); }
 .flow-catalog { min-width: 0; border-right: 1px solid var(--pam-line); background: rgba(3, 22, 42, 0.63); }
 .flow-list { display: grid; gap: 5px; padding: 9px; }
 .flow-list button { display: grid; min-height: 67px; grid-template-columns: 27px minmax(0, 1fr); gap: calc(8px * var(--pam-density)); align-items: center; padding: calc(9px * var(--pam-density)) 9px; border: 1px solid transparent; border-radius: 6px; color: var(--pam-muted); background: transparent; cursor: pointer; text-align: left; }
@@ -635,7 +639,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .editor-title-lead > div { display: grid; gap: 4px; min-width: 0; }
 .flow-catalog-toggle { display: inline-flex; width: 28px; height: 28px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid var(--pam-line); border-radius: 6px; color: var(--pam-muted); background: transparent; cursor: pointer; }
 .flow-catalog-toggle:hover, .flow-catalog-toggle[aria-pressed="true"] { color: var(--pam-text); background: rgba(18, 47, 70, 0.76); }
-.flow-visual { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(230px, 34%, 420px); background: rgba(2, 13, 27, 0.82); }
+/* 360px is the widest step field plus its 11px gutters; beyond that the
+   inspector only steals canvas from the graph. */
+.flow-visual { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) 360px; background: rgba(2, 13, 27, 0.82); }
 .flow-canvas { position: relative; min-width: 0; min-height: 0; border-right: 1px solid var(--pam-line); }
 .flow-canvas .react-flow { background: transparent; }
 .flow-node { display: grid; gap: 4px; min-width: 190px; max-width: 230px; padding: 9px 11px; border: 1px solid var(--pam-line); border-radius: 6px; color: var(--pam-text); background: rgba(6, 26, 49, 0.92); font-size: 11px; }
@@ -1328,15 +1334,32 @@ button.project-stat { cursor: pointer; text-align: left; }
   .command-modal { top: 8px; width: calc(100vw - 16px); }
 }
 
+/* The 2K default. One breakpoint owns every wide-viewport rule; it is the CSS
+   half of WIDE_VIEWPORT_QUERY in useMediaQuery.ts. */
 @media (min-width: 1360px) {
   .wide-split { display: grid; align-items: stretch; grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr); gap: calc(12px * var(--pam-density)); }
   .wide-split > .panel { min-width: 0; }
-  .access-panel .access-list,
-  .activity-feed .access-list:not(.console-list) { grid-template-columns: repeat(2, minmax(380px, 1fr)); }
-  .access-panel .access-list article:nth-child(odd),
-  .activity-feed .access-list:not(.console-list) article:nth-child(odd) { border-right: 1px solid var(--pam-line); }
-  .access-panel .access-list > p,
-  .activity-feed .access-list:not(.console-list) > p { grid-column: 1 / -1; }
+  /* The stat strip is one bordered ribbon: at the supported width it is a
+     single row of exactly as many cells as there are tiles (six on Overview,
+     three on Activity), never an auto-fit reflow with an orphan second row. */
+  .project-overview { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  /* Row lists that own the full canvas width flow two-up; a list inside a
+     .wide-split column keeps one row per item. */
+  :is(.daemon-access-panel .access-list,
+      .access-panel .access-list,
+      .activity-feed .access-list:not(.console-list),
+      .caller-request-list,
+      .project-usage-list) { grid-template-columns: repeat(2, minmax(380px, 1fr)); }
+  :is(.daemon-access-panel .access-list,
+      .access-panel .access-list,
+      .activity-feed .access-list:not(.console-list),
+      .caller-request-list,
+      .project-usage-list) > article:nth-child(odd) { border-right: 1px solid var(--pam-line); }
+  :is(.daemon-access-panel .access-list,
+      .access-panel .access-list,
+      .activity-feed .access-list:not(.console-list),
+      .caller-request-list,
+      .project-usage-list) > p { grid-column: 1 / -1; }
 }
 }
 

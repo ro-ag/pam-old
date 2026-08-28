@@ -62,7 +62,7 @@ export function DaemonAccessPanel({ bridge, onGrantsChanged }: DaemonAccessPanel
   }, [bridge, onGrantsChanged]);
 
   return (
-    <section className="panel" aria-labelledby="daemon-access-heading">
+    <section className="panel daemon-access-panel" aria-labelledby="daemon-access-heading">
       <div className="panel-title">
         <div><span className="eyebrow">Daemon scope</span><h2 id="daemon-access-heading">Capabilities this window uses</h2></div>
         <LockKey size={22} />

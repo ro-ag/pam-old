@@ -8,14 +8,16 @@ Ventisquero provides Mist light and Bedrock dark, with Ice actions and
 restrained copper events. Viña del Mar provides Dawn light and Night dark,
 with violet actions and restrained coral events. Inter carries interface text;
 Ventisquero uses Archivo for display and IBM Plex Mono for data, while Viña
-uses Space Grotesk for display and JetBrains Mono for data. All seven views
-share one shell and one spatial grammar in all four appearances. A visible
-surface must never combine tokens from both families.
+uses Space Grotesk for display and JetBrains Mono for data. The six primary
+views and Settings share one shell and one spatial grammar in all four
+appearances. A visible surface must never combine tokens from both
+families.
 
 ## Authorities
 
-- View and content authority: `frontend/src/App.tsx` (the seven-view switch),
-  `frontend/src/selectors.ts`, and the typed daemon responses.
+- View and content authority: `frontend/src/App.tsx` (the switch over the
+  `ViewId` union: six primary views plus Settings), `frontend/src/selectors.ts`,
+  and the typed daemon responses.
 - Theme authority: `frontend/src/styles.css` owns both families' semantic
   token maps (the `modernization` layer), `frontend/src/theme.ts` owns family,
   variant, and density selection and persistence, and
@@ -97,14 +99,15 @@ elevation; hierarchy comes from grouping and whitespace. `.panel` carries no
 padding of its own — `.panel-title` and `.access-list article` supply the 20px
 gutter, and loose content inside a panel is wrapped in `.panel-body`.
 
-Comfortable spacing tokens are `4 / 8 / 12 / 16 / 20 / 24 / 32px`. Compact
-density is a real alternate scale, not another name for comfortable:
-`3 / 6 / 9 / 12 / 14 / 17 / 22px`. Density is a single `--density` factor (1
-comfortable, 0.8 compact); component vertical metrics consume the tokens or
-the factor, while font sizes, borders, radii, column widths, and the fixed
-shell geometry (248/5/68/52/34) never scale, and interactive targets clamp at
-a 28px floor. The density toggle lives in the toolbar theme menu beside
-family and variant and persists the same way.
+The six spacing tokens `--pam-space-050` through `--pam-space-300` carry
+`4 / 8 / 12 / 16 / 20 / 24px` at comfortable density. Compact density is a real
+alternate scale, not another name for comfortable: `3 / 6 / 9 / 12 / 14 / 17px`.
+Density is a single `--pam-density` factor (1 comfortable, 0.8 compact);
+component vertical metrics consume the tokens or the factor, while font sizes,
+borders, radii, column widths, and the fixed shell geometry
+(248/5/68/52/34/300/360) never scale, and interactive targets clamp at a 28px
+floor. The density toggle lives in the toolbar theme menu beside family and
+variant and persists the same way.
 
 ## Sidebar, toolbar, and canvas anatomy
 
@@ -116,25 +119,36 @@ their full accessible name. The daemon control reflects the probed daemon
 lifecycle and can pause/resume PAM.
 
 The toolbar is the canvas's 52px top row; its icon controls are 34px square.
-The left group holds the sidebar toggle and breadcrumb; the right group holds
-the command palette button, the theme/density menu, refresh, and the bounded
-queue button. Theme family and variant persist independently, restore before
-the first React render, and apply at the document root so portalled menus and
-dialogs share the selected tokens. On macOS the window uses an overlay
+The left group holds the sidebar toggle and the breadcrumb; the right group
+holds the command palette button, the bounded queue button (only while a queue
+count is reported), refresh, and the theme/density menu. Theme family and
+variant persist independently, restore before the first React render, and
+apply at the document root so portalled menus and dialogs share the selected
+tokens. On macOS the window uses an overlay
 titlebar with a hidden native title, explicit drag regions, and a
 traffic-light-safe sidebar inset.
 
 Each view renders inside `.canvas`, the scrollable canvas body. Overview
 opens with a `.project-overview` stat strip (one bordered strip with internal
-dividers, auto-fit `minmax(176px, 1fr)` tiles, the last of which is the
-navigating model tile) followed by the full-width heatmap panel; the heatmap
-fills the panel width at desktop sizes and scrolls horizontally only when the
-panel is narrower than its content.
-The Flows workspace is a two-column grid — a catalog column
-`clamp(190px, 29%, 320px)` and the editor — and the visual editor splits into
-canvas plus a step inspector of `clamp(230px, 34%, 420px)`; percentage tracks
-are px-capped so 2K windows do not balloon the side panels. The flow review
-and diff inspector panels cap at 130px and scroll.
+dividers; six tiles, the last of which is the navigating model tile) followed
+by the full-width heatmap panel; Activity opens with the same strip carrying
+three tiles. At the supported width the strip is a single row of exactly as
+many equal cells as it has tiles (`grid-auto-flow: column`), never an auto-fit
+reflow with an orphan second row; below the wide breakpoint it degrades to
+auto-fit `minmax(176px, 1fr)` and may wrap. The heatmap fills the panel width
+at desktop sizes and scrolls horizontally only when the panel is narrower than
+its content.
+
+The two workspace-internal panes are fixed-width, not percentage-elastic: a
+percentage track grows with the window, so the same catalog reflowed at every
+width. The Flows workspace is a two-column grid — a **300px** catalog column
+and the editor — and the visual editor splits into canvas plus a **360px**
+step inspector. 300px holds a catalog row (27px icon plus a 10px mono flow id)
+without ellipsis; 360px holds the widest step field plus its gutters. Both
+keep their existing narrow collapses: at 960px and below the workspace stacks
+to a single column, and at 700px and below the graph canvas is hidden and the
+step inspector takes the row. The flow review and diff inspector panels cap
+at 130px and scroll.
 
 ## Drawers, dialogs, and overlays
 
@@ -158,14 +172,25 @@ scrim uses the theme's `--pam-overlay` token with a backdrop blur.
 ## Wide-viewport (2K) rules
 
 The layout assumes a 2K-class desktop window; nothing in the shipping UI
-requires a narrow viewport. At 1360px and above, wide viewports use a
-list+detail grammar instead of stacking: Skills, and Access for its
-callers/connectors pair, place their paired panels in a two-column
-`wide-split` grid
-(`minmax(360px, 0.9fr) | minmax(420px, 1.1fr)`), and the Access and Activity
-lists flow their rows two-up (`repeat(2, minmax(380px, 1fr))`), with their
-empty and status rows spanning both columns (`grid-column: 1 / -1`). This
-widens content only; the shell geometry is unchanged.
+requires a narrow viewport. 1360px is the single wide breakpoint: one
+`@media (min-width: 1360px)` block in `styles.css` owns every wide rule, and
+`WIDE_VIEWPORT_QUERY` in `frontend/src/useMediaQuery.ts` is its JavaScript
+half — the views that swap tabs for panels (Skills, Access) read that constant
+rather than declaring a breakpoint of their own.
+
+At 1360px and above, wide viewports use a list+detail grammar instead of
+stacking: Skills, and Access for its callers/connectors pair, place their
+paired panels in a two-column `wide-split` grid
+(`minmax(360px, 0.9fr) | minmax(420px, 1.1fr)`). Every row list that owns the
+full canvas width flows two-up (`repeat(2, minmax(380px, 1fr))`, odd rows
+carrying the divider, empty and status rows spanning both columns with
+`grid-column: 1 / -1`): the Access daemon-scope grants, the Access
+authorized-capability list, the Access requests-per-caller list, the Activity
+feed, and the Overview project-usage list. A list that already sits inside a `wide-split` column — registered
+callers, connectors, skill inventory — keeps one row per item, and the debug
+console keeps its log lines single-file. The Overview and Activity stat strips
+pin to one row here. This widens content only; the shell geometry is
+unchanged.
 
 Narrow-viewport media queries remain in `styles.css` only as graceful
 degradation for an undersized window; they are not product targets and must
