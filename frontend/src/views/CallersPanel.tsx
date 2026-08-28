@@ -19,8 +19,13 @@ const READABLE_CALLER_ID = 24;
 // IDs are UUIDs, so a long ID is shortened whether or not a kind badge is
 // present — a legacy row (no recorded kind) is otherwise two indistinguishable
 // 36-character strings. The full ID is always the tooltip.
+/** One shortening rule, so every surface that prints a caller ID agrees. */
+export function shortCallerId(callerId: string): string {
+  return callerId.length > READABLE_CALLER_ID ? `${callerId.slice(0, 8)}…` : callerId;
+}
+
 export function CallerLabel({ callerId, kind }: { callerId: string; kind: string | null }) {
-  const label = callerId.length > READABLE_CALLER_ID ? `${callerId.slice(0, 8)}…` : callerId;
+  const label = shortCallerId(callerId);
   return (
     <strong title={callerId}>
       {kind && <span className="state-pill state-pill--observed">{kind.toUpperCase()}</span>}

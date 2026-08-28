@@ -54,7 +54,12 @@ describe("OverviewView", () => {
 
     const overview = screen.getByRole("region", { name: "Daemon overview" });
     const tile = within(overview).getByRole("button", { name: /Local model/ });
-    expect(within(tile).getByText("qwen/qwen3-14b-instruct-q4")).toBeInTheDocument();
+    // The cell is too narrow for a vendor-qualified id — sharing its line with
+    // the state pill left it ellipsised to "qwen…" — so the tile shows the
+    // name and keeps the full id as the tooltip.
+    const identity = within(tile).getByText("qwen3-14b-instruct-q4");
+    expect(identity).toBeInTheDocument();
+    expect(identity).toHaveAttribute("title", "qwen/qwen3-14b-instruct-q4");
     expect(within(tile).getByText("LOADED")).toBeInTheDocument();
 
     await userEvent.click(tile);

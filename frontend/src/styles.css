@@ -1133,6 +1133,12 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .project-stat:last-child { border-right: 0; }
 /* The model tile is the one stat that navigates; it keeps the strip's shape. */
 button.project-stat { cursor: pointer; text-align: left; }
+/* Its state pill rides the label line so the model identity gets the cell's
+   full width; sharing one line with the pill left the identity ~90px of a
+   218px cell and it ellipsised to "qwen…". */
+.model-stat > div { min-width: 0; }
+.model-stat small { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.model-stat strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-stat:hover { transform: none; background: var(--pam-surface); box-shadow: none; }
 .project-stat-icon { display: grid; width: calc(36px * var(--density)); height: calc(36px * var(--density)); flex: 0 0 calc(36px * var(--density)); place-items: center; border-radius: 10px; color: var(--pam-ice); background: var(--pam-ice-soft); }
 .project-stat-icon--attention { color: var(--pam-copper); background: color-mix(in srgb, var(--pam-copper) 14%, transparent); }
