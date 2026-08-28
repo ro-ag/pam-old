@@ -1525,6 +1525,28 @@ fn fake_daemon_script(name: &str, body: &str) -> (std::path::PathBuf, std::path:
     (path, directory)
 }
 
+/// Spawns a script written by `fake_daemon_script`, retrying `ETXTBSY`.
+///
+/// Writing a file and then exec'ing it is racy in a multi-threaded process:
+/// a sibling test that forks while this file's write descriptor is still
+/// open leaves the child holding it, and the kernel then refuses the exec
+/// with "Text file busy". Unique paths do not help — the descriptor is
+/// inherited, not the name. The window is microseconds, so a short bounded
+/// retry closes it without hiding a real failure.
+#[cfg(unix)]
+fn spawn_fake_daemon(executable: &std::path::Path) -> std::process::Child {
+    for _ in 0..50 {
+        match std::process::Command::new(executable).spawn() {
+            Ok(child) => return child,
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => panic!("spawning {}: {error}", executable.display()),
+        }
+    }
+    panic!("{} stayed busy for a second", executable.display());
+}
+
 /// Regression: a daemon that dies after spawn (e.g. its model load fails)
 /// must not be reported as a successful start, and the error must point at
 /// the captured stderr log. The health prober stays Offline so only process
@@ -1533,7 +1555,7 @@ fn fake_daemon_script(name: &str, body: &str) -> (std::path::PathBuf, std::path:
 #[tokio::test]
 async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
     let (executable, directory) = fake_daemon_script("early-exit", "exit 3");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
 
     let error = wait_for_daemon_serving_for_test(
         &mut child,
@@ -1571,7 +1593,7 @@ async fn a_daemon_that_exits_during_startup_is_not_a_successful_start() {
 #[tokio::test]
 async fn a_serving_daemon_without_the_requested_model_is_reported_alive_and_not_reaped() {
     let (executable, directory) = fake_daemon_script("no-model", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let pid = child.id();
 
     let outcome = wait_for_daemon_serving_for_test(
@@ -1626,7 +1648,7 @@ async fn a_serving_daemon_without_the_requested_model_is_reported_alive_and_not_
 #[tokio::test]
 async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
     let (executable, directory) = fake_daemon_script("deaf-then-healthy", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let probes = std::sync::Arc::new(AtomicUsize::new(0));
     let probe_count = std::sync::Arc::clone(&probes);
 
@@ -1672,7 +1694,7 @@ async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
 #[tokio::test]
 async fn a_daemon_still_loading_at_the_deadline_is_reported_starting_and_not_killed() {
     let (executable, directory) = fake_daemon_script("still-loading", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let pid = child.id();
 
     let outcome = wait_for_daemon_serving_for_test(
@@ -1745,7 +1767,7 @@ fn the_startup_budget_scales_with_the_artifact_size_on_disk() {
 #[tokio::test]
 async fn a_model_load_publishes_progress_while_the_wait_is_still_running() {
     let (executable, directory) = fake_daemon_script("load-progress", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let cell = StartupProgressCell::default();
     let observed: std::sync::Arc<std::sync::Mutex<Option<StartupProgress>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1857,7 +1879,7 @@ fn published_load_progress_never_exceeds_the_artifact_size() {
 #[tokio::test]
 async fn a_start_without_a_model_publishes_no_progress() {
     let (executable, directory) = fake_daemon_script("no-model-progress", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let cell = StartupProgressCell::default();
     let observed: std::sync::Arc<std::sync::Mutex<Option<StartupProgress>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1899,7 +1921,7 @@ async fn a_start_without_a_model_publishes_no_progress() {
 #[tokio::test]
 async fn a_finished_wait_clears_a_stale_meter() {
     let (executable, directory) = fake_daemon_script("stale-progress", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
     let cell = StartupProgressCell::default();
     *cell.lock().unwrap() = Some(StartupProgress {
         model_id: "vendor/previous".to_owned(),
@@ -1944,7 +1966,7 @@ async fn an_unreachable_daemon_with_a_live_child_reports_its_model_as_loading() 
         load_failure: None,
         loading: false,
     };
-    let mut live_slot = Some(std::process::Command::new(&executable).spawn().unwrap());
+    let mut live_slot = Some(spawn_fake_daemon(&executable));
 
     let live = mark_model_loading_for_test(unreachable(), &mut live_slot);
     assert!(
@@ -1969,7 +1991,7 @@ async fn an_unreachable_daemon_with_a_live_child_reports_its_model_as_loading() 
 #[tokio::test]
 async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() {
     let (executable, directory) = fake_daemon_script("loaded", "sleep 30");
-    let mut child = std::process::Command::new(&executable).spawn().unwrap();
+    let mut child = spawn_fake_daemon(&executable);
 
     let result = wait_for_daemon_serving_for_test(
         &mut child,
@@ -2000,9 +2022,9 @@ async fn a_serving_daemon_with_the_requested_model_loaded_starts_successfully() 
 #[tokio::test]
 async fn replacing_a_live_daemon_child_kills_and_collects_it() {
     let (executable, directory) = fake_daemon_script("replace", "sleep 30");
-    let previous = std::process::Command::new(&executable).spawn().unwrap();
+    let previous = spawn_fake_daemon(&executable);
     let previous_pid = previous.id();
-    let next = std::process::Command::new(&executable).spawn().unwrap();
+    let next = spawn_fake_daemon(&executable);
     let mut slot = Some(previous);
 
     replace_daemon_child_for_test(&mut slot, next);
@@ -2031,7 +2053,7 @@ async fn replacing_a_live_daemon_child_kills_and_collects_it() {
 #[tokio::test]
 async fn reap_daemon_child_collects_a_child_that_exits_within_the_grace_period() {
     let (executable, directory) = fake_daemon_script("graceful-exit", "sleep 0.2");
-    let child = std::process::Command::new(&executable).spawn().unwrap();
+    let child = spawn_fake_daemon(&executable);
     let pid = child.id();
     let mut slot = Some(child);
 
@@ -2267,7 +2289,7 @@ fn a_stop_request_that_lands_succeeds_either_way() {
 #[tokio::test]
 async fn reap_daemon_child_kills_a_child_that_ignores_interruption() {
     let (executable, directory) = fake_daemon_script("ignores-int", "trap '' INT TERM; sleep 300");
-    let child = std::process::Command::new(&executable).spawn().unwrap();
+    let child = spawn_fake_daemon(&executable);
     let pid = child.id();
     let mut slot = Some(child);
 
