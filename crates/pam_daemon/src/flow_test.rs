@@ -285,6 +285,7 @@ fn start_daemon_with_delay(
             bypass_policy: true,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Immediate,
         },
         async {
@@ -315,6 +316,7 @@ fn start_secure_daemon(
             bypass_policy: false,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Immediate,
         },
         async {
@@ -347,6 +349,7 @@ fn start_daemon_with_preflight_limit(
             bypass_policy: true,
             flow_preflight_capacity: capacity,
             flow_preflight_delay: preflight_delay,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Immediate,
         },
         async {

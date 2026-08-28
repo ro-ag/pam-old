@@ -45,6 +45,8 @@ use pam_client::{ExchangeError, request_exchange, request_exchange_streaming, re
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// Stands in for the minutes a multi-GB model takes to load.
+const MODEL_LOAD_WINDOW: Duration = Duration::from_secs(2);
 
 #[test]
 fn repeated_running_cancellation_is_observed_not_changed() {
@@ -312,6 +314,7 @@ fn stale_socket_reports_recovery_command() {
         bypass_policy: true,
         flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
         flow_preflight_delay: Duration::ZERO,
+        model_load_delay: Duration::ZERO,
         status_dispatch: super::lifecycle::TestStatusDispatch::Immediate,
     })
     .unwrap_err();
@@ -701,6 +704,47 @@ async fn authenticated_policy_preflight_appends_a_redacted_project_audit_event()
     fs::remove_dir_all(runtime).unwrap();
 }
 
+/// The endpoint must not exist before the daemon can serve. A Router socket
+/// bound for the minutes a multi-GB model takes to load collects every health
+/// probe the control center abandons in that window, and the accept loop then
+/// spins on their framed readers instead of serving a single request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_endpoint_is_not_advertised_until_the_model_has_loaded() {
+    let runtime = test_runtime("startup-advertisement");
+    let _ = fs::remove_dir_all(&runtime);
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = runtime.join("state.sqlite3");
+    let (shutdown, daemon) =
+        start_daemon_loading_for(endpoint.clone(), state_path, MODEL_LOAD_WINDOW);
+
+    // Well inside the load window, and past the point where a daemon that
+    // bound first would have done so.
+    tokio::time::sleep(MODEL_LOAD_WINDOW / 4).await;
+    assert!(
+        endpoint.ownership_path().exists(),
+        "the daemon had not started, so the window under test was never open"
+    );
+    assert!(
+        !endpoint.socket_path().is_some_and(std::path::Path::exists),
+        "the daemon advertised its endpoint before it could serve"
+    );
+    // Nothing to connect to, so a probe fails fast instead of leaving a peer
+    // behind on a socket that will not be polled for minutes.
+    assert!(
+        ClientTransport::connect(&endpoint, TEST_POLL_INTERVAL)
+            .await
+            .is_err(),
+        "the daemon accepted a connection before it could serve"
+    );
+
+    wait_until_ready(&endpoint).await;
+    assert_status_healthy(&endpoint, "after-model-load").await;
+
+    let _ = shutdown.send(());
+    daemon.await.unwrap().unwrap();
+    fs::remove_dir_all(runtime).unwrap();
+}
+
 async fn wait_until_ready(endpoint: &LocalEndpoint) {
     let deadline = Instant::now() + TEST_TIMEOUT;
     loop {
@@ -753,12 +797,45 @@ fn start_daemon_with_provider(
             bypass_policy: true,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Durable,
         },
         async {
             let _ = shutdown_rx.await;
         },
         delay,
+    ));
+    (shutdown_tx, daemon)
+}
+
+fn start_daemon_loading_for(
+    endpoint: LocalEndpoint,
+    state_path: PathBuf,
+    model_load_delay: Duration,
+) -> (
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<(), DaemonError>>,
+) {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let daemon = tokio::spawn(serve_until_with_delay(
+        DaemonConfig {
+            endpoint,
+            recover: false,
+            model: None,
+            state_path: Some(state_path),
+            brief_provider: None,
+            connector_secret_backend: None,
+            bypass_authentication: true,
+            bypass_policy: true,
+            flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
+            flow_preflight_delay: Duration::ZERO,
+            model_load_delay,
+            status_dispatch: super::lifecycle::TestStatusDispatch::Durable,
+        },
+        async {
+            let _ = shutdown_rx.await;
+        },
+        Duration::ZERO,
     ));
     (shutdown_tx, daemon)
 }
@@ -784,6 +861,7 @@ fn start_secure_daemon(
             bypass_policy: false,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Durable,
         },
         async {
@@ -2214,6 +2292,7 @@ async fn status_reports_only_queued_project_work_without_waiting_for_active_work
             bypass_policy: true,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Immediate,
         },
         async {
@@ -2263,6 +2342,7 @@ async fn daemon_parallelizes_projects_but_serializes_each_project() {
             bypass_policy: true,
             flow_preflight_capacity: super::lifecycle::FLOW_PREFLIGHT_CAPACITY,
             flow_preflight_delay: Duration::ZERO,
+            model_load_delay: Duration::ZERO,
             status_dispatch: super::lifecycle::TestStatusDispatch::Durable,
         },
         async {
