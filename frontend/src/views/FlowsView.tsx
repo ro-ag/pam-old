@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { sameFence, withDaemonOperation, withOperation } from "../bridge";
+import { PanelError, PanelLoading } from "../components/PanelState";
 import type {
   CommandFence,
   FlowDefinitionJson,
@@ -392,13 +393,15 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
     <main className="canvas" id="main-content">
       <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke PAM.</p></div></header>
       {loadError && !workspace ? (
-        <section className="panel loading-panel is-error" role="alert">
-          <WarningCircle size={25} />
-          <div><strong>Flow workspace unavailable</strong><p>{loadError}</p></div>
-          <button type="button" className="button button--secondary" onClick={() => void load()}><ArrowClockwise size={18} /> Retry flows</button>
-        </section>
+        <PanelError
+          as="section"
+          className="panel loading-panel is-error"
+          icon={<WarningCircle size={25} />}
+          title="Flow workspace unavailable"
+          action={<button type="button" className="button button--secondary" onClick={() => void load()}><ArrowClockwise size={18} /> Retry flows</button>}
+        >{loadError}</PanelError>
       ) : !workspace ? (
-        <section className="panel loading-panel" aria-busy="true" aria-live="polite"><ArrowClockwise className={busy ? "is-spinning" : ""} size={25} /><p>Loading bounded flow workspace…</p></section>
+        <PanelLoading as="section" className="panel loading-panel" icon={<ArrowClockwise className={busy ? "is-spinning" : ""} size={25} />}>Loading bounded flow workspace…</PanelLoading>
       ) : (
         <section className={`flow-workspace ${catalogHidden ? "is-catalog-hidden" : ""}`} aria-label="Flow workspace">
           <aside className="flow-catalog" hidden={catalogHidden}>

@@ -16,12 +16,25 @@ import {
   SquaresFour,
   SunHorizon,
 } from "@phosphor-icons/react";
-import { DropdownMenu, Tooltip, VisuallyHidden } from "radix-ui";
+import {
+  Button,
+  Focusable,
+  Header,
+  Menu,
+  MenuItem,
+  MenuSection,
+  MenuTrigger,
+  OverlayArrow,
+  Popover,
+  Separator,
+  Tooltip,
+  TooltipTrigger,
+} from "react-aria-components";
 import {
   Fragment,
+  type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
   type RefObject,
   useEffect,
   useRef,
@@ -58,18 +71,37 @@ export function StatusDot({ state = "coral" }: { state?: "coral" | "aqua" | "mut
   return <Circle className={`status-dot status-dot--${state}`} size={12} weight="fill" aria-hidden="true" />;
 }
 
-function IconTooltip({ label, children }: { label: string; children: ReactNode }) {
+type FocusableChild = ComponentProps<typeof Focusable>["children"];
+
+function IconTooltip({ label, children }: { label: string; children: FocusableChild }) {
   return (
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Content className="tooltip-content" sideOffset={8}>
-          {label}
-          <Tooltip.Arrow className="tooltip-arrow" />
-        </Tooltip.Content>
-      </Tooltip.Portal>
-    </Tooltip.Root>
+    <TooltipTrigger delay={350} closeDelay={150}>
+      <Focusable>{children}</Focusable>
+      <Tooltip className="tooltip-content" offset={8}>
+        {label}
+        <OverlayArrow className="tooltip-arrow">
+          <svg width={10} height={5} viewBox="0 0 30 10" preserveAspectRatio="none" aria-hidden="true">
+            <polygon points="0,0 30,0 15,10" />
+          </svg>
+        </OverlayArrow>
+      </Tooltip>
+    </TooltipTrigger>
   );
+}
+
+// The check that marks the chosen row; Radix rendered this only when selected
+// and the menu grid still counts on that.
+function MenuCheck() {
+  return <span className="menu-item-check"><Check size={15} weight="bold" aria-hidden="true" /></span>;
+}
+
+// react-aria selection speaks in key sets; every menu here is a single-choice
+// radio group that can never be empty.
+function onlyKey<T extends string>(keys: Iterable<unknown>, apply: (value: T) => void) {
+  for (const key of keys) {
+    apply(String(key) as T);
+    return;
+  }
 }
 
 export function Sidebar({
@@ -295,65 +327,91 @@ export function ThemeMenu({
   onDensityChange: (density: PamDensity) => void;
 }) {
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <button
-          type="button"
-          className="theme-trigger"
-          aria-label={`Theme: ${theme === "ventisquero" ? "Ventisquero" : "Viña del Mar"} · ${themeMode}`}
-          title="Choose appearance theme"
-        >
-          {themeMode === "light"
-            ? <SunHorizon size={19} weight="bold" aria-hidden="true" />
-            : <MoonStars size={19} weight="bold" aria-hidden="true" />}
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content className="theme-menu-popover" align="end" sideOffset={8}>
-          <DropdownMenu.Label className="theme-menu-label">Theme</DropdownMenu.Label>
-          <DropdownMenu.RadioGroup value={theme} onValueChange={(value) => onThemeChange(value as PamTheme)}>
-            <DropdownMenu.RadioItem className="theme-menu-item" value="ventisquero" textValue="Ventisquero">
-              <span className="theme-swatch theme-swatch--ventisquero" aria-hidden="true" />
-              <span><strong>Ventisquero</strong><small>Rock · Ice · Copper · Mist</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-            <DropdownMenu.RadioItem className="theme-menu-item" value="vina" textValue="Viña del Mar">
-              <span className="theme-swatch theme-swatch--vina" aria-hidden="true" />
-              <span><strong>Viña del Mar</strong><small>Night · Violet · Coral · Surf</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-          </DropdownMenu.RadioGroup>
-          <DropdownMenu.Separator className="theme-menu-separator" />
-          <DropdownMenu.Label className="theme-menu-label">Variant</DropdownMenu.Label>
-          <DropdownMenu.RadioGroup value={themeMode} onValueChange={(value) => onThemeModeChange(value as PamThemeMode)}>
-            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="light" textValue="Light variant">
-              <SunHorizon size={19} aria-hidden="true" />
-              <span><strong>Light</strong><small>{theme === "ventisquero" ? "Mist" : "Dawn"}</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="dark" textValue="Dark variant">
-              <MoonStars size={19} aria-hidden="true" />
-              <span><strong>Dark</strong><small>{theme === "ventisquero" ? "Bedrock" : "Night"}</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-          </DropdownMenu.RadioGroup>
-          <DropdownMenu.Separator className="theme-menu-separator" />
-          <DropdownMenu.Label className="theme-menu-label">Density</DropdownMenu.Label>
-          <DropdownMenu.RadioGroup value={density} onValueChange={(value) => onDensityChange(value as PamDensity)}>
-            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="comfortable" textValue="Comfortable density">
-              <SquaresFour size={19} aria-hidden="true" />
-              <span><strong>Comfortable</strong><small>Roomier spacing</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-            <DropdownMenu.RadioItem className="theme-menu-item theme-menu-item--compact" value="compact" textValue="Compact density">
-              <Queue size={19} aria-hidden="true" />
-              <span><strong>Compact</strong><small>More rows on screen</small></span>
-              <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-            </DropdownMenu.RadioItem>
-          </DropdownMenu.RadioGroup>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <MenuTrigger>
+      <Button
+        className="theme-trigger"
+        aria-label={`Theme: ${theme === "ventisquero" ? "Ventisquero" : "Viña del Mar"} · ${themeMode}`}
+      >
+        {themeMode === "light"
+          ? <SunHorizon size={19} weight="bold" aria-hidden="true" />
+          : <MoonStars size={19} weight="bold" aria-hidden="true" />}
+      </Button>
+      {/* react-aria floors the computed offset and the toolbar's 51px content
+          box leaves the trigger on a half pixel, so 9 lands on the same 8px
+          gap Radix rendered. */}
+      <Popover className="theme-menu-popover" placement="bottom end" offset={9}>
+        <Menu className="menu-list" aria-label="Appearance">
+          <MenuSection
+            selectionMode="single"
+            disallowEmptySelection
+            selectedKeys={[theme]}
+            onSelectionChange={(keys) => onlyKey<PamTheme>(keys, onThemeChange)}
+          >
+            <Header className="theme-menu-label">Theme</Header>
+            <MenuItem id="ventisquero" className="theme-menu-item" textValue="Ventisquero">
+              {({ isSelected }) => (<>
+                <span className="theme-swatch theme-swatch--ventisquero" aria-hidden="true" />
+                <span><strong>Ventisquero</strong><small>Rock · Ice · Copper · Mist</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+            <MenuItem id="vina" className="theme-menu-item" textValue="Viña del Mar">
+              {({ isSelected }) => (<>
+                <span className="theme-swatch theme-swatch--vina" aria-hidden="true" />
+                <span><strong>Viña del Mar</strong><small>Night · Violet · Coral · Surf</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+          </MenuSection>
+          <Separator className="theme-menu-separator" />
+          <MenuSection
+            selectionMode="single"
+            disallowEmptySelection
+            selectedKeys={[themeMode]}
+            onSelectionChange={(keys) => onlyKey<PamThemeMode>(keys, onThemeModeChange)}
+          >
+            <Header className="theme-menu-label">Variant</Header>
+            <MenuItem id="light" className="theme-menu-item theme-menu-item--compact" textValue="Light variant">
+              {({ isSelected }) => (<>
+                <SunHorizon size={19} aria-hidden="true" />
+                <span><strong>Light</strong><small>{theme === "ventisquero" ? "Mist" : "Dawn"}</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+            <MenuItem id="dark" className="theme-menu-item theme-menu-item--compact" textValue="Dark variant">
+              {({ isSelected }) => (<>
+                <MoonStars size={19} aria-hidden="true" />
+                <span><strong>Dark</strong><small>{theme === "ventisquero" ? "Bedrock" : "Night"}</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+          </MenuSection>
+          <Separator className="theme-menu-separator" />
+          <MenuSection
+            selectionMode="single"
+            disallowEmptySelection
+            selectedKeys={[density]}
+            onSelectionChange={(keys) => onlyKey<PamDensity>(keys, onDensityChange)}
+          >
+            <Header className="theme-menu-label">Density</Header>
+            <MenuItem id="comfortable" className="theme-menu-item theme-menu-item--compact" textValue="Comfortable density">
+              {({ isSelected }) => (<>
+                <SquaresFour size={19} aria-hidden="true" />
+                <span><strong>Comfortable</strong><small>Roomier spacing</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+            <MenuItem id="compact" className="theme-menu-item theme-menu-item--compact" textValue="Compact density">
+              {({ isSelected }) => (<>
+                <Queue size={19} aria-hidden="true" />
+                <span><strong>Compact</strong><small>More rows on screen</small></span>
+                {isSelected && <MenuCheck />}
+              </>)}
+            </MenuItem>
+          </MenuSection>
+        </Menu>
+      </Popover>
+    </MenuTrigger>
   );
 }
 

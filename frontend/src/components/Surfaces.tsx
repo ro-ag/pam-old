@@ -1,5 +1,5 @@
 import { ArrowClockwise, WarningCircle, X } from "@phosphor-icons/react";
-import { Dialog, ScrollArea, VisuallyHidden } from "radix-ui";
+import { Dialog, Modal, ModalOverlay, VisuallyHidden } from "react-aria-components";
 import {
   type CSSProperties,
   type ReactNode,
@@ -20,6 +20,7 @@ import type {
 import { CHAT_CONTEXT_TOKEN_BUDGET, CHAT_MAX_OUTPUT_TOKENS, MAX_CHAT_MESSAGES, MAX_EVIDENCE_TEXT } from "../domain";
 import type { ControlCenterView } from "../selectors";
 import { presentError } from "../state";
+import { PanelEmpty, PanelError, PanelLoading } from "./PanelState";
 
 export interface DrawerProps {
   title: string;
@@ -32,6 +33,7 @@ export interface DrawerProps {
 
 export function Drawer({ title, eyebrow, onClose, children, active = true, returnFocusTarget }: DrawerProps) {
   const titleId = useId();
+  const descriptionId = useId();
   const returnFocus = useRef<HTMLElement | null>(returnFocusTarget ?? (active && document.activeElement instanceof HTMLElement ? document.activeElement : null));
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -50,49 +52,54 @@ export function Drawer({ title, eyebrow, onClose, children, active = true, retur
       }
     };
   }, []);
+  // Radix dismissed on a document-level Escape; react-aria listens on the
+  // overlay itself, so an Escape pressed after focus fell to <body> (a button
+  // that disabled itself mid-flight) would be lost. React stops propagation
+  // when it handled the key, so this only fires for the orphaned case.
+  useEffect(() => {
+    if (!active) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) onClose();
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [active, onClose]);
   const content = (
-    <div className="drawer">
-      <VisuallyHidden.Root><Dialog.Description>{eyebrow}</Dialog.Description></VisuallyHidden.Root>
+    <>
+      <VisuallyHidden><p id={descriptionId}>{eyebrow}</p></VisuallyHidden>
       <header>
-        <div><span className="eyebrow">{eyebrow}</span><Dialog.Title id={titleId}>{title}</Dialog.Title></div>
-        <Dialog.Close asChild>
-          <button className="drawer-close" type="button" aria-label={`Close ${title}`}><X size={21} weight="bold" /></button>
-        </Dialog.Close>
+        <div><span className="eyebrow">{eyebrow}</span><h2 id={titleId}>{title}</h2></div>
+        <button autoFocus={active} className="drawer-close" type="button" aria-label={`Close ${title}`} onClick={onClose}><X size={21} weight="bold" /></button>
       </header>
-      <ScrollArea.Root className="drawer-body">
-        <ScrollArea.Viewport className="drawer-scroll-viewport">{children}</ScrollArea.Viewport>
-        <ScrollArea.Scrollbar className="scrollbar" orientation="vertical"><ScrollArea.Thumb className="scrollbar-thumb" /></ScrollArea.Scrollbar>
-      </ScrollArea.Root>
-    </div>
+      {/* Native overflow, not a scroll-area widget: react-aria-components has
+          no ScrollArea, and the browser already does this. */}
+      <div className="drawer-body">
+        <div className="drawer-scroll-viewport">{children}</div>
+      </div>
+    </>
   );
 
   if (!active) {
     return (
-      <Dialog.Root open={false}>
-        <div className="application-overlay application-overlay--drawer" data-application-overlay-layer="underlay" aria-hidden inert>
-          <div className="drawer-modal" role="dialog" aria-labelledby={titleId}>{content}</div>
+      <div className="application-overlay application-overlay--drawer" data-application-overlay-layer="underlay" aria-hidden inert>
+        <div className="drawer-modal">
+          <div className="drawer" role="dialog" aria-labelledby={titleId} aria-describedby={descriptionId}>{content}</div>
         </div>
-      </Dialog.Root>
+      </div>
     );
   }
 
   return (
-    <Dialog.Root open onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="application-overlay application-overlay--drawer" />
-        <Dialog.Content
-          className="drawer-modal"
-          data-application-overlay-layer="active"
-          aria-labelledby={titleId}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (returnFocus.current?.isConnected) returnFocus.current.focus();
-          }}
-        >
-          {content}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <ModalOverlay
+      className="application-overlay application-overlay--drawer"
+      isOpen
+      isDismissable
+      onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
+    >
+      <Modal className="drawer-modal" data-application-overlay-layer="active">
+        <Dialog className="drawer" aria-labelledby={titleId} aria-describedby={descriptionId}>{content}</Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 
@@ -108,8 +115,8 @@ export interface EvidenceDrawerProps {
 export function EvidenceDrawer({ document, loading, error, onRetry, onClose, active = true }: EvidenceDrawerProps) {
   return (
     <Drawer title="Evidence" eyebrow="Exact bounded source" active={active} onClose={onClose}>
-      {loading && <div className="drawer-message" role="status" aria-live="polite"><ArrowClockwise className="is-spinning" size={23} /><p>Loading retained evidence…</p></div>}
-      {error && <div className="drawer-message is-error" role="alert"><WarningCircle size={23} /><p>{error}</p>{onRetry && <button type="button" className="button button--secondary" onClick={onRetry}><ArrowClockwise size={18} /> Retry evidence</button>}</div>}
+      {loading && <PanelLoading as="div" className="drawer-message" icon={<ArrowClockwise className="is-spinning" size={23} />}>Loading retained evidence…</PanelLoading>}
+      {error && <PanelError as="div" className="drawer-message is-error" icon={<WarningCircle size={23} />} action={onRetry && <button type="button" className="button button--secondary" onClick={onRetry}><ArrowClockwise size={18} /> Retry evidence</button>}>{error}</PanelError>}
       {document && <article className="evidence-document"><code>{document.handle}</code><h3>{document.truth}</h3><p>{document.mediaType} · {document.sizeBytes.toLocaleString()} bytes · {document.digest}{document.truncated ? " · bounded preview" : ""}</p><pre>{(document.body ?? "This evidence has no text preview.").slice(0, MAX_EVIDENCE_TEXT)}</pre></article>}
     </Drawer>
   );
@@ -126,7 +133,7 @@ export function QueueDrawer({ data, onClose, active = true, returnFocusTarget }:
   return (
     <Drawer title="Project queue" eyebrow={`${data.current.queue.length} retained request${data.current.queue.length === 1 ? "" : "s"}`} active={active} returnFocusTarget={returnFocusTarget} onClose={onClose}>
       <div className="queue-list">
-        {data.current.queue.length === 0 ? <p className="panel-empty">Nothing is queued for this project.</p> : data.current.queue.map((item, index) => (
+        {data.current.queue.length === 0 ? <PanelEmpty>Nothing is queued for this project.</PanelEmpty> : data.current.queue.map((item, index) => (
           <article key={item.requestId}><span>{index + 1}</span><div><strong>{item.operationKind}</strong><code>{item.requestId}</code></div><span className={`state-pill state-pill--${item.state}`}>{item.state}</span></article>
         ))}
         {data.current.queueTruncated && <p className="bounded-note">Only the bounded queue window is shown.</p>}
@@ -229,7 +236,7 @@ export function ModelChatDrawer({ modelId, bridge, onClose, active = true, retur
         <p className="bounded-note">Nothing here is kept — close the drawer and the transcript drifts away.</p>
         <div className="chat-transcript" ref={transcriptRef}>
           {turns.length === 0 && !busy && !note && (
-            <p className="panel-empty">Say hello to the local model. Replies stay in this drawer.</p>
+            <PanelEmpty>Say hello to the local model. Replies stay in this drawer.</PanelEmpty>
           )}
           {turns.map((turn, index) => (
             <article className={`chat-bubble chat-bubble--${turn.role}`} key={index}>
@@ -307,8 +314,8 @@ export interface CommandPaletteProps {
 
 export function CommandPalette({ commands, active, returnFocusTarget, onAction, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
+  const descriptionId = useId();
   const commandListRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
   const returnFocus = useRef<HTMLElement | null>(returnFocusTarget ?? (active && document.activeElement instanceof HTMLElement ? document.activeElement : null));
   useEffect(() => () => {
     const target = returnFocus.current;
@@ -336,70 +343,63 @@ export function CommandPalette({ commands, active, returnFocusTarget, onAction, 
   };
 
   const dialog = (
-    <Dialog.Content
-      className="command-modal"
-      aria-label="Command palette"
-      onOpenAutoFocus={(event) => {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }}
-    >
-      <VisuallyHidden.Root><Dialog.Title>Command palette</Dialog.Title></VisuallyHidden.Root>
-      <VisuallyHidden.Root><Dialog.Description>Search and run a PAM command.</Dialog.Description></VisuallyHidden.Root>
-      <div className="command-dialog">
-        <input
-          ref={searchRef}
-          className="command-input"
-          type="search"
-          value={query}
-          placeholder="Search commands…"
-          aria-label="Search commands"
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-            event.preventDefault();
-            moveOptionFocus(null, event.key === "ArrowDown" ? 1 : -1);
-          }}
-        />
-        <div ref={commandListRef} className="command-options" role="listbox" aria-label="Commands">
-          {filteredCommands.length === 0 ? <p className="command-empty">No matching commands.</p> : filteredCommands.map((command) => (
-            <button
-              className="command-option"
-              type="button"
-              role="option"
-              aria-selected="false"
-              key={command.id}
-              onClick={() => run(command)}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  moveOptionFocus(event.currentTarget, event.key === "ArrowDown" ? 1 : -1);
-                } else if (event.key === "Home" || event.key === "End") {
-                  event.preventDefault();
-                  const options = commandListRef.current?.querySelectorAll<HTMLElement>('[role="option"]');
-                  (event.key === "Home" ? options?.[0] : options?.[options.length - 1])?.focus();
-                }
-              }}
-            >
-              <span className="command-option-copy">
-                <strong>{command.label}</strong>
-                <small>{command.description}</small>
-              </span>
-              {command.shortcut && <kbd>{command.shortcut}</kbd>}
-            </button>
-          ))}
-        </div>
+    <Dialog className="command-dialog" aria-label="Command palette" aria-describedby={descriptionId}>
+      <VisuallyHidden><p id={descriptionId}>Search and run a PAM command.</p></VisuallyHidden>
+      <input
+        autoFocus
+        className="command-input"
+        type="search"
+        value={query}
+        placeholder="Search commands…"
+        aria-label="Search commands"
+        onChange={(event) => setQuery(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          moveOptionFocus(null, event.key === "ArrowDown" ? 1 : -1);
+        }}
+      />
+      <div ref={commandListRef} className="command-options" role="listbox" aria-label="Commands">
+        {filteredCommands.length === 0 ? <p className="command-empty">No matching commands.</p> : filteredCommands.map((command) => (
+          <button
+            className="command-option"
+            type="button"
+            role="option"
+            aria-selected="false"
+            key={command.id}
+            onClick={() => run(command)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                moveOptionFocus(event.currentTarget, event.key === "ArrowDown" ? 1 : -1);
+              } else if (event.key === "Home" || event.key === "End") {
+                event.preventDefault();
+                const options = commandListRef.current?.querySelectorAll<HTMLElement>('[role="option"]');
+                (event.key === "Home" ? options?.[0] : options?.[options.length - 1])?.focus();
+              }
+            }}
+          >
+            <span className="command-option-copy">
+              <strong>{command.label}</strong>
+              <small>{command.description}</small>
+            </span>
+            {command.shortcut && <kbd>{command.shortcut}</kbd>}
+          </button>
+        ))}
       </div>
-    </Dialog.Content>
+    </Dialog>
   );
 
   return (
-    <Dialog.Root open={active} onOpenChange={(isOpen) => { if (!isOpen && active) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="application-overlay application-overlay--command" data-application-overlay-layer={active ? "active" : "underlay"} />
-        {dialog}
-      </Dialog.Portal>
-    </Dialog.Root>
+    <ModalOverlay
+      className="application-overlay application-overlay--command"
+      data-application-overlay-layer={active ? "active" : "underlay"}
+      isOpen={active}
+      isDismissable
+      onOpenChange={(isOpen) => { if (!isOpen && active) onClose(); }}
+    >
+      <Modal className="command-modal">{dialog}</Modal>
+    </ModalOverlay>
   );
 }
 
@@ -432,10 +432,10 @@ export type LoadingScreenProps = Record<string, never>;
 export function LoadingScreen(_props: LoadingScreenProps) {
   return (
     <StartupShell>
-      <section className="empty-state state-card startup-state-card" role="status" aria-live="polite" aria-busy="true">
+      <PanelLoading as="section" className="empty-state state-card startup-state-card">
         <h1>PAM</h1>
         <p>Finding the last registered project…</p>
-      </section>
+      </PanelLoading>
     </StartupShell>
   );
 }
@@ -448,12 +448,12 @@ export interface RecoveryScreenProps {
 export function RecoveryScreen({ message, onRetry }: RecoveryScreenProps) {
   return (
     <StartupShell>
-      <section className="empty-state state-card startup-state-card is-attention" role="alert">
+      <PanelError as="section" className="empty-state state-card startup-state-card is-attention">
         <WarningCircle size={38} />
         <h1>PAM needs a moment</h1>
         <p>{message}</p>
         <button type="button" className="button button--primary" onClick={onRetry}><ArrowClockwise size={18} /> Retry safely</button>
-      </section>
+      </PanelError>
     </StartupShell>
   );
 }

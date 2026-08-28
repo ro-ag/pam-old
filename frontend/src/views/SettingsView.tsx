@@ -1,6 +1,7 @@
 import { ArrowClockwise, FileText, FolderOpen, GitBranch, HardDrive, Trash } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelError, PanelLoading } from "../components/PanelState";
 import type { AppSettingsDto, PamBridge } from "../domain";
 import { presentError } from "../state";
 
@@ -95,9 +96,9 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
         <div><h1>Settings</h1><p>Where PAM keeps things, and how to clear its logs.</p></div>
       </header>
       {loadError ? (
-        <section className="panel"><p className="panel-empty" role="alert">{loadError}</p></section>
+        <section className="panel"><PanelError>{loadError}</PanelError></section>
       ) : !settings ? (
-        <section className="panel"><p className="panel-empty" aria-busy="true" aria-live="polite">Loading Settings…</p></section>
+        <section className="panel"><PanelLoading>Loading Settings…</PanelLoading></section>
       ) : (
         <>
           <section className="panel" aria-labelledby="storage-heading">

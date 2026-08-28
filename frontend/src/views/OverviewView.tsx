@@ -1,6 +1,7 @@
 import { Brain, CalendarBlank, Lightning, Pulse, Queue } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError } from "../components/PanelState";
 import type {
   ActivityDayDto,
   DaemonStatsDto,
@@ -272,15 +273,15 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
           </div>
         </div>
         {loadError ? (
-          <p className="panel-empty" role="alert">
+          <PanelError>
             {loadError}
-          </p>
+          </PanelError>
         ) : offline ? (
-          <p className="panel-empty">The activity picture returns when PAM is back on watch.</p>
+          <PanelEmpty>The activity picture returns when PAM is back on watch.</PanelEmpty>
         ) : stats && stats.status !== "ok" ? (
-          <p className="panel-empty">
+          <PanelEmpty>
             {[stats.failure.detail, stats.failure.recovery].filter(Boolean).join(" ")}
-          </p>
+          </PanelEmpty>
         ) : (
           <div className="heatmap-scroll">
             <div className="heatmap" role="img" aria-label="Daily daemon activity for the last 26 weeks">
@@ -385,17 +386,17 @@ function ProjectsPanel({ daemon, catalog, stats, loadError }: ProjectsPanelProps
         </div>
       </div>
       {loadError ? (
-        <p className="panel-empty" role="alert">
+        <PanelError>
           {loadError}
-        </p>
+        </PanelError>
       ) : offline ? (
-        <p className="panel-empty">Project usage returns when PAM is back on watch.</p>
+        <PanelEmpty>Project usage returns when PAM is back on watch.</PanelEmpty>
       ) : stats && stats.status !== "ok" ? (
-        <p className="panel-empty">
+        <PanelEmpty>
           {[stats.failure.detail, stats.failure.recovery].filter(Boolean).join(" ")}
-        </p>
+        </PanelEmpty>
       ) : rows.length === 0 ? (
-        <p className="panel-empty">No projects are known to PAM yet.</p>
+        <PanelEmpty>No projects are known to PAM yet.</PanelEmpty>
       ) : (
         <div className="project-usage-list">
           {rows.map((row) => (

@@ -1,6 +1,7 @@
 import { ArrowClockwise, UserCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { ActivityEventDto, CallerDto, CallersDto, PamBridge } from "../domain";
 import type { DaemonView } from "../selectors";
 import { presentError } from "../state";
@@ -80,15 +81,15 @@ export function CallersPanel({ bridge }: CallersPanelProps) {
         </button>
       </div>
       {loadError ? (
-        <p className="panel-empty" role="alert">{loadError}</p>
+        <PanelError>{loadError}</PanelError>
       ) : !callers ? (
-        <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the registered callers…</p>
+        <PanelLoading>Loading the registered callers…</PanelLoading>
       ) : callers.status !== "ok" ? (
-        <p className="panel-empty">
+        <PanelEmpty>
           {[callers.failure.detail, callers.failure.recovery].filter(Boolean).join(" ")}
-        </p>
+        </PanelEmpty>
       ) : callers.callers.length === 0 ? (
-        <p className="panel-empty">No callers are registered with the daemon yet.</p>
+        <PanelEmpty>No callers are registered with the daemon yet.</PanelEmpty>
       ) : (
         <div className="access-list">
           {callers.callers.map((caller) => (
@@ -237,13 +238,13 @@ export function CallerRequestsPanel({
         </div>
       )}
       {offline ? (
-        <p className="panel-empty">PAM is paused, so no requests are being served.</p>
+        <PanelEmpty>PAM is paused, so no requests are being served.</PanelEmpty>
       ) : loadError ? (
-        <p className="panel-empty" role="alert">{loadError}</p>
+        <PanelError>{loadError}</PanelError>
       ) : !rows ? (
-        <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the recent requests…</p>
+        <PanelLoading>Loading the recent requests…</PanelLoading>
       ) : rows.length === 0 ? (
-        <p className="panel-empty">No caller has talked to the daemon yet.</p>
+        <PanelEmpty>No caller has talked to the daemon yet.</PanelEmpty>
       ) : (
         <div className="access-list">
           {rows.map((row) => (

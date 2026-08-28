@@ -1,7 +1,8 @@
 import { Brain, CaretDown, CaretRight, Check, Power } from "@phosphor-icons/react";
-import { DropdownMenu } from "radix-ui";
+import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelLoading } from "../components/PanelState";
 import type {
   DaemonStartupProgressDto,
   HostMemoryDto,
@@ -225,42 +226,46 @@ function PresetDownload({
                 : `, leaving ${formatModelSize(hostModelBudgetBytes)} for a model after the OS reserve.`}
             </p>
           )}
-          <DropdownMenu.Root open={pickerOpen && !busy} onOpenChange={(open) => !busy && setPickerOpen(open)}>
-            <DropdownMenu.Trigger asChild>
-              <button
-                type="button"
-                className="button button--secondary button--small model-preset-trigger"
-                disabled={busy}
-              >
-                {selected ? selected.label : "Choose a model"}
-                <CaretDown size={14} weight="bold" aria-hidden="true" />
-              </button>
-            </DropdownMenu.Trigger>
+          <MenuTrigger isOpen={pickerOpen && !busy} onOpenChange={(open) => !busy && setPickerOpen(open)}>
+            <Button
+              className="button button--secondary button--small model-preset-trigger"
+              isDisabled={busy}
+            >
+              {selected ? selected.label : "Choose a model"}
+              <CaretDown size={14} weight="bold" aria-hidden="true" />
+            </Button>
             {busy && <small className="model-note">A download is already running — wait for it to finish before choosing another model.</small>}
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content className="project-menu-popover model-preset-popover" align="start" sideOffset={8}>
-                <DropdownMenu.RadioGroup
-                  value={selectedId ?? ""}
-                  onValueChange={(value) => {
-                    if (busy) return;
-                    setSelectedId(value);
+            <Popover className="project-menu-popover model-preset-popover" placement="bottom start" offset={8}>
+              <Menu
+                className="menu-list"
+                aria-label="Curated models"
+                selectionMode="single"
+                disallowEmptySelection
+                selectedKeys={selectedId === null ? [] : [selectedId]}
+                onSelectionChange={(keys) => {
+                  if (busy) return;
+                  for (const key of keys) {
+                    setSelectedId(String(key));
                     setAccepted(false);
                     setPhase("idle");
                     setDownloadError(null);
                     setProgress(null);
-                  }}
-                >
-                  {presets.map((preset) => (
-                    // A preset this Mac cannot run stays visible but
-                    // unselectable, with the reason — never hidden, never
-                    // downloadable behind a warning.
-                    <DropdownMenu.RadioItem
-                      key={preset.id}
-                      className="project-menu-item model-preset-item"
-                      value={preset.id}
-                      textValue={preset.label}
-                      disabled={!preset.fitsHost}
-                    >
+                    return;
+                  }
+                }}
+              >
+                {presets.map((preset) => (
+                  // A preset this Mac cannot run stays visible but
+                  // unselectable, with the reason — never hidden, never
+                  // downloadable behind a warning.
+                  <MenuItem
+                    key={preset.id}
+                    id={preset.id}
+                    className="project-menu-item model-preset-item"
+                    textValue={preset.label}
+                    isDisabled={!preset.fitsHost}
+                  >
+                    {({ isSelected }) => (<>
                       <span>
                         <strong>{preset.label}</strong>
                         <small>
@@ -276,13 +281,13 @@ function PresetDownload({
                         </small>
                         {!preset.calibrated && <small className="model-fit-warn">{UNCALIBRATED_NOTICE}</small>}
                       </span>
-                      <DropdownMenu.ItemIndicator><Check size={15} weight="bold" aria-hidden="true" /></DropdownMenu.ItemIndicator>
-                    </DropdownMenu.RadioItem>
-                  ))}
-                </DropdownMenu.RadioGroup>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+                      {isSelected && <span className="menu-item-check"><Check size={15} weight="bold" aria-hidden="true" /></span>}
+                    </>)}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </Popover>
+          </MenuTrigger>
 
           {selected && (
             <div className="model-preset-summary">
@@ -1090,19 +1095,19 @@ export function ModelPanel({
             <div className="access-list model-rows">{registered.map(restartRow)}</div>
           </div>
         ) : (
-          <p className="panel-empty">PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</p>
+          <PanelEmpty>PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</PanelEmpty>
         )
       ) : loading ? (
-        <p className="panel-empty" role="status">
+        <PanelLoading>
           PAM is starting: the model is still loading. Checking and loading a large model takes a
           few minutes, and this panel updates when it finishes.
-        </p>
+        </PanelLoading>
       ) : !modelStatus ? (
-        <p className="panel-empty">Checking the local model…</p>
+        <PanelEmpty>Checking the local model…</PanelEmpty>
       ) : modelStatus.status !== "ok" ? (
-        <p className="panel-empty">
+        <PanelEmpty>
           {[modelStatus.failure.detail, modelStatus.failure.recovery].filter(Boolean).join(" ")}
-        </p>
+        </PanelEmpty>
       ) : loaded ? (
         <div className="model-runtime">
           <div className="model-identity">

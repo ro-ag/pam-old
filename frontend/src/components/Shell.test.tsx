@@ -1,6 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Tooltip } from "radix-ui";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -61,28 +60,26 @@ describe("Toolbar", () => {
     const onThemeChange = vi.fn();
     const onThemeModeChange = vi.fn();
     render(
-      <Tooltip.Provider>
-        <Toolbar
-          projectName="payments-api"
-          queueCount={2}
-          fixture={true}
-          collapsed={false}
-          pending={false}
-          theme="ventisquero"
-          themeMode="light"
-          density="compact"
-          onThemeChange={onThemeChange}
-          onThemeModeChange={onThemeModeChange}
-          onDensityChange={vi.fn()}
-          onToggleSidebar={vi.fn()}
-          onRefresh={vi.fn()}
-          onOpenCommand={vi.fn()}
-          onOpenQueue={vi.fn()}
-          toggleButtonRef={createRef()}
-          commandButtonRef={createRef()}
-          queueButtonRef={createRef()}
-        />
-      </Tooltip.Provider>,
+      <Toolbar
+        projectName="payments-api"
+        queueCount={2}
+        fixture={true}
+        collapsed={false}
+        pending={false}
+        theme="ventisquero"
+        themeMode="light"
+        density="compact"
+        onThemeChange={onThemeChange}
+        onThemeModeChange={onThemeModeChange}
+        onDensityChange={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onRefresh={vi.fn()}
+        onOpenCommand={vi.fn()}
+        onOpenQueue={vi.fn()}
+        toggleButtonRef={createRef()}
+        commandButtonRef={createRef()}
+        queueButtonRef={createRef()}
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: "Theme: Ventisquero · light" }));
@@ -98,28 +95,26 @@ describe("Toolbar", () => {
 
   it("shows the global breadcrumb alone and hides the queue opener without a project", () => {
     render(
-      <Tooltip.Provider>
-        <Toolbar
-          projectName={null}
-          queueCount={null}
-          fixture={false}
-          collapsed={false}
-          pending={false}
-          theme="ventisquero"
-          themeMode="light"
-          density="compact"
-          onThemeChange={vi.fn()}
-          onThemeModeChange={vi.fn()}
-          onDensityChange={vi.fn()}
-          onToggleSidebar={vi.fn()}
-          onRefresh={vi.fn()}
-          onOpenCommand={vi.fn()}
-          onOpenQueue={vi.fn()}
-          toggleButtonRef={createRef()}
-          commandButtonRef={createRef()}
-          queueButtonRef={createRef()}
-        />
-      </Tooltip.Provider>,
+      <Toolbar
+        projectName={null}
+        queueCount={null}
+        fixture={false}
+        collapsed={false}
+        pending={false}
+        theme="ventisquero"
+        themeMode="light"
+        density="compact"
+        onThemeChange={vi.fn()}
+        onThemeModeChange={vi.fn()}
+        onDensityChange={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onRefresh={vi.fn()}
+        onOpenCommand={vi.fn()}
+        onOpenQueue={vi.fn()}
+        toggleButtonRef={createRef()}
+        commandButtonRef={createRef()}
+        queueButtonRef={createRef()}
+      />,
     );
 
     expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);

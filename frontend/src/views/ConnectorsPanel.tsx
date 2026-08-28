@@ -1,6 +1,7 @@
 import { ArrowClockwise, PlugsConnected } from "@phosphor-icons/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type {
   ConnectorConfigureParams,
   ConnectorCredentialAction,
@@ -304,13 +305,13 @@ export function ConnectorsPanel({ bridge }: ConnectorsPanelProps) {
       </div>
       <p className="connector-intro">Connectors stay off until you enable them, add a credential, and run a test.</p>
       {loadError ? (
-        <p className="panel-empty" role="alert">{loadError}</p>
+        <PanelError>{loadError}</PanelError>
       ) : !registry ? (
-        <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the connectors…</p>
+        <PanelLoading>Loading the connectors…</PanelLoading>
       ) : registry.status !== "ok" ? (
-        <p className="panel-empty">{failureText(registry.failure)}</p>
+        <PanelEmpty>{failureText(registry.failure)}</PanelEmpty>
       ) : registry.connectors.length === 0 ? (
-        <p className="panel-empty">No connectors are registered with the daemon yet.</p>
+        <PanelEmpty>No connectors are registered with the daemon yet.</PanelEmpty>
       ) : (
         <div className="connector-list">
           {registry.connectors.map((summary) => (

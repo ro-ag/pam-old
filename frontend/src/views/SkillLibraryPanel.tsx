@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { DAEMON_AUTHORITY, sameFence, withOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type {
   CommandFence,
   PamBridge,
@@ -241,7 +242,7 @@ function LibraryEntries({
   projectScoped: boolean;
 }) {
   if (entries.length === 0) {
-    return <p className="panel-empty">The canonical library has no retained entries yet.</p>;
+    return <PanelEmpty>The canonical library has no retained entries yet.</PanelEmpty>;
   }
   return (
     <div className="skill-library-entries" aria-label="Canonical library entries">
@@ -561,13 +562,15 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
         <div><strong>Drift</strong><span>Read-only comparison with retained canonical bytes.</span></div>
       </div>
       {busy === "load" && !entries ? (
-        <div className="skill-library-state" role="status">Loading bounded library metadata…</div>
+        <PanelLoading as="div" className="skill-library-state">Loading bounded library metadata…</PanelLoading>
       ) : error && !entries ? (
-        <div className="skill-library-state is-error" role="alert">
-          <WarningCircle size={24} aria-hidden="true" />
-          <div><strong>Skill library unavailable</strong><p>{error}</p></div>
-          <button type="button" className="button button--secondary" onClick={() => void load(true)}><ArrowClockwise size={18} /> Retry library</button>
-        </div>
+        <PanelError
+          as="div"
+          className="skill-library-state is-error"
+          icon={<WarningCircle size={24} aria-hidden="true" />}
+          title="Skill library unavailable"
+          action={<button type="button" className="button button--secondary" onClick={() => void load(true)}><ArrowClockwise size={18} /> Retry library</button>}
+        >{error}</PanelError>
       ) : entries ? <LibraryEntries entries={entries} inspections={inspections} projectScoped={projectScoped} /> : null}
 
       {entries && (
@@ -607,7 +610,7 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
           <section aria-labelledby="skill-library-target-heading">
             <div className="skill-library-section-title"><div><HardDrives size={19} /><h3 id="skill-library-target-heading">Manage exact target</h3></div><span>{projectScoped ? "Every action is fenced to the active project generation." : "Assignment needs a project; the library above stays global."}</span></div>
             {!projectScoped ? (
-              <p className="panel-empty">Enabling, materializing, and inspecting drift belong to one project scope, and PAM has none open. Everything above stays readable.</p>
+              <PanelEmpty>Enabling, materializing, and inspecting drift belong to one project scope, and PAM has none open. Everything above stays readable.</PanelEmpty>
             ) : selection ? (
               <>
                 <div className="skill-library-selectors">
@@ -630,7 +633,7 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
                   <button type="button" className="button button--secondary" disabled={busy !== null || !enabled || !managed} onClick={() => void run({ action: "preview_resync", ...selection })}>Preview resync</button>
                 </div>
               </>
-            ) : <p className="panel-empty">Add a library entry before managing an agent target.</p>}
+            ) : <PanelEmpty>Add a library entry before managing an agent target.</PanelEmpty>}
           </section>
 
           {selectedPreview && (
@@ -649,8 +652,8 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
             </section>
           )}
           {verifiedResult && <VerifiedOperationResult result={verifiedResult} />}
-          {busy && busy !== "load" && <p className="skill-library-operation" role="status">Waiting for verified {label(busy)} result…</p>}
-          {error && entries && <p className="skill-library-message is-error" role="alert"><WarningCircle size={17} />{error}</p>}
+          {busy && busy !== "load" && <PanelLoading className="skill-library-operation">Waiting for verified {label(busy)} result…</PanelLoading>}
+          {error && entries && <PanelError className="skill-library-message is-error"><WarningCircle size={17} />{error}</PanelError>}
           {notice && <p className="skill-library-message" role="status"><CheckCircle size={17} />{notice}</p>}
         </div>
       )}

@@ -1,6 +1,5 @@
 import { WarningCircle } from "@phosphor-icons/react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { Tooltip } from "radix-ui";
 import {
   type CSSProperties,
   useCallback,
@@ -634,7 +633,6 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
   const shellStyle: ShellStyle = { "--sidebar-size": `${shellWidth}px` };
   return (
     <MotionConfig reducedMotion="user">
-      <Tooltip.Provider delayDuration={350} skipDelayDuration={150}>
       <div className="app-root" data-theme={theme} data-mode={themeMode}>
       <div className="app-shell" style={shellStyle} inert={applicationOverlayOpen || undefined} aria-hidden={applicationOverlayOpen || undefined}>
         <div className="atmosphere" aria-hidden="true" />
@@ -763,7 +761,6 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
       })}
       {toast && <div className="toast" role="status">{toast}</div>}
       </div>
-      </Tooltip.Provider>
     </MotionConfig>
   );
 }

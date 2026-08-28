@@ -1,6 +1,7 @@
 import { ArrowClockwise, Copy, Terminal } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { DaemonLogEntryDto, DaemonLogsDto, PamBridge } from "../domain";
 import { presentError } from "../state";
 
@@ -128,20 +129,20 @@ export function ConsolePanel({ bridge }: ConsolePanelProps) {
         </div>
       </div>
       {loadError ? (
-        <p className="panel-empty" role="alert">{loadError}</p>
+        <PanelError>{loadError}</PanelError>
       ) : !logs ? (
-        <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the daemon diagnostics…</p>
+        <PanelLoading>Loading the daemon diagnostics…</PanelLoading>
       ) : logs.status !== "ok" ? (
-        <p className="panel-empty">
+        <PanelEmpty>
           {[logs.failure.detail, logs.failure.recovery].filter(Boolean).join(" ")}
-        </p>
+        </PanelEmpty>
       ) : visible.length === 0 ? (
-        <p className="panel-empty">
+        <PanelEmpty>
           <Terminal size={17} aria-hidden="true" />{" "}
           {logs.entries.length === 0
             ? "No diagnostics yet. The daemon logs its startup, warnings, and failures here."
             : "No entries match this severity filter."}
-        </p>
+        </PanelEmpty>
       ) : (
         <div className="access-list console-list">{visible.map(entryRow)}</div>
       )}
