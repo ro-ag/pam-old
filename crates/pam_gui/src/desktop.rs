@@ -2685,7 +2685,14 @@ impl DesktopCore {
         let _command = self.command_gate.lock().await;
         self.begin_daemon(&fence).await?;
         let (state_path, caller) = daemon_access_identity()?;
-        update_daemon_access(state_path, caller, capability, granted).await
+        update_daemon_access(
+            state_path,
+            caller,
+            capability,
+            granted,
+            crate::store_writes::daemon_owns_store(),
+        )
+        .await
     }
 
     /// Converts one TOML flow document into its structured definition, locally.

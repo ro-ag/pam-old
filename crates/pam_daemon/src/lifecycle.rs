@@ -53,12 +53,12 @@ use pam_connectors::{
 use pam_core::{
     APPLICATION_VERSION, ApprovalId, ContentDigest, EvidenceHandle, ProjectId, RequestId,
 };
+use pam_model::{
+    GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, RegisteredModel, RuntimeError,
+    RuntimeFinishReason, RuntimeMessage, RuntimeMessageRole, RuntimeRequest, RuntimeResponse,
+};
 #[cfg(target_os = "macos")]
 use pam_model::{MacosLlamaCppRuntime, ModelRuntime};
-use pam_model::{
-    ModelKey, RuntimeError, RuntimeFinishReason, RuntimeMessage, RuntimeMessageRole,
-    RuntimeRequest, RuntimeResponse,
-};
 use pam_platform::{
     CorporateHttpClientFactory, CorporateHttpClientRequirements, IncomingRequest, LocalEndpoint,
     PacDiagnostic, ProxyBypassDiagnostic, ProxyDiagnosticStatus, ProxyEnvironmentVariable,
@@ -75,10 +75,11 @@ use pam_protocol::{
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
     ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
     DaemonLogsResult, DaemonStatsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
-    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode, LogSeverity,
-    ModelFinishReason, ModelGenerationResult, ModelRole, ModelStatusResult, ModelSummary,
-    ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
-    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
+    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode,
+    GrantRevokeResult, LogSeverity, ModelFinishReason, ModelGenerationResult, ModelRegisterResult,
+    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
+    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
+    ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
     RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
     SourceAvailability, StatusResult, decode_request_envelope, decode_server_message_envelope,
@@ -1099,6 +1100,12 @@ async fn handle_incoming(
         (Capability::ModelStatus, RequestPayload::ModelStatus) => {
             handle_model_status(&request, incoming, &store, &outbound, &model).await
         }
+        (Capability::ModelRegister, RequestPayload::ModelRegister { registration }) => {
+            handle_model_register(&request, registration.clone(), incoming, &store, &outbound).await
+        }
+        (Capability::GrantRevoke, RequestPayload::GrantRevoke { capability }) => {
+            handle_grant_revoke(&request, capability.clone(), incoming, &store, &outbound).await
+        }
         (Capability::ConnectorList, RequestPayload::ConnectorList) => {
             handle_connector_list(&request, incoming, &store, &outbound, &connectors).await
         }
@@ -1207,6 +1214,10 @@ async fn handle_incoming(
 /// `daemon.status` only counts the scope's (always empty) request queue, and
 /// `network.diagnostics` observes this host's TLS and proxy configuration,
 /// which belongs to the daemon process rather than to any project.
+/// `model.register` writes the daemon-global model registry, and
+/// `grant.revoke` drops the requesting caller's own grants in the scope the
+/// envelope names -- which for the GUI's Access controls is this same
+/// daemon scope.
 pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool {
     matches!(
         capability,
@@ -1218,6 +1229,8 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::CallerList
             | Capability::ModelStatus
             | Capability::ModelInfer
+            | Capability::ModelRegister
+            | Capability::GrantRevoke
             | Capability::NetworkDiagnostics
             | Capability::ConnectorList
             | Capability::ConnectorConfigure
@@ -1404,6 +1417,11 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
             )
             | (Capability::ModelInfer, RequestPayload::ModelInfer { .. })
             | (Capability::ModelStatus, RequestPayload::ModelStatus)
+            | (
+                Capability::ModelRegister,
+                RequestPayload::ModelRegister { .. }
+            )
+            | (Capability::GrantRevoke, RequestPayload::GrantRevoke { .. })
             | (Capability::FlowRun, RequestPayload::FlowRun { .. })
             | (Capability::ConnectorList, RequestPayload::ConnectorList)
             | (
@@ -1421,6 +1439,7 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
         && request.validate_model_request().is_ok()
         && request.validate_flow_request().is_ok()
         && request.validate_connector_request().is_ok()
+        && request.validate_grant_request().is_ok()
 }
 
 async fn append_request_audit(
@@ -1559,6 +1578,8 @@ pub(super) fn policy_resource(
         | RequestPayload::CallerList
         | RequestPayload::ModelStatus => "daemon".to_owned(),
         RequestPayload::ProjectCurrent => "project".to_owned(),
+        RequestPayload::ModelRegister { registration } => format!("model:{}", registration.model),
+        RequestPayload::GrantRevoke { capability } => format!("grant:{capability}"),
         RequestPayload::ConnectorList => "connector".to_owned(),
         RequestPayload::ConnectorConfigure { connector, .. }
         | RequestPayload::ConnectorTest { connector } => format!("connector:{connector}"),
@@ -1742,6 +1763,8 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::DaemonStats
         | Capability::CallerList
         | Capability::ModelStatus
+        | Capability::ModelRegister
+        | Capability::GrantRevoke
         | Capability::ConnectorList
         | Capability::ConnectorConfigure
         | Capability::ConnectorTest
@@ -2662,7 +2685,7 @@ fn connector_summary(
     }
 }
 
-async fn append_connector_audit(
+async fn append_change_audit(
     store: &Store,
     request: &RequestEnvelope,
     action: &str,
@@ -2685,6 +2708,170 @@ async fn append_connector_audit(
                 .min(i64::MAX as u64),
         })
         .await?;
+    Ok(())
+}
+
+/// Registers one verified model in the durable registry the daemon owns.
+///
+/// The wire payload carries bounded text only: every field is rebuilt through
+/// `pam_model`'s validating constructors here, so a client cannot register a
+/// record the domain itself would reject.
+async fn handle_model_register(
+    request: &RequestEnvelope,
+    registration: ModelRegistration,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+) -> Result<(), DaemonError> {
+    let Some(model) = registered_model(&registration) else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "model registration is not a valid registry record",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let key = model.key.id();
+    let record = match store.put_model(model).await {
+        Ok(record) => record,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    append_change_audit(
+        store,
+        request,
+        "model.register",
+        "registered",
+        &format!(
+            "model={key} size_bytes={} digest={}",
+            record.size_bytes,
+            record.digest.as_str()
+        ),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ModelRegister(ModelRegisterResult {
+                model: record.key.id(),
+                registered_at_ms: record.registered_at_ms,
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+fn registered_model(registration: &ModelRegistration) -> Option<RegisteredModel> {
+    let (vendor, name) = registration.model.split_once('/')?;
+    let license = LicenseSnapshot::new(
+        registration.license_id.clone(),
+        registration.license_url.clone(),
+        ContentDigest::parse(registration.license_digest.clone()).ok()?,
+    )
+    .ok()?;
+    let source = match registration.source_url.as_deref() {
+        None => ModelSource::Local,
+        Some(url) => ModelSource::https(url).ok()?,
+    };
+    Some(RegisteredModel {
+        key: ModelKey::new(vendor, name).ok()?,
+        path: PathBuf::from(&registration.path),
+        digest: ContentDigest::parse(registration.digest.clone()).ok()?,
+        size_bytes: registration.size_bytes,
+        gguf: GgufMetadata {
+            version: registration.gguf_version,
+            tensor_count: registration.gguf_tensor_count,
+            metadata_kv_count: registration.gguf_metadata_kv_count,
+            architecture: None,
+            model_name: None,
+            license: None,
+        },
+        license,
+        source,
+        registered_at_ms: registration.registered_at_ms,
+    })
+}
+
+/// Revokes every active grant the requesting caller holds for one capability.
+///
+/// The caller and project come from the authenticated envelope, never from the
+/// payload: this request can only drop the requester's own authority, which is
+/// what makes `grant.revoke` safe as a baseline capability.
+async fn handle_grant_revoke(
+    request: &RequestEnvelope,
+    capability: String,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+) -> Result<(), DaemonError> {
+    let Ok(capability) = CapabilityName::parse(capability) else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "capability name is not a valid policy capability",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let now = now_ms();
+    let active = match store
+        .active_grants(request.caller_id.clone(), request.project_id.clone(), now)
+        .await
+    {
+        Ok(active) => active,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let mut revoked = 0_u32;
+    for grant in active.iter().filter(|grant| grant.capability == capability) {
+        if let Err(error) = store.revoke_grant(grant.id.clone(), now).await {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+        revoked = revoked.saturating_add(1);
+    }
+    append_change_audit(
+        store,
+        request,
+        "grant.revoke",
+        "revoked",
+        &format!("capability={} revoked={revoked}", capability.as_str()),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::GrantRevoke(GrantRevokeResult {
+                capability: capability.as_str().to_owned(),
+                revoked,
+            }),
+        ))],
+        None,
+    )
+    .await;
     Ok(())
 }
 
@@ -2817,7 +3004,7 @@ async fn handle_connector_configure(
         }
     };
     // The credential value itself never reaches the audit ledger.
-    append_connector_audit(
+    append_change_audit(
         store,
         request,
         "connector.configure",
@@ -2916,7 +3103,7 @@ async fn handle_connector_test(
         send_store_failure(outbound, incoming, request, &error).await;
         return Ok(());
     }
-    append_connector_audit(
+    append_change_audit(
         store,
         request,
         "connector.test",
@@ -4142,6 +4329,8 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::ReadEvidence { .. }
         | RequestPayload::ModelInfer { .. }
         | RequestPayload::ModelStatus
+        | RequestPayload::ModelRegister { .. }
+        | RequestPayload::GrantRevoke { .. }
         | RequestPayload::FlowRun { .. }
         | RequestPayload::ConnectorList
         | RequestPayload::ConnectorConfigure { .. }

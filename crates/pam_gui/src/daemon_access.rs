@@ -17,18 +17,26 @@ use pam_store::{PutGrant, Store, StoreError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::desktop::{DesktopErrorDto, DesktopResult};
+use crate::{
+    desktop::{DesktopErrorDto, DesktopResult},
+    store_writes::{StoreWriteFailure, revoke_capability},
+};
 
 /// The daemon-scoped capabilities the GUI itself calls, with the surface each
 /// one serves. Every entry must stay outside
 /// [`pam_policy::BASELINE_CAPABILITIES`]: revoking a row drops every grant
 /// for that capability, which only reads as "not granted" while default-deny
 /// still applies.
-pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 4] = [
+pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 5] = [
     (
         "model.infer",
         "Model inference",
         "Chat and the Models view model check ask the loaded model to generate.",
+    ),
+    (
+        "model.register",
+        "Model registration",
+        "Models registers an imported or downloaded GGUF in the daemon's registry.",
     ),
     (
         "network.diagnostics",
@@ -97,13 +105,22 @@ pub(crate) async fn update_daemon_access(
     caller: CallerId,
     capability: String,
     granted: bool,
+    daemon_owns_store: bool,
 ) -> DesktopResult<DaemonAccessDto> {
     let capability = known_capability(&capability)?;
     let now = now_ms()?;
     let store = open_store(&state_path)?;
-    let grants = apply(&store, &caller, &capability, granted, now).await;
+    let grants = apply(
+        &store,
+        &caller,
+        &capability,
+        granted,
+        now,
+        daemon_owns_store,
+    )
+    .await;
     let shutdown = store.shutdown().await;
-    let grants = grants.map_err(write_error)?;
+    let grants = grants?;
     shutdown.map_err(store_error)?;
     Ok(access_dto(&grants))
 }
@@ -114,21 +131,26 @@ async fn apply(
     capability: &CapabilityName,
     granted: bool,
     now_ms: u64,
-) -> Result<Vec<Grant>, StoreError> {
+    daemon_owns_store: bool,
+) -> DesktopResult<Vec<Grant>> {
     let project = ProjectId::daemon_scope();
     let active = store
         .active_grants(caller.clone(), project.clone(), now_ms)
-        .await?;
+        .await
+        .map_err(write_error)?;
     if granted && is_granted(&active, capability) {
         return Ok(active);
     }
-    for grant in active
-        .iter()
-        .filter(|grant| grant.capability == *capability)
-    {
-        store.revoke_grant(grant.id.clone(), now_ms).await?;
+    if active.iter().any(|grant| grant.capability == *capability) {
+        // Revocation is routed to the daemon while it owns the store.
+        revoke_capability(store, caller, capability, now_ms, daemon_owns_store)
+            .await
+            .map_err(revoke_error)?;
     }
     if granted {
+        // Granting stays a direct write: a caller cannot be handed the
+        // authority to grant itself authority, so this bootstrap has no
+        // protocol equivalent to route to.
         store
             .put_grant(PutGrant {
                 grant: Grant {
@@ -144,9 +166,13 @@ async fn apply(
                 },
                 created_at_ms: now_ms,
             })
-            .await?;
+            .await
+            .map_err(write_error)?;
     }
-    store.active_grants(caller.clone(), project, now_ms).await
+    store
+        .active_grants(caller.clone(), project, now_ms)
+        .await
+        .map_err(write_error)
 }
 
 /// Mirrors deny-overrides policy for a request over any resource: an explicit
@@ -218,6 +244,12 @@ fn store_error(_error: StoreError) -> DesktopErrorDto {
         "PAM could not read its durable capability grants.",
         Some("Verify the local PAM state directory and retry.".to_owned()),
     )
+}
+
+/// A refused revocation keeps the daemon's own words: the owner needs to see
+/// that a running daemon declined, not a generic store message.
+fn revoke_error(failure: StoreWriteFailure) -> DesktopErrorDto {
+    DesktopErrorDto::unavailable(failure.detail, failure.recovery)
 }
 
 fn write_error(_error: StoreError) -> DesktopErrorDto {

@@ -22,9 +22,13 @@ use pam_model::{
     model_path_under,
 };
 use pam_platform::user_data_dir;
-use pam_store::Store;
 
-use crate::{model_import::parse_model_key, model_presets::ModelPreset, settings};
+use crate::{
+    model_import::parse_model_key,
+    model_presets::ModelPreset,
+    settings,
+    store_writes::{StoreWriteFailure, register_model},
+};
 
 /// ponytail: Hugging Face's download redirect lands on a region-sharded CDN
 /// host (observed `us.aws.cdn.hf.co` from this network today; HF documents
@@ -55,6 +59,15 @@ impl ModelDownloadFailure {
         Self {
             detail: detail.into(),
             recovery: Some(recovery.into()),
+        }
+    }
+}
+
+impl From<StoreWriteFailure> for ModelDownloadFailure {
+    fn from(failure: StoreWriteFailure) -> Self {
+        Self {
+            detail: failure.detail,
+            recovery: failure.recovery,
         }
     }
 }
@@ -345,24 +358,10 @@ fn now_ms() -> Result<u64, ModelDownloadFailure> {
     })
 }
 
+/// Persists one verified download through the same routed registration the
+/// GUI's local import uses: the daemon writes the registry while it owns it.
 async fn persist(registered: RegisteredModel) -> Result<RegisteredModel, ModelDownloadFailure> {
-    let recovery = "Verify the local PAM data store, then retry the download.";
-    let state_path = user_data_dir()
-        .map_err(|_| {
-            ModelDownloadFailure::new(
-                "PAM could not resolve its local data store.",
-                "Verify the operating system user data directory, then retry.",
-            )
-        })?
-        .join("state.sqlite3");
-    let store = Store::open(state_path)
-        .map_err(|error| ModelDownloadFailure::new(error.to_string(), recovery))?;
-    let result = store.put_model(registered).await;
-    let shutdown = store.shutdown().await;
-    let registered =
-        result.map_err(|error| ModelDownloadFailure::new(error.to_string(), recovery))?;
-    shutdown.map_err(|error| ModelDownloadFailure::new(error.to_string(), recovery))?;
-    Ok(registered)
+    register_model(registered).await.map_err(Into::into)
 }
 
 /// Delegates to an inner transport, adding each response chunk's length into

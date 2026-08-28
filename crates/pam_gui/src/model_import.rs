@@ -22,9 +22,9 @@ use pam_model::{
     ImportRequest, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelError, ModelKey,
     RegisteredModel, import_existing, inspect_model_file, is_calibrated_artifact,
 };
-use pam_platform::user_data_dir;
-use pam_store::Store;
 use sha2::{Digest, Sha256};
+
+use crate::store_writes::{StoreWriteFailure, register_model};
 
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const METADATA_RECOVERY: &str = "Check the GGUF file and license metadata, then import again.";
@@ -71,6 +71,15 @@ impl ModelImportFailure {
 impl From<ModelError> for ModelImportFailure {
     fn from(error: ModelError) -> Self {
         Self::new(error.to_string(), METADATA_RECOVERY)
+    }
+}
+
+impl From<StoreWriteFailure> for ModelImportFailure {
+    fn from(failure: StoreWriteFailure) -> Self {
+        Self {
+            detail: failure.detail,
+            recovery: failure.recovery,
+        }
     }
 }
 
@@ -463,23 +472,9 @@ pub(crate) async fn run_model_import(
             ));
         }
     };
-    let store_recovery = "Verify the local PAM data store, then import again.";
-    let state_path = user_data_dir()
-        .map_err(|_| {
-            ModelImportFailure::new(
-                "PAM could not resolve its local data store.",
-                "Verify the operating system user data directory, then import again.",
-            )
-        })?
-        .join("state.sqlite3");
-    let store = Store::open(state_path)
-        .map_err(|error| ModelImportFailure::new(error.to_string(), store_recovery))?;
-    let result = store.put_model(imported).await;
-    let shutdown = store.shutdown().await;
-    let registered =
-        result.map_err(|error| ModelImportFailure::new(error.to_string(), store_recovery))?;
-    shutdown.map_err(|error| ModelImportFailure::new(error.to_string(), store_recovery))?;
-    Ok(registered)
+    // The daemon owns the durable registry while it runs, so registration is
+    // routed to it rather than written underneath it.
+    register_model(imported).await.map_err(Into::into)
 }
 
 /// One pre-import preview of a candidate GGUF: its identity metadata and

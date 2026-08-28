@@ -16,6 +16,7 @@ mod settings;
 mod skill_audit;
 mod skill_inventory;
 mod skill_library;
+mod store_writes;
 
 #[cfg(test)]
 mod access_config_test;
@@ -49,6 +50,8 @@ mod skill_audit_test;
 mod skill_inventory_test;
 #[cfg(test)]
 mod skill_library_test;
+#[cfg(test)]
+mod store_writes_test;
 
 pub use desktop::{
     AccessConfigDto, ActivityDayDto, ActivityDto, ActivityEventDto, AppSettingsDto,

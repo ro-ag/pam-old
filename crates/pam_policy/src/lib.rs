@@ -187,7 +187,13 @@ pub enum Decision {
 /// a baseline configure would let any local caller redirect a connector's
 /// base URL to a host it controls and then exfiltrate the stored credential
 /// by running a test against it.
-pub const BASELINE_CAPABILITIES: [&str; 9] = [
+///
+/// `grant.revoke` is baseline because the daemon binds it to the requesting
+/// caller's own grants: it can only ever drop the requester's authority, and
+/// needing authority to give up authority would make the owner's Revoke
+/// control unusable the moment the daemon holds the store. An explicit deny
+/// still overrides it.
+pub const BASELINE_CAPABILITIES: [&str; 10] = [
     "daemon.status",
     "project.current",
     "daemon.stop",
@@ -197,6 +203,7 @@ pub const BASELINE_CAPABILITIES: [&str; 9] = [
     "caller.list",
     "model.status",
     "connector.list",
+    "grant.revoke",
 ];
 
 /// Evaluates active grants using deny-overrides semantics.
