@@ -36,7 +36,7 @@ use super::{
         read_startup_progress, reap_daemon_child_for_test, registered_model_catalog_in_for_test,
         registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
         reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
-        switch_authority_for_test, wait_for_daemon_serving_for_test,
+        stop_outcome_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -2234,4 +2234,54 @@ fn global_daemon_start_prefers_the_user_home_directory() {
         Some(home) => assert_eq!(cwd, home),
         None => assert_eq!(cwd, fallback),
     }
+}
+
+/// Regression: a daemon that stops answering used to be unstoppable from the
+/// GUI. `stop_daemon` propagated the failed protocol request, so it never
+/// reached `reap_daemon_child` and the owner was left with a multi-gigabyte
+/// process, an ignored SIGINT, and a Stop button that did nothing.
+#[test]
+fn a_failed_stop_request_still_succeeds_when_this_process_owns_the_child() {
+    stop_outcome_for_test(Err("daemon request timed out".to_owned()), true)
+        .expect("a reaped child means the daemon really is stopped");
+}
+
+#[test]
+fn a_failed_stop_request_is_reported_for_a_daemon_this_process_did_not_spawn() {
+    let error = stop_outcome_for_test(Err("daemon request timed out".to_owned()), false)
+        .expect_err("a daemon we never spawned is not ours to kill");
+    assert_eq!(error.kind, DesktopErrorKind::Unavailable);
+    assert!(error.message.contains("timed out"), "{error:?}");
+}
+
+#[test]
+fn a_stop_request_that_lands_succeeds_either_way() {
+    stop_outcome_for_test(Ok(()), true).unwrap();
+    stop_outcome_for_test(Ok(()), false).unwrap();
+}
+
+/// The escape hatch itself: a daemon wedged past the point of honouring
+/// SIGINT must still be collected. The live qwen3next wedge ignored SIGINT
+/// for 15s before it was killed.
+#[cfg(unix)]
+#[tokio::test]
+async fn reap_daemon_child_kills_a_child_that_ignores_interruption() {
+    let (executable, directory) = fake_daemon_script("ignores-int", "trap '' INT TERM; sleep 300");
+    let child = std::process::Command::new(&executable).spawn().unwrap();
+    let pid = child.id();
+    let mut slot = Some(child);
+
+    reap_daemon_child_for_test(&mut slot);
+
+    assert!(slot.is_none());
+    let gone = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -0 {pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(
+        !gone.success(),
+        "wedged daemon child {pid} survived the reap"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
 }

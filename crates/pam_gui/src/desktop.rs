@@ -1679,13 +1679,27 @@ impl DesktopCore {
         let credential = load_credential(caller.clone()).await.map_err(|detail| {
             DesktopErrorDto::unavailable(detail, Some(GUI_REGISTRATION_RECOVERY.to_owned()))
         })?;
-        request_daemon_stop_authenticated(caller.clone(), credential.clone(), scope.project_id())
-            .await
-            .map_err(|detail| DesktopErrorDto::unavailable(detail, None))?;
+        // A daemon that stopped answering cannot be asked to stop, and that is
+        // exactly when stopping matters most: a wedged daemon holds a
+        // multi-gigabyte model and ignores SIGINT, so without this the owner
+        // has no way to unload it short of `kill -9` in a terminal. This
+        // process spawned that daemon and still holds its `Child`, so the
+        // failed request is not the end of the road — `reap_daemon_child`
+        // already waits `DAEMON_STOP_GRACE` and then kills. It only ever
+        // touches a child this process started; a daemon we do not own still
+        // reports the failure.
+        let requested = request_daemon_stop_authenticated(
+            caller.clone(),
+            credential.clone(),
+            scope.project_id(),
+        )
+        .await;
         match scope {
             CommandScope::Daemon => {
                 let mut state = self.inner.lock().await;
+                let owned = state.daemon_child.is_some();
                 reap_daemon_child(&mut state.daemon_child);
+                stop_outcome(requested, owned)?;
                 Ok(None)
             }
             CommandScope::Project(active) => {
@@ -1698,7 +1712,9 @@ impl DesktopCore {
                 .await;
                 let mut state = self.inner.lock().await;
                 ensure_active_matches(&state, &active, &fence)?;
+                let owned = state.daemon_child.is_some();
                 reap_daemon_child(&mut state.daemon_child);
+                stop_outcome(requested, owned)?;
                 finish_snapshot_locked(&mut state, fence, active, surfaces).map(Some)
             }
         }
@@ -4801,6 +4817,21 @@ fn bounded_utf8(mut value: String, maximum: usize) -> String {
 /// is killed, and the child is always waited on — dropping the handle without
 /// a wait would leave a zombie once the process exits, and an untracked live
 /// daemon would block a later start on the ownership lock.
+/// Whether a stop whose protocol request failed still counts as a stop.
+///
+/// It does exactly when this process owned the daemon's child, because that
+/// child has just been reaped: the daemon really is gone, and reporting an
+/// error would leave the owner staring at a Stop button that never works. A
+/// daemon this process did not spawn is not ours to kill, so there the failed
+/// request is the answer.
+fn stop_outcome(requested: Result<(), String>, owned_child: bool) -> DesktopResult<()> {
+    match requested {
+        Ok(()) => Ok(()),
+        Err(_) if owned_child => Ok(()),
+        Err(detail) => Err(DesktopErrorDto::unavailable(detail, None)),
+    }
+}
+
 fn reap_daemon_child(child_slot: &mut Option<Child>) {
     let Some(mut child) = child_slot.take() else {
         return;
@@ -4929,6 +4960,14 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn stop_outcome_for_test(
+    requested: Result<(), String>,
+    owned_child: bool,
+) -> DesktopResult<()> {
+    stop_outcome(requested, owned_child)
 }
 
 #[cfg(test)]
