@@ -4,20 +4,26 @@ import {
   FloppyDisk,
   GitBranch,
   ListChecks,
+  Play,
+  Prohibit,
   SidebarSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { sameFence, withDaemonOperation, withOperation } from "../bridge";
-import { PanelError, PanelLoading } from "../components/PanelState";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type {
   CommandFence,
   FlowDefinitionJson,
   FlowDocumentDataDto,
   FlowReviewDataDto,
+  FlowRunDataDto,
+  FlowRunHistoryDataDto,
+  FlowRunProgressDataDto,
   FlowWorkspaceDataDto,
   PamBridge,
+  TimelineFactDto,
 } from "../domain";
 import { MAX_FLOW_SOURCE } from "../domain";
 import { presentError } from "../state";
@@ -29,6 +35,11 @@ function sameAuthority(left: CommandFence, right: CommandFence): boolean {
 
 const MAX_HISTORY = 50;
 const HISTORY_COALESCE_MS = 800;
+/** Retained transitions for the run on screen. The desktop core bounds each
+ * window on its own; this bounds what the view accumulates across windows. */
+const MAX_RUN_FACTS = 200;
+/** Interval between bounded replay reads while a run is still in flight. */
+const RUN_POLL_MS = 900;
 
 interface DefinitionHistory {
   past: FlowDefinitionJson[];
@@ -43,13 +54,22 @@ export interface FlowsViewProps {
   fence: CommandFence | null;
   onError: (message: string) => void;
   onToast: (message: string) => void;
+  /** Opens one evidence handle in the app's shared evidence drawer. */
+  onEvidence?: (handle: string) => void;
 }
+
+const runStateLabel = (entry: { state: string; outcome: string | null }) => entry.outcome ?? entry.state;
+
+// The pill reuses the shared state-pill vocabulary rather than inventing one.
+const runStateTone = (entry: { state: string; outcome: string | null }) => `state-pill--${runStateLabel(entry)}`;
+
+const runTimestamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 // Flow definitions are a daemon-global library, so this view always speaks
 // the daemon authority and carries no project identity. The `fence` prop is
 // only a refresh signal: its generation rotates on ⌘R, activate, and daemon
 // lifecycle changes.
-export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsViewProps) {
+export function FlowsView({ bridge, fence: fenceProp, onError, onToast, onEvidence }: FlowsViewProps) {
   const fence = useMemo(() => withDaemonOperation(), []);
   const [workspace, setWorkspace] = useState<FlowWorkspaceDataDto | null>(null);
   const [selected, setSelected] = useState<FlowDocumentDataDto | null>(null);
@@ -65,6 +85,17 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
   const [validationError, setValidationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [catalogHidden, setCatalogHidden] = useState(false);
+  const [run, setRun] = useState<FlowRunDataDto | null>(null);
+  const [progress, setProgress] = useState<FlowRunProgressDataDto | null>(null);
+  const [facts, setFacts] = useState<TimelineFactDto[]>([]);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runPanel, setRunPanel] = useState<"run" | "history">("run");
+  const [history, setHistory] = useState<FlowRunHistoryDataDto | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  // The run takes a catalog definition handle, not the open document handle.
+  const [selectedHandle, setSelectedHandle] = useState<string | null>(null);
+  const cursorRef = useRef(0);
   const validationErrorId = useId();
   const fenceRef = useRef(fence);
   const requestSequence = useRef(0);
@@ -164,6 +195,7 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
     const sequence = ++requestSequence.current;
     const requestFence = withOperation(fenceRef.current);
     setBusy(true);
+    setSelectedHandle(flowHandle);
     setSelected(null);
     setDraft("");
     resetEditorModes();
@@ -387,6 +419,106 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
     }
   };
 
+  const loadHistory = useCallback(async () => {
+    const requestFence = withOperation(fenceRef.current);
+    setHistoryError(null);
+    try {
+      const response = await bridge.flowRunHistory(requestFence);
+      if (!sameAuthority(requestFence, fenceRef.current)) return;
+      if (!sameFence(requestFence, response.fence)) {
+        setHistoryError("The run history response did not match the daemon request. Retry the history.");
+        return;
+      }
+      setHistory(response.data);
+    } catch (error) {
+      if (sameAuthority(requestFence, fenceRef.current)) setHistoryError(presentError(error));
+    }
+  }, [bridge]);
+
+  // The history is durable, so it is read once the library is on screen and
+  // again whenever a run reaches a terminal result.
+  useEffect(() => {
+    if (workspace) void loadHistory();
+  }, [workspace, loadHistory]);
+
+  const startRun = async (flowHandle: string) => {
+    if (runBusy) return;
+    const requestFence = withOperation(fenceRef.current);
+    setRunBusy(true);
+    setRunError(null);
+    setRun(null);
+    setProgress(null);
+    setFacts([]);
+    cursorRef.current = 0;
+    setRunPanel("run");
+    try {
+      const response = await bridge.flowRun(requestFence, flowHandle);
+      if (!sameAuthority(requestFence, fenceRef.current)) return;
+      if (!sameFence(requestFence, response.fence)) {
+        setRunError("The flow run response did not match the daemon request. Retry the run.");
+        return;
+      }
+      setRun(response.data);
+      onToast(`Running ${response.data.definitionId}`);
+    } catch (error) {
+      if (sameAuthority(requestFence, fenceRef.current)) setRunError(presentError(error));
+    } finally {
+      if (sameAuthority(requestFence, fenceRef.current)) setRunBusy(false);
+    }
+  };
+
+  // Progress is read the same way the CLI reads it: a bounded replay window
+  // from the last cursor, and the terminal result once the run has one.
+  const runId = run?.runId ?? null;
+  const terminal = progress?.terminal ?? false;
+  useEffect(() => {
+    if (!runId || terminal) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const requestFence = withOperation(fenceRef.current);
+      try {
+        const response = await bridge.flowRunProgress(requestFence, runId, cursorRef.current);
+        if (cancelled || !sameAuthority(requestFence, fenceRef.current)) return;
+        if (sameFence(requestFence, response.fence) && response.data.runId === runId) {
+          cursorRef.current = response.data.cursor;
+          setProgress(response.data);
+          if (response.data.facts.length > 0) {
+            setFacts((current) => [...current, ...response.data.facts].slice(-MAX_RUN_FACTS));
+          }
+          if (response.data.terminal) {
+            void loadHistory();
+            return;
+          }
+        }
+      } catch (error) {
+        if (cancelled || !sameAuthority(requestFence, fenceRef.current)) return;
+        setRunError(presentError(error));
+        return;
+      }
+      timer = setTimeout(() => void poll(), RUN_POLL_MS);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [bridge, runId, terminal, loadHistory]);
+
+  const cancelRun = async () => {
+    if (!run || terminal) return;
+    const requestFence = withOperation(fenceRef.current);
+    try {
+      const response = await bridge.flowRunCancel(requestFence, run.runId);
+      if (!sameAuthority(requestFence, fenceRef.current)) return;
+      onToast(response.data.disposition === "requested"
+        ? "Cancellation requested; PAM stops at the next safe boundary"
+        : `Cancellation ${response.data.disposition.replace(/_/g, " ")}`);
+    } catch (error) {
+      if (sameAuthority(requestFence, fenceRef.current)) setRunError(presentError(error));
+    }
+  };
+
   const acceptedReview = reviewedSource === draft ? review : null;
 
   return (
@@ -439,6 +571,7 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
                   </div>
                 )}
                 <button type="button" className="button button--secondary button--small" disabled={busy || !selected} onClick={() => void validate()}><ListChecks size={17} /> Validate</button>
+                <button type="button" className="button button--secondary button--small" disabled={busy || runBusy || !selectedHandle} onClick={() => selectedHandle && void startRun(selectedHandle)}><Play size={17} /> Run</button>
                 <button type="button" className="button button--primary button--small" disabled={busy || !acceptedReview?.diff.changed} onClick={() => void save()}><FloppyDisk size={17} /> Save</button>
               </div>
             </div>
@@ -475,6 +608,82 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast }: FlowsV
               <span>{visualActive && definition ? `${definition.steps.length} steps` : `${draft.length.toLocaleString()} / ${MAX_FLOW_SOURCE.toLocaleString()} characters`}</span>
               {acceptedReview && <span className={acceptedReview.dryRun.daemonDefinitionEligible ? "is-valid" : "is-invalid"}>{acceptedReview.dryRun.daemonDefinitionEligible ? `Valid · ${acceptedReview.dryRun.steps.length} dry-run steps` : "Valid · outside daemon authority"}</span>}
             </div>
+            <Tabs
+              className="flow-runs"
+              selectedKey={runPanel}
+              onSelectionChange={(key) => {
+                if (key === "run" || key === "history") setRunPanel(key);
+              }}
+            >
+              <TabList className="flow-inspector-tabs" aria-label="Flow runs">
+                <Tab id="run" className="flow-inspector-tab">Run</Tab>
+                <Tab id="history" className="flow-inspector-tab">History{history ? ` · ${history.runs.length}` : ""}</Tab>
+              </TabList>
+              <TabPanel id="run" className="flow-run-panel">
+                {runError && <PanelError as="div" className="validation-errors"><p><WarningCircle size={16} aria-hidden="true" />{runError}</p></PanelError>}
+                {!run ? (
+                  <PanelEmpty>Run a definition to watch its transitions, outcome, and evidence here.</PanelEmpty>
+                ) : (
+                  <>
+                    <div className="flow-run-head">
+                      <div><strong>{run.definitionId}</strong><small>{run.runId}</small></div>
+                      {/* A run genuinely has a project; the library it came from does not. */}
+                      <span className="state-pill state-pill--ready" title={run.projectLabel}>{run.projectLabel}</span>
+                      <button type="button" className="button button--secondary button--small" disabled={terminal} onClick={() => void cancelRun()}><Prohibit size={16} /> Cancel</button>
+                    </div>
+                    <code className="flow-run-retry">{run.retryCommand}</code>
+                    {progress?.detailError && <p className="bounded-note">{progress.detailError}</p>}
+                    {facts.length === 0 && !terminal && <PanelLoading>Waiting for the first transition…</PanelLoading>}
+                    <ol className="flow-run-facts">
+                      {facts.map((fact, index) => (
+                        <li className={`is-${fact.kind}`} key={`${index}:${fact.label}`}>
+                          <strong>{fact.label}</strong>
+                          <span>{fact.summary}</span>
+                          {fact.evidence.map((handle) => (
+                            <button type="button" className="flow-run-evidence" key={handle} disabled={!onEvidence} onClick={() => onEvidence?.(handle)}>Evidence</button>
+                          ))}
+                        </li>
+                      ))}
+                    </ol>
+                    {progress?.truncated && <p className="bounded-note">The bounded progress window was truncated.</p>}
+                    {progress?.outcome && (
+                      <div className="flow-run-outcome">
+                        <h3>{progress.outcome.heading}</h3>
+                        {progress.outcome.sections.map((section) => (
+                          <p className={section.satisfied ? "is-satisfied" : ""} key={section.label}><strong>{section.label}</strong>{section.summary}</p>
+                        ))}
+                        {progress.outcome.evidence.map((handle) => (
+                          <button type="button" className="flow-run-evidence" key={handle} disabled={!onEvidence} onClick={() => onEvidence?.(handle)}>Evidence</button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </TabPanel>
+              <TabPanel id="history" className="flow-run-history">
+                {historyError ? (
+                  <PanelError as="div" className="validation-errors"><p><WarningCircle size={16} aria-hidden="true" />{historyError}</p></PanelError>
+                ) : !history ? (
+                  <PanelLoading>Reading the bounded run history…</PanelLoading>
+                ) : history.runs.length === 0 ? (
+                  <PanelEmpty>No flow has been run yet.</PanelEmpty>
+                ) : (
+                  <>
+                    {history.runs.map((entry) => (
+                      <p key={entry.runId}>
+                        <strong>{entry.definitionId ?? "(definition edited since)"}</strong>
+                        <small title={entry.runId}>{entry.runId}</small>
+                        {/* Per-row project label: the run's own binding. */}
+                        <small title={entry.projectLabel}>{entry.projectLabel}</small>
+                        <small>{runTimestamp(entry.startedAtMs)}</small>
+                        <span className={`state-pill ${runStateTone(entry)}`}>{runStateLabel(entry)}</span>
+                      </p>
+                    ))}
+                    {history.truncated && <p className="bounded-note">Older runs are outside this bounded history.</p>}
+                  </>
+                )}
+              </TabPanel>
+            </Tabs>
             {acceptedReview && (
               <Tabs
                 className="flow-inspector"

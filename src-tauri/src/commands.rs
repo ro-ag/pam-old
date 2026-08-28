@@ -7,7 +7,8 @@ use pam_gui::{
     DaemonAccessDto, DaemonLogsDto, DaemonStartupProgressDto, DaemonStatsDto, DesktopCore,
     DesktopErrorDto, DesktopErrorKind, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
-    FlowSaveDto, FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
+    FlowRunCancelDto, FlowRunDto, FlowRunHistoryDto, FlowRunProgressDto, FlowSaveDto,
+    FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
     ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelImportStatusDto, ModelInferDto,
     ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
     OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
@@ -146,6 +147,31 @@ pub(crate) struct OpenFlowRequest {
     operation_id: OperationId,
     #[serde(deserialize_with = "canonical_uuid")]
     flow_handle: FlowDefinitionHandle,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FlowRunProgressRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    run: String,
+    after: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FlowRunCancelRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    run: String,
 }
 
 #[derive(Deserialize)]
@@ -911,6 +937,69 @@ pub(crate) async fn open_flow(
             request.flow_handle,
         )
         .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_run(
+    state: State<'_, DesktopState>,
+    request: OpenFlowRequest,
+) -> Result<FlowRunDto, DesktopErrorDto> {
+    state
+        .core
+        .flow_run(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.flow_handle,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_run_progress(
+    state: State<'_, DesktopState>,
+    request: FlowRunProgressRequest,
+) -> Result<FlowRunProgressDto, DesktopErrorDto> {
+    state
+        .core
+        .flow_run_progress(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.run,
+            request.after,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_run_cancel(
+    state: State<'_, DesktopState>,
+    request: FlowRunCancelRequest,
+) -> Result<FlowRunCancelDto, DesktopErrorDto> {
+    state
+        .core
+        .flow_run_cancel(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.run,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_run_history(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<FlowRunHistoryDto, DesktopErrorDto> {
+    state.core.flow_run_history(request.into_fence()).await
 }
 
 #[tauri::command]

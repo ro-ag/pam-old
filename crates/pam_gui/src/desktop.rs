@@ -11,7 +11,9 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-use pam_core::{CallerCredential, CallerId, EvidenceHandle as ProtocolEvidenceHandle, ProjectId};
+use pam_core::{
+    CallerCredential, CallerId, EvidenceHandle as ProtocolEvidenceHandle, ProjectId, RequestId,
+};
 use pam_daemon::registered_projects;
 use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, StepCondition};
 use pam_platform::{CallerKind, caller_id, discover_project, user_data_dir};
@@ -44,6 +46,11 @@ use crate::{
     flow_editor::{
         ActionAuthority, DaemonAuthority, DryRunCondition, FlowDryRunPlan, FlowEditorDocument,
         FlowEditorError, FlowEditorModel, FlowIdentity, FlowVersionDiff, FlowVersionDiffLineKind,
+    },
+    flow_runs::{
+        self, FlowRunCancelDataDto, FlowRunCancelDto, FlowRunDataDto, FlowRunDto,
+        FlowRunHistoryDataDto, FlowRunHistoryDto, FlowRunHistoryEntryDto, FlowRunProgressDataDto,
+        FlowRunProgressDto, FlowRunSubmissions,
     },
     model_discovery::discover_license,
     model_download::{
@@ -1136,6 +1143,7 @@ pub struct DesktopCore {
     downloads: Arc<ModelDownloadManager>,
     imports: Arc<ModelImportManager>,
     startup_progress: StartupProgressCell,
+    flow_runs: FlowRunSubmissions,
 }
 
 impl fmt::Debug for DesktopCore {
@@ -1214,6 +1222,7 @@ impl DesktopCore {
             downloads: ModelDownloadManager::new(),
             imports: ModelImportManager::new(),
             startup_progress: StartupProgressCell::default(),
+            flow_runs: FlowRunSubmissions::default(),
         }
     }
 
@@ -2941,6 +2950,211 @@ impl DesktopCore {
         Ok(FlowSaveDto { fence, data })
     }
 
+    /// Runs one global flow definition against the project PAM is open on.
+    ///
+    /// The definition is daemon-global; the run it starts is not. The project
+    /// is bound here, at invocation time, mirroring the CLI's own rule that
+    /// `pam flow run` binds the outer project root while the catalog stays
+    /// global. The submission is detached: the run's transitions, terminal
+    /// result, and evidence are all durable, so the view observes it through
+    /// `flow_run_progress` rather than through the submitting exchange.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error for stale authority, a stale definition handle,
+    /// no project to bind the run to, missing credentials, or a definition the
+    /// protocol contract rejects.
+    pub async fn flow_run(
+        &self,
+        fence: CommandFence,
+        definition: FlowDefinitionHandle,
+    ) -> DesktopResult<FlowRunDto> {
+        let _command = self.command_gate.lock().await;
+        definition.validate()?;
+        let scope = self.begin_scoped(&fence).await?;
+        let (source, definition_id, project_id, project_root) = {
+            let mut state = self.inner.lock().await;
+            ensure_scope_matches(&state, &scope, &fence)?;
+            let active = state.active.clone().ok_or_else(|| {
+                DesktopErrorDto::stale(
+                    "PAM has no open project to bind this run to. Open a project and run the flow again.",
+                )
+            })?;
+            let workspace = workspace_mut(&mut state)?;
+            let selector = workspace
+                .definitions
+                .get(&definition)
+                .ok_or_else(|| {
+                    DesktopErrorDto::stale("The flow definition handle is no longer current.")
+                })?
+                .clone();
+            let entry = workspace
+                .model
+                .entry(&selector)
+                .map_err(|error| flow_error(&error))?;
+            (
+                entry.source().to_owned(),
+                entry.identity().id().to_owned(),
+                active.project_id.clone(),
+                active.catalog.root.clone(),
+            )
+        };
+        let Some(project_root) = project_root.to_str().map(str::to_owned) else {
+            return Err(DesktopErrorDto::unavailable(
+                "PAM cannot bind a run to a project root that is not valid UTF-8.",
+                None,
+            ));
+        };
+        let (caller, credential) = gui_credential().await?;
+        let (request, started) =
+            flow_runs::run_request(caller, credential, project_id, &project_root, source).map_err(
+                |error| {
+                    DesktopErrorDto::new(
+                        DesktopErrorKind::InvalidInput,
+                        format!("PAM could not construct the bounded flow request: {error}"),
+                        Some("Validate the flow definition and try the run again.".to_owned()),
+                    )
+                },
+            )?;
+        let retry_command = flow_runs::retry_command(&definition_id, &started);
+        self.flow_runs.submit(request);
+        Ok(FlowRunDto {
+            fence,
+            data: FlowRunDataDto {
+                run_id: started.run_id.as_str().to_owned(),
+                definition_id: bounded_detail(definition_id),
+                project_label: bounded_path(Path::new(&started.project_label)),
+                retry_command: bounded_detail(retry_command),
+            },
+        })
+    }
+
+    /// Reads one bounded progress window for a run, and its outcome once the
+    /// run is terminal.
+    ///
+    /// `after` is the replay cursor the previous window returned; zero replays
+    /// the run from its first event.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error for stale authority, a malformed run ID, or
+    /// missing credentials. A daemon that refuses or cannot answer the read is
+    /// reported in `detailError`, not as an error.
+    pub async fn flow_run_progress(
+        &self,
+        fence: CommandFence,
+        run: String,
+        after: u64,
+    ) -> DesktopResult<FlowRunProgressDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let run_id = parse_run_handle(&run)?;
+        let project_id = {
+            let state = self.inner.lock().await;
+            ensure_scope_matches(&state, &scope, &fence)?;
+            state
+                .active
+                .as_ref()
+                .map_or_else(|| scope.project_id(), |active| active.project_id.clone())
+        };
+        let (caller, credential) = gui_credential().await?;
+        let mut progress =
+            flow_runs::observe(caller, credential, project_id, run_id.clone(), after).await;
+        // A submission the daemon refused outright leaves nothing durable to
+        // replay, so its refusal is the only report the run will ever have.
+        if let Some(detail) = self.flow_runs.failure(&run_id).await {
+            progress.terminal = true;
+            progress.detail_error = Some(detail);
+        }
+        let mut state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        let data = flow_run_progress_dto(&mut state, &run_id, progress);
+        Ok(FlowRunProgressDto { fence, data })
+    }
+
+    /// Requests cancellation of one run in flight, at its next safe boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error for stale authority, a malformed run ID,
+    /// missing credentials, or a refused cancellation.
+    pub async fn flow_run_cancel(
+        &self,
+        fence: CommandFence,
+        run: String,
+    ) -> DesktopResult<FlowRunCancelDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let run_id = parse_run_handle(&run)?;
+        let project_id = {
+            let state = self.inner.lock().await;
+            ensure_scope_matches(&state, &scope, &fence)?;
+            state
+                .active
+                .as_ref()
+                .map_or_else(|| scope.project_id(), |active| active.project_id.clone())
+        };
+        let (caller, credential) = gui_credential().await?;
+        let disposition = flow_runs::cancel(caller, credential, project_id, run_id.clone())
+            .await
+            .map_err(|detail| DesktopErrorDto::unavailable(detail, None))?;
+        Ok(FlowRunCancelDto {
+            fence,
+            data: FlowRunCancelDataDto {
+                run_id: run_id.as_str().to_owned(),
+                disposition: disposition.to_owned(),
+            },
+        })
+    }
+
+    /// Reads the bounded newest-first history of flow runs from durable state.
+    ///
+    /// Each run is named by the catalog definition whose normalized source
+    /// still digests to the one it executed, and labelled with the project it
+    /// was bound to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error for stale authority or unreadable durable state.
+    pub async fn flow_run_history(&self, fence: CommandFence) -> DesktopResult<FlowRunHistoryDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let catalog = {
+            let mut state = self.inner.lock().await;
+            ensure_scope_matches(&state, &scope, &fence)?;
+            workspace_mut(&mut state).map_or_else(
+                |_| HashMap::new(),
+                |workspace| {
+                    workspace
+                        .model
+                        .entries()
+                        .iter()
+                        .map(|entry| {
+                            (
+                                *entry.identity().digest().as_bytes(),
+                                entry.identity().id().to_owned(),
+                            )
+                        })
+                        .collect()
+                },
+            )
+        };
+        let state_path = user_data_dir()
+            .map_err(|error| DesktopErrorDto::unavailable(error.to_string(), None))?
+            .join("state.sqlite3");
+        let runs = flow_runs::history(state_path, &catalog)
+            .await
+            .map_err(|detail| DesktopErrorDto::unavailable(detail, None))?;
+        let truncated = runs.len() >= flow_runs::MAX_RUN_HISTORY as usize;
+        Ok(FlowRunHistoryDto {
+            fence,
+            data: FlowRunHistoryDataDto {
+                runs: runs.into_iter().map(history_entry_dto).collect(),
+                truncated,
+            },
+        })
+    }
+
     async fn begin(&self, fence: &CommandFence) -> DesktopResult<ActiveProject> {
         fence.validate()?;
         let mut state = self.inner.lock().await;
@@ -3810,6 +4024,57 @@ fn run_dto(state: &mut DesktopState, run: RunView) -> RunDto {
         outcome: run.outcome.map(|outcome| outcome_dto(state, outcome)),
         detail_error: run.detail_error.map(bounded_detail),
     }
+}
+
+fn flow_run_progress_dto(
+    state: &mut DesktopState,
+    run_id: &RequestId,
+    progress: flow_runs::RunProgress,
+) -> FlowRunProgressDataDto {
+    FlowRunProgressDataDto {
+        run_id: run_id.as_str().to_owned(),
+        cursor: progress.cursor,
+        facts: progress
+            .facts
+            .into_iter()
+            .take(MAX_TIMELINE_FACTS)
+            .map(|fact| timeline_dto(state, fact))
+            .collect(),
+        truncated: progress.truncated,
+        terminal: progress.terminal,
+        outcome: progress.outcome.map(|outcome| outcome_dto(state, outcome)),
+        detail_error: progress.detail_error.map(bounded_detail),
+    }
+}
+
+fn history_entry_dto(entry: flow_runs::RunHistoryEntry) -> FlowRunHistoryEntryDto {
+    FlowRunHistoryEntryDto {
+        run_id: bounded_detail(entry.run_id),
+        definition_id: entry.definition_id.map(bounded_detail),
+        project_label: bounded_path(Path::new(&entry.project_label)),
+        state: entry.state.to_owned(),
+        outcome: entry.outcome.map(str::to_owned),
+        started_at_ms: entry.started_at_ms,
+        completed_at_ms: entry.completed_at_ms,
+    }
+}
+
+/// Validates one run identifier handed back by the view. Run IDs are the
+/// daemon's own durable request IDs, so anything that is not a canonical run
+/// ID is rejected before it reaches the daemon.
+fn parse_run_handle(run: &str) -> DesktopResult<RequestId> {
+    flow_runs::parse_run_id(run)
+        .ok_or_else(|| DesktopErrorDto::stale("That flow run identifier is not current."))
+}
+
+/// The GUI caller and its stored credential, as a bounded desktop error.
+async fn gui_credential() -> DesktopResult<(CallerId, CallerCredential)> {
+    let caller = caller_id(CallerKind::Gui)
+        .map_err(|error| DesktopErrorDto::unavailable(error.to_string(), None))?;
+    let credential = load_credential(caller.clone()).await.map_err(|detail| {
+        DesktopErrorDto::unavailable(detail, Some(GUI_REGISTRATION_RECOVERY.to_owned()))
+    })?;
+    Ok((caller, credential))
 }
 
 const fn request_state_label(state: ProjectRequestState) -> &'static str {
@@ -5140,6 +5405,7 @@ pub(crate) fn active_core_at_for_test(
         downloads: ModelDownloadManager::new(),
         imports: ModelImportManager::new(),
         startup_progress: StartupProgressCell::default(),
+        flow_runs: FlowRunSubmissions::default(),
     }
 }
 

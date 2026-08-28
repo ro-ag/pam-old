@@ -39,16 +39,17 @@ use crate::{
     ConnectorTestStatus, EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention,
     ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
     FlowCheckpoint, FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
-    FlowTerminalResult, GrantRevocation, Lease, LeasedRequest, MAX_AUDIT_ACTION_BYTES,
-    MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
-    MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
-    MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES, MAX_FLOW_TERMINAL_RESULT_BYTES,
-    MAX_FLOW_TRANSITION_BYTES, MAX_PROJECT_CURRENT_QUEUED,
-    MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent,
-    ProjectPolicy, ProjectRequestSummary, ProjectUsage, ProjectWorkload, PutEvidence, PutGrant,
-    RecentAuditEvents, Replay, RequestSnapshot, RequestState, SaveFlowCheckpoint,
-    SkillInventoryDrift, StoreError, StoredAgentArtifact, StoredResult, StoredSkillsAuditReport,
-    TerminalState, UpsertConnectorConfig,
+    FlowRunSummary, FlowTerminalResult, GrantRevocation, Lease, LeasedRequest,
+    MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES,
+    MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES,
+    MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES,
+    MAX_FLOW_RUN_HISTORY, MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_FLOW_TRANSITION_BYTES,
+    MAX_PROJECT_CURRENT_QUEUED, MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT,
+    MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent, ProjectPolicy, ProjectRequestSummary,
+    ProjectUsage, ProjectWorkload, PutEvidence, PutGrant, RecentAuditEvents, Replay,
+    RequestSnapshot, RequestState, SaveFlowCheckpoint, SkillInventoryDrift, StoreError,
+    StoredAgentArtifact, StoredResult, StoredSkillsAuditReport, TerminalState,
+    UpsertConnectorConfig,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -1520,6 +1521,26 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Reads the newest flow runs across every project, newest first.
+    ///
+    /// Bounded to [`MAX_FLOW_RUN_HISTORY`] rows; `limit` is clamped to that
+    /// ceiling and a zero limit reads the ceiling. Only scheduler and terminal
+    /// metadata crosses this boundary: never the definition, the checkpoint
+    /// snapshot, the encoded result, or evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when durable state is invalid or unavailable.
+    pub async fn recent_flow_runs(&self, limit: u32) -> Result<Vec<FlowRunSummary>, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::RecentFlowRuns {
+            limit,
+            response: response_tx,
+        })
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Remembers one project's canonical root, so caller histories can label
     /// it by location instead of its opaque ID.
     ///
@@ -1804,6 +1825,10 @@ enum Command {
     ProjectCurrent {
         project_id: ProjectId,
         response: Response<ProjectCurrent>,
+    },
+    RecentFlowRuns {
+        limit: u32,
+        response: Response<Vec<FlowRunSummary>>,
     },
     RememberProjectRoot {
         project_id: ProjectId,
@@ -2180,6 +2205,9 @@ fn run_worker(mut connection: Connection, mut commands: tokio_mpsc::Receiver<Com
                 project_id,
                 response,
             } => respond(response, project_current(&mut connection, &project_id)),
+            Command::RecentFlowRuns { limit, response } => {
+                respond(response, recent_flow_runs(&connection, limit));
+            }
             Command::RememberProjectRoot {
                 project_id,
                 root,
@@ -7588,6 +7616,79 @@ fn project_current(
         active,
         latest_terminal,
     })
+}
+
+fn recent_flow_runs(
+    connection: &Connection,
+    limit: u32,
+) -> Result<Vec<FlowRunSummary>, StoreError> {
+    let limit = match limit {
+        0 => MAX_FLOW_RUN_HISTORY,
+        limit => limit.min(MAX_FLOW_RUN_HISTORY),
+    };
+    let mut statement = connection.prepare(
+        "SELECT requests.request_id, requests.project_id, projects.root, requests.state,
+                requests.accepted_at_ms, requests.completed_at_ms,
+                flow_runs.definition_digest, flow_runs.updated_at_ms,
+                flow_runs.terminal_outcome
+         FROM flow_runs
+         JOIN requests ON requests.request_id = flow_runs.request_id
+         LEFT JOIN projects ON projects.project_id = requests.project_id
+         ORDER BY requests.accepted_at_ms DESC, requests.request_id DESC
+         LIMIT ?1",
+    )?;
+    let rows = statement
+        .query_map([i64::from(limit)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|row| {
+            let (
+                request_id,
+                project_id,
+                project_root,
+                state,
+                accepted_at_ms,
+                completed_at_ms,
+                definition_digest,
+                updated_at_ms,
+                terminal_outcome,
+            ) = row;
+            let request_id = RequestId::from(request_id);
+            let definition_digest: [u8; 32] = definition_digest
+                .try_into()
+                .map_err(|_| StoreError::CorruptFlowCheckpoint(request_id.clone()))?;
+            let outcome = match terminal_outcome {
+                None => None,
+                Some(outcome) => Some(
+                    parse_flow_outcome(&outcome)
+                        .ok_or_else(|| StoreError::CorruptFlowCheckpoint(request_id.clone()))?,
+                ),
+            };
+            Ok(FlowRunSummary {
+                request_id,
+                project_id: ProjectId::from(project_id),
+                project_root,
+                state: parse_state(&state)?,
+                definition_digest,
+                outcome,
+                accepted_at_ms: unsigned_integer(accepted_at_ms)?,
+                updated_at_ms: unsigned_integer(updated_at_ms)?,
+                completed_at_ms: completed_at_ms.map(unsigned_integer).transpose()?,
+            })
+        })
+        .collect()
 }
 
 /// Largest project root PAM will remember, matching the protocol's own

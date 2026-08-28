@@ -48,7 +48,9 @@ identity is the activity/caller log, and it does so as a per-row label.
    manual GGUF import. Presets this Mac cannot run stay visible and disabled
    with the reason.
 3. **Flows** (`flows`) — the flow catalog beside a source/visual editor with a
-   review inspector.
+   review inspector and a run/history surface. The library is daemon-global,
+   so this view never carries project identity; a run's own project appears
+   only as a per-row label on that run.
 4. **Skills** (`skills`) — inventory, canonical library, and audit as tabs in
    one panel.
 5. **Access** (`access`) — daemon-scope capability grants, the observed
@@ -148,7 +150,9 @@ without ellipsis; 360px holds the widest step field plus its gutters. Both
 keep their existing narrow collapses: at 960px and below the workspace stacks
 to a single column, and at 700px and below the graph canvas is hidden and the
 step inspector takes the row. The flow review and diff inspector panels cap
-at 130px and scroll.
+at 130px and scroll; the run and history panels below them cap at 168px and
+scroll, and at 960px and below the run header and each history row collapse to
+one column.
 
 ## Drawers, dialogs, and overlays
 
