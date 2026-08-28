@@ -236,6 +236,36 @@ test.describe("production-shaped interactions", () => {
     await expect(page).toHaveScreenshot("flows-validated-960x800.png");
   });
 
+  // The 2K density contract (docs/desktop-layout-contract.md): at the supported
+  // width the workspace-internal panes are fixed px, the stat strip is one row
+  // of exactly its tiles, and the full-width row lists flow two-up.
+  test("pins the 2K panes, stat strip, and two-up rows at 1440px", async ({ page }) => {
+    await page.setViewportSize({ width: 1_440, height: 900 });
+    await openFixture(page, "solved", "flows");
+    await page.getByRole("button", { name: /after-merge-checks/ }).click();
+    const catalog = await page
+      .locator(".flow-workspace")
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    expect(catalog.trim().split(/\s+/)[0]).toBe("300px");
+    await page.getByRole("button", { name: "Visual" }).click();
+    const inspector = await page
+      .locator(".flow-visual")
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    expect(inspector.trim().split(/\s+/)[1]).toBe("360px");
+
+    await openFixture(page, "solved", "overview");
+    const strip = await page
+      .locator(".project-overview")
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    expect(strip.trim().split(/\s+/)).toHaveLength(6);
+    const usage = await page
+      .locator(".project-usage-list")
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    expect(usage.trim().split(/\s+/)).toHaveLength(2);
+    const horizontal = await horizontalMetrics(page);
+    expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
+  });
+
   test("executes the bounded recovery action at effective 320px", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 800 });
     await openFixture(page, "missing-credential", "access");

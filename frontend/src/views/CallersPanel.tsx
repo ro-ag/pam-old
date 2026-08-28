@@ -246,7 +246,7 @@ export function CallerRequestsPanel({
       ) : rows.length === 0 ? (
         <PanelEmpty>No caller has talked to the daemon yet.</PanelEmpty>
       ) : (
-        <div className="access-list">
+        <div className="access-list caller-request-list">
           {rows.map((row) => (
             <article key={row.callerId}>
               <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
