@@ -18,6 +18,7 @@ use crate::{
 #[cfg(unix)]
 use super::install::install_git_artifact_with_execution;
 use super::install::install_local_artifact_with_after_read;
+use super::install::{GIT_DRAIN_GRACE, spawn_git_drain};
 #[cfg(unix)]
 use super::install::{
     install_git_artifact_with_execution_limits, resolve_unix_git_executable_for_test,
@@ -556,4 +557,43 @@ fn git_output(repository: &Path, arguments: &[&str]) -> String {
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A reader that never reaches EOF, standing in for a pipe whose write end is
+/// still held by a git descendant that outlived the process-group kill.
+struct HeldOpenPipe {
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+impl std::io::Read for HeldOpenPipe {
+    fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+        // Returns only once the test drops the sender, so the drain thread can
+        // end with the test rather than outliving it.
+        let _ = self.release.recv();
+        Ok(0)
+    }
+}
+
+#[test]
+fn a_drain_whose_writer_outlives_containment_is_abandoned_rather_than_awaited() {
+    let (release, receiver) = std::sync::mpsc::channel::<()>();
+    let overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drain = spawn_git_drain(HeldOpenPipe { release: receiver }, 1024, overflow)
+        .expect("the drain thread spawns");
+
+    let started = std::time::Instant::now();
+    let outcome = drain.collect();
+    let waited = started.elapsed();
+
+    assert_eq!(outcome.unwrap_err(), ArtifactInstallError::GitCommandFailed);
+    assert!(
+        waited >= GIT_DRAIN_GRACE,
+        "the drain was given no grace at all: waited {waited:?}"
+    );
+    assert!(
+        waited < GIT_DRAIN_GRACE * 4,
+        "the drain was awaited past its bound: waited {waited:?}"
+    );
+
+    drop(release);
 }

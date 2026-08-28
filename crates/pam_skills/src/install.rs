@@ -9,6 +9,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver},
     },
     thread,
     time::{Duration, Instant},
@@ -42,6 +43,10 @@ pub const MAX_GIT_PRIVATE_WORKSPACE_BYTES: u64 = 64 * 1024 * 1024;
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How long a drain may still deliver output after the child has been
+/// terminated. A pipe with no surviving writer closes at once, so this is only
+/// ever spent on a descendant that outlived containment.
+pub(super) const GIT_DRAIN_GRACE: Duration = Duration::from_secs(2);
 const MAX_GIT_METADATA_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_GIT_ERROR_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_TEMPORARY_WORKSPACE_ATTEMPTS: usize = 16;
@@ -869,7 +874,7 @@ fn run_git_direct(
     let stderr_worker = spawn_git_drain(stderr, MAX_GIT_ERROR_OUTPUT_BYTES, Arc::clone(&overflow));
     let Ok(stderr_worker) = stderr_worker else {
         terminate_direct_git_tree(&mut child);
-        let _ = stdout_worker.join();
+        drop(stdout_worker);
         return Err(ArtifactInstallError::GitCommandFailed);
     };
     let wait_result = wait_for_git_direct(
@@ -880,14 +885,8 @@ fn run_git_direct(
         &overflow,
     );
     terminate_direct_git_tree(&mut child);
-    let stdout = stdout_worker
-        .join()
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?;
-    stderr_worker
-        .join()
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?;
+    let stdout = stdout_worker.collect()?;
+    stderr_worker.collect()?;
     workspace.ensure_within_limit(execution.workspace_limit)?;
     if overflow.load(Ordering::Acquire) {
         return Err(ArtifactInstallError::GitOutputTooLarge);
@@ -982,7 +981,7 @@ fn run_git_with_windows_supervisor(
     let stderr_worker = spawn_git_drain(stderr, MAX_GIT_ERROR_OUTPUT_BYTES, Arc::clone(&overflow));
     let Ok(stderr_worker) = stderr_worker else {
         terminate_windows_supervisor(&mut child, &tools.taskkill)?;
-        let _ = stdout_worker.join();
+        drop(stdout_worker);
         return Err(ArtifactInstallError::GitCommandFailed);
     };
     let wait_result = wait_for_windows_git(
@@ -995,14 +994,8 @@ fn run_git_with_windows_supervisor(
     if terminate_windows_supervisor(&mut child, &tools.taskkill).is_err() {
         return Err(ArtifactInstallError::GitContainmentFailed);
     }
-    let stdout = stdout_worker
-        .join()
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?;
-    stderr_worker
-        .join()
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?
-        .map_err(|_| ArtifactInstallError::GitCommandFailed)?;
+    let stdout = stdout_worker.collect()?;
+    stderr_worker.collect()?;
     workspace.ensure_within_limit(execution.workspace_limit)?;
     if overflow.load(Ordering::Acquire) {
         return Err(ArtifactInstallError::GitOutputTooLarge);
@@ -1259,14 +1252,43 @@ fn terminate_windows_supervisor(
     }
 }
 
-fn spawn_git_drain(
+/// A drain thread reads until its pipe closes, and a git descendant that
+/// outlived the process-group kill still holds the write end open. Joining the
+/// thread would therefore wait out that stray process with no bound of its own,
+/// long after the deadline has already fired and been reported. The drain sends
+/// its result over a channel so the wait can be bounded instead.
+pub(super) struct GitDrain {
+    output: Receiver<std::io::Result<Vec<u8>>>,
+}
+
+impl GitDrain {
+    /// Collects the drained output, or gives up once the grace period is spent.
+    ///
+    /// An abandoned drain is not joined: its thread ends by itself when the
+    /// stray writer finally exits, and blocking on it is the defect this bound
+    /// exists to prevent.
+    pub(super) fn collect(self) -> Result<Vec<u8>, ArtifactInstallError> {
+        self.output
+            .recv_timeout(GIT_DRAIN_GRACE)
+            .map_err(|_| ArtifactInstallError::GitCommandFailed)?
+            .map_err(|_| ArtifactInstallError::GitCommandFailed)
+    }
+}
+
+pub(super) fn spawn_git_drain(
     reader: impl Read + Send + 'static,
     limit: usize,
     overflow: Arc<AtomicBool>,
-) -> std::io::Result<thread::JoinHandle<std::io::Result<Vec<u8>>>> {
+) -> std::io::Result<GitDrain> {
+    let (sender, output) = mpsc::channel();
     thread::Builder::new()
         .name("pam-git-output".to_owned())
-        .spawn(move || drain_git_output(reader, limit, &overflow))
+        .spawn(move || {
+            // A receiver dropped by an abandoned collect makes this fail, which
+            // is the expected end of that race and not a diagnostic.
+            let _ = sender.send(drain_git_output(reader, limit, &overflow));
+        })?;
+    Ok(GitDrain { output })
 }
 
 fn drain_git_output(
