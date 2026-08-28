@@ -2,6 +2,7 @@ import { FileText, GitBranch, LockSimple, Pulse, WarningCircle } from "@phosphor
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { AccessGrantView, DaemonView } from "../selectors";
 import { accessView } from "../selectors";
 import type { PamBridge } from "../domain";
@@ -69,11 +70,11 @@ export function AccessView({
         <DaemonAccessPanel bridge={bridge} onGrantsChanged={() => void load()} />
         <section className="panel access-panel" aria-labelledby="access-heading">
           <div className="panel-title"><div><span className="eyebrow">Observed boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>
-          {loadError && <p className="panel-empty" role="alert">{loadError}</p>}
-          {grants === null && !loadError && <p className="panel-empty" aria-busy="true" aria-live="polite">Reading the observed boundary…</p>}
+          {loadError && <PanelError>{loadError}</PanelError>}
+          {grants === null && !loadError && <PanelLoading>Reading the observed boundary…</PanelLoading>}
           {grants !== null && (
             <div className="access-list">
-              {grants.length === 0 ? <p className="panel-empty">The daemon has not reported an access boundary yet.</p> : grants.map((grant) => {
+              {grants.length === 0 ? <PanelEmpty>The daemon has not reported an access boundary yet.</PanelEmpty> : grants.map((grant) => {
                   const Icon = accessIcon(grant.id);
                   return <article key={grant.id}>
                   <span className="access-icon"><Icon size={21} /></span>

@@ -398,7 +398,7 @@ test.describe("selectable theme families and variants", () => {
     });
   }
 
-  test("switches family and variant with Radix controls and restores both on reload", async ({ page }) => {
+  test("switches family and variant from the theme menu and restores both on reload", async ({ page }) => {
     await page.setViewportSize({ width: 1_180, height: 800 });
     await openFixture(page);
     const trigger = page.getByRole("button", { name: "Theme: Ventisquero · light" });

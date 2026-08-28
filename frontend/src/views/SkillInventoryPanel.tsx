@@ -2,6 +2,7 @@ import { ArrowClockwise, PuzzlePiece, WarningCircle } from "@phosphor-icons/reac
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { sameFence, withOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { CommandFence, PamBridge, SkillInventoryDataDto } from "../domain";
 import { presentError } from "../state";
 
@@ -81,13 +82,15 @@ function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventor
         <PuzzlePiece size={22} />
       </div>
       {loading && !inventory ? (
-        <div className="skill-inventory-state" role="status">Scanning bounded local agent configuration…</div>
+        <PanelLoading as="div" className="skill-inventory-state">Scanning bounded local agent configuration…</PanelLoading>
       ) : error && !inventory ? (
-        <div className="skill-inventory-state is-error" role="alert">
-          <WarningCircle size={24} />
-          <div><strong>Skill inventory unavailable</strong><p>{error}</p></div>
-          <button type="button" className="button button--secondary" onClick={() => { void inventoryQuery.refetch(); }}><ArrowClockwise size={18} /> Retry inventory</button>
-        </div>
+        <PanelError
+          as="div"
+          className="skill-inventory-state is-error"
+          icon={<WarningCircle size={24} />}
+          title="Skill inventory unavailable"
+          action={<button type="button" className="button button--secondary" onClick={() => { void inventoryQuery.refetch(); }}><ArrowClockwise size={18} /> Retry inventory</button>}
+        >{error}</PanelError>
       ) : inventory ? (
         <>
           <div className="skill-inventory-summary" role="status">
@@ -95,7 +98,7 @@ function SkillInventoryContent({ bridge, fence, refreshTick = 0 }: SkillInventor
             <span>Cursor global rules: {label(inventory.cursorGlobalRulesStatus)}.</span>
           </div>
           {inventory.artifacts.length === 0 ? (
-            <p className="panel-empty">No supported agent artifacts were found in this scope.</p>
+            <PanelEmpty>No supported agent artifacts were found in this scope.</PanelEmpty>
           ) : (
             <div className="skill-inventory-list">
               {globalArtifacts.length > 0 && (

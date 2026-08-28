@@ -1,6 +1,7 @@
 import { ArrowClockwise, ChartBar, Play, WarningCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sameFence, withOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type {
   CommandFence,
   PamBridge,
@@ -172,7 +173,7 @@ function AuditReport({ data }: { data: SkillAuditDataDto }) {
           <span>{count(footprint.rankedArtifactsTotal)} total</span>
         </div>
         {footprint.rankedArtifacts.length === 0 ? (
-          <p className="panel-empty">No ranked artifacts were reported.</p>
+          <PanelEmpty>No ranked artifacts were reported.</PanelEmpty>
         ) : (
           <ol>
             {footprint.rankedArtifacts.map((artifact) => (
@@ -272,25 +273,33 @@ export function SkillAuditReportPanel({ bridge, fence }: SkillAuditReportPanelPr
         </div>
       </div>
       {pendingAction ? (
-        <div className="skill-inventory-state" role="status">
+        <PanelLoading as="div" className="skill-inventory-state">
           {pendingAction === "run" ? "Running bounded skill audit…" : "Loading latest skill audit…"}
-        </div>
+        </PanelLoading>
       ) : error ? (
-        <div className="skill-inventory-state is-error" role="alert">
-          <WarningCircle size={24} />
-          <div><strong>Skill audit unavailable</strong><p>{error}</p></div>
-          <button type="button" className="button button--secondary" onClick={() => void requestAudit(failedAction)}>
-            <ArrowClockwise size={18} /> Retry audit
-          </button>
-        </div>
+        <PanelError
+          as="div"
+          className="skill-inventory-state is-error"
+          icon={<WarningCircle size={24} />}
+          title="Skill audit unavailable"
+          action={(
+            <button type="button" className="button button--secondary" onClick={() => void requestAudit(failedAction)}>
+              <ArrowClockwise size={18} /> Retry audit
+            </button>
+          )}
+        >{error}</PanelError>
       ) : loaded && !audit ? (
-        <div className="skill-audit-empty">
-          <ChartBar size={30} aria-hidden="true" />
-          <div><strong>No saved skill audit</strong><p>Run a bounded audit to measure the current always-loaded agent footprint.</p></div>
-          <button type="button" className="button button--primary" onClick={() => void requestAudit("run")}>
-            <Play size={18} /> Run audit
-          </button>
-        </div>
+        <PanelEmpty
+          as="div"
+          className="skill-audit-empty"
+          icon={<ChartBar size={30} aria-hidden="true" />}
+          title="No saved skill audit"
+          action={(
+            <button type="button" className="button button--primary" onClick={() => void requestAudit("run")}>
+              <Play size={18} /> Run audit
+            </button>
+          )}
+        >Run a bounded audit to measure the current always-loaded agent footprint.</PanelEmpty>
       ) : audit ? <AuditReport data={audit} /> : null}
     </section>
   );

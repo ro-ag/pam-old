@@ -1,6 +1,7 @@
 import { LockKey } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { DaemonCapabilityDto, PamBridge } from "../domain";
 import { presentError } from "../state";
 
@@ -66,11 +67,11 @@ export function DaemonAccessPanel({ bridge, onGrantsChanged }: DaemonAccessPanel
         <div><span className="eyebrow">Daemon scope</span><h2 id="daemon-access-heading">Capabilities this window uses</h2></div>
         <LockKey size={22} />
       </div>
-      <p className="panel-empty">
+      <PanelEmpty>
         These grants belong to this PAM window across every project. PAM never grants one on its own; revoking returns the capability to denied.
-      </p>
-      {loadError && <p className="panel-empty" role="alert">{loadError}</p>}
-      {capabilities === null && !loadError && <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the capability grants…</p>}
+      </PanelEmpty>
+      {loadError && <PanelError>{loadError}</PanelError>}
+      {capabilities === null && !loadError && <PanelLoading>Loading the capability grants…</PanelLoading>}
       {capabilities !== null && (
         <div className="access-list">
           {capabilities.map((row) => (

@@ -9,6 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DAEMON_AUTHORITY, withDaemonOperation } from "../bridge";
+import { PanelEmpty, PanelError, PanelLoading } from "../components/PanelState";
 import type { ActivityDto, ActivityEventDto, PamBridge, ProjectSummaryDto } from "../domain";
 import { basename, type DaemonView } from "../selectors";
 import { presentError } from "../state";
@@ -133,14 +134,14 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
         </article>
       </section>
       {offline ? (
-        <section className="empty-state">
+        <PanelEmpty as="section" className="empty-state">
           <Power size={38} aria-hidden="true" />
           <h2>PAM is paused</h2>
           <p>The activity feed will pick up where it left off once PAM is back on watch.</p>
           <button type="button" className="button button--primary" disabled={pending} onClick={onStartDaemon}>
             <Power size={18} /> Start PAM
           </button>
-        </section>
+        </PanelEmpty>
       ) : (
         <section className="panel activity-feed" aria-labelledby="activity-heading">
           <div className="panel-title">
@@ -156,19 +157,19 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
             </button>
           </div>
           {loadError ? (
-            <p className="panel-empty" role="alert">{loadError}</p>
+            <PanelError>{loadError}</PanelError>
           ) : !activity ? (
-            <p className="panel-empty" aria-busy="true" aria-live="polite">Loading the recent daemon activity…</p>
+            <PanelLoading>Loading the recent daemon activity…</PanelLoading>
           ) : activity.status !== "ok" ? (
-            <p className="panel-empty">
+            <PanelEmpty>
               {[activity.failure.detail, activity.failure.recovery].filter(Boolean).join(" ")}
-            </p>
+            </PanelEmpty>
           ) : activity.events.length === 0 ? (
-            <p className="panel-empty">No recent activity. PAM is on watch and new events will appear here.</p>
+            <PanelEmpty>No recent activity. PAM is on watch and new events will appear here.</PanelEmpty>
           ) : (
             <div className="access-list">
               {activity.events.map(eventRow)}
-              {activity.truncated && <p className="panel-empty">Older activity was truncated at the bounded feed limit.</p>}
+              {activity.truncated && <PanelEmpty>Older activity was truncated at the bounded feed limit.</PanelEmpty>}
             </div>
           )}
         </section>
@@ -182,7 +183,7 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
             </div>
           </div>
           {evidence.handles.length === 0 ? (
-            <p className="panel-empty">The latest terminal result reported no evidence handles.</p>
+            <PanelEmpty>The latest terminal result reported no evidence handles.</PanelEmpty>
           ) : (
             <div className="evidence-handles">
               {evidence.handles.map((handle, index) => (
@@ -200,7 +201,7 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
                 </button>
               ))}
               {evidence.truncated && (
-                <p className="panel-empty">Additional evidence handles were truncated at the bounded limit.</p>
+                <PanelEmpty>Additional evidence handles were truncated at the bounded limit.</PanelEmpty>
               )}
             </div>
           )}
