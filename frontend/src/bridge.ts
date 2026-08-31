@@ -22,6 +22,10 @@ import type {
   FlowDocumentDto,
   FlowGraphDto,
   FlowReviewDto,
+  FlowRunCancelDto,
+  FlowRunDto,
+  FlowRunHistoryDto,
+  FlowRunProgressDto,
   FlowSaveDto,
   FlowWorkspaceDto,
   ChatMessageDto,
@@ -267,6 +271,18 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         documentHandle,
         source,
       })),
+    flowRun: (fence, flowHandle) =>
+      invokeCommand<FlowRunDto>("flow_run", request({ ...flatFence(fence), flowHandle })),
+    flowRunProgress: (fence, run, after) =>
+      invokeCommand<FlowRunProgressDto>("flow_run_progress", request({
+        ...flatFence(fence),
+        run,
+        after,
+      })),
+    flowRunCancel: (fence, run) =>
+      invokeCommand<FlowRunCancelDto>("flow_run_cancel", request({ ...flatFence(fence), run })),
+    flowRunHistory: (fence) =>
+      invokeCommand<FlowRunHistoryDto>("flow_run_history", request(flatFence(fence))),
   };
 }
 

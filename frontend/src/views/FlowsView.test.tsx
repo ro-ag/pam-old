@@ -304,3 +304,95 @@ describe("FlowsView operation identity", () => {
     expect(validateFlow.mock.calls[0][0].operationId).not.toBe(flowCompose.mock.calls[0][0].operationId);
   });
 });
+
+describe("FlowsView runs", () => {
+  it("runs the selected definition, streams its transitions, and shows the outcome", async () => {
+    const bridge = fixtureBridge();
+    const flowRun = vi.spyOn(bridge, "flowRun");
+    const flowRunProgress = vi.spyOn(bridge, "flowRunProgress");
+    const { user } = await openAfterMerge(bridge);
+
+    await user.click(screen.getByRole("button", { name: /Run$/ }));
+
+    expect(flowRun).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Ready for the next agent")).toBeInTheDocument();
+    expect(screen.getByText("Verification passed")).toBeInTheDocument();
+    // The retry line is the CLI's own, so a run started here is resumable there.
+    expect(screen.getByText(/^pam flow run after-merge-checks --run-id /)).toBeInTheDocument();
+    // Progress is polled from the cursor the previous window returned.
+    expect(flowRunProgress.mock.calls[0][2]).toBe(0);
+    // A terminal window stops the poll: no further reads pile up.
+    const polls = flowRunProgress.mock.calls.length;
+    await new Promise((resolve) => { setTimeout(resolve, 1_100); });
+    expect(flowRunProgress.mock.calls).toHaveLength(polls);
+  });
+
+  it("labels the run with its own project and never renders a project picker", async () => {
+    const bridge = fixtureBridge();
+    const flowRun = vi.spyOn(bridge, "flowRun");
+    const flowRunHistory = vi.spyOn(bridge, "flowRunHistory");
+    const { user } = await openAfterMerge(bridge);
+    await user.click(screen.getByRole("button", { name: /Run$/ }));
+    await screen.findByText("Ready for the next agent");
+
+    // A run genuinely has a project; the global library must not gain one.
+    expect(screen.getAllByTitle("/work/payments-api").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "payments-api" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    // Every run command still speaks the daemon authority, never a project one.
+    for (const [requestFence] of [...flowRun.mock.calls, ...flowRunHistory.mock.calls]) {
+      expect(requestFence).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
+    }
+  });
+
+  it("opens a run's evidence through the app's shared evidence drawer", async () => {
+    const onEvidence = vi.fn();
+    const user = userEvent.setup();
+    render(<FlowsView bridge={fixtureBridge()} fence={fence} onError={vi.fn()} onToast={vi.fn()} onEvidence={onEvidence} />);
+    await screen.findByRole("region", { name: "Flow workspace" });
+    await user.click(screen.getByRole("button", { name: /after-merge-checks/ }));
+    await user.click(screen.getByRole("button", { name: /Run$/ }));
+    await screen.findByText("Ready for the next agent");
+
+    await user.click(screen.getAllByRole("button", { name: "Evidence" })[0]);
+    expect(onEvidence).toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it("cancels a run that is still in flight and keeps Cancel off a terminal one", async () => {
+    const bridge = fixtureBridge();
+    bridge.flowRunProgress = vi.fn(async (requestFence, run) => ({
+      fence: requestFence,
+      data: { runId: run, cursor: 2, facts: [{ kind: "request" as const, label: "Run started", summary: "PAM began the run.", verified: false, evidence: [] }], truncated: false, terminal: false, outcome: null, detailError: null },
+    }));
+    const flowRunCancel = vi.spyOn(bridge, "flowRunCancel");
+    const { user } = await openAfterMerge(bridge);
+
+    await user.click(screen.getByRole("button", { name: /Run$/ }));
+    const cancel = await screen.findByRole("button", { name: /Cancel/ });
+    expect(cancel).toBeEnabled();
+    await user.click(cancel);
+    expect(flowRunCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the bounded durable history with a per-row project label", async () => {
+    const { user } = await openAfterMerge();
+    await user.click(screen.getByRole("tab", { name: /History/ }));
+
+    expect(await screen.findByText("flow-run-1c6f")).toBeInTheDocument();
+    expect(screen.getByText("/work/ledger-web")).toBeInTheDocument();
+    // A definition edited away since the run still lists the run.
+    expect(screen.getByText("(definition edited since)")).toBeInTheDocument();
+  });
+
+  it("surfaces a refused run without leaving the view polling", async () => {
+    const bridge = fixtureBridge();
+    bridge.flowRun = vi.fn(async () => { throw new Error("PAM policy denied flow.run for this caller."); });
+    const flowRunProgress = vi.spyOn(bridge, "flowRunProgress");
+    const { user } = await openAfterMerge(bridge);
+
+    await user.click(screen.getByRole("button", { name: /Run$/ }));
+
+    expect(await screen.findByText(/policy denied flow.run/)).toBeInTheDocument();
+    expect(flowRunProgress).not.toHaveBeenCalled();
+  });
+});

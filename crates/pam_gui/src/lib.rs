@@ -6,6 +6,7 @@ mod current;
 mod daemon_access;
 mod desktop;
 mod flow_editor;
+mod flow_runs;
 mod model_discovery;
 mod model_download;
 mod model_import;
@@ -28,6 +29,8 @@ mod daemon_access_test;
 mod desktop_test;
 #[cfg(test)]
 mod flow_editor_test;
+#[cfg(test)]
+mod flow_runs_test;
 #[cfg(test)]
 mod model_discovery_test;
 #[cfg(test)]
@@ -72,6 +75,11 @@ pub use desktop::{
 pub use pam_protocol::{ConnectorCredentialAction, ConnectorSecret};
 
 pub use daemon_access::{DaemonAccessDto, DaemonCapabilityDto};
+
+pub use flow_runs::{
+    FlowRunCancelDataDto, FlowRunCancelDto, FlowRunDataDto, FlowRunDto, FlowRunHistoryDataDto,
+    FlowRunHistoryDto, FlowRunHistoryEntryDto, FlowRunProgressDataDto, FlowRunProgressDto,
+};
 
 pub use model_import::ModelImportParams;
 

@@ -24,6 +24,9 @@ import type {
   FlowDefinitionJson,
   FlowDocumentDataDto,
   FlowReviewDataDto,
+  FlowRunDataDto,
+  FlowRunHistoryDataDto,
+  FlowRunProgressDataDto,
   FlowSaveDataDto,
   FlowWorkspaceDataDto,
   ChatMessageDto,
@@ -816,6 +819,43 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     migrated: [],
   });
   const document = (): FlowDocumentDataDto => ({ handle: documentHandle, identity, source: savedSource });
+  // The demo run is terminal on its first progress read: the browser fixture
+  // has no daemon to make progress, and a deterministic window keeps the
+  // visual baseline stable.
+  let startedRun: FlowRunDataDto | null = null;
+  const runHistory: FlowRunHistoryDataDto = {
+    runs: [
+      { runId: "flow-run-1c6f", definitionId: "after-merge-checks", projectLabel: "/work/payments-api", state: "succeeded", outcome: "solved", startedAtMs: 1_777_001_200_000, completedAtMs: 1_777_001_260_000 },
+      { runId: "flow-run-8ba2", definitionId: "release-confidence", projectLabel: "/work/ledger-web", state: "failed", outcome: "blocked", startedAtMs: 1_777_000_800_000, completedAtMs: 1_777_000_845_000 },
+      { runId: "flow-run-04d9", definitionId: null, projectLabel: "/work/payments-api", state: "cancelled", outcome: "cancelled", startedAtMs: 1_777_000_300_000, completedAtMs: 1_777_000_330_000 },
+    ],
+    truncated: false,
+  };
+  const runProgress = (runId: string): FlowRunProgressDataDto => ({
+    runId,
+    cursor: 4,
+    facts: [
+      { kind: "request", label: "Run started", summary: "PAM began the run.", verified: false, evidence: [] },
+      { kind: "evidence", label: "Evidence found", summary: "Step observe-revision recorded 1 evidence item(s).", verified: false, evidence: [evidenceHandles[0]] },
+      { kind: "verification", label: "Verification passed", summary: "All checks green on PR #1842", verified: true, evidence: [evidenceHandles[1]] },
+    ],
+    truncated: false,
+    terminal: true,
+    outcome: {
+      heading: "Ready for the next agent",
+      solved: true,
+      sections: [
+        { label: "SOLVED", summary: "The after-merge checks completed against the bound project.", satisfied: true },
+        { label: "CHANGED", summary: "This read-only flow does not change project state.", satisfied: false },
+        { label: "VERIFIED", summary: "Every declared check reported green.", satisfied: true },
+        { label: "UNRESOLVED", summary: "No unresolved work was reported.", satisfied: false },
+        { label: "BLOCKED", summary: "No blocker was reported.", satisfied: false },
+      ],
+      evidence: evidenceHandles,
+      evidenceTruncated: false,
+    },
+    detailError: null,
+  });
 
   return {
     mode: "fixture",
@@ -1560,6 +1600,42 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       savedSource = `${source.trimEnd()}\n`;
       const data: FlowSaveDataDto = { document: documentHandle, identity, created: false, durabilityConfirmed: true, cleanupComplete: true };
       return fenceResponse(fence, data);
+    },
+    async flowRun(fence, flowHandle) {
+      const definitionId = flowHandle === secondDefinitionHandle ? "release-confidence" : "after-merge-checks";
+      const runId = `flow-run-${definitionId}-demo`;
+      startedRun = {
+        runId,
+        definitionId,
+        projectLabel: requireActive().location,
+        retryCommand: `pam flow run ${definitionId} --run-id ${runId} --idempotency-key flow-run:${runId}`,
+      };
+      return fenceResponse(fence, startedRun);
+    },
+    async flowRunProgress(fence, run) {
+      return fenceResponse(fence, runProgress(run));
+    },
+    async flowRunCancel(fence, run) {
+      return fenceResponse(fence, { runId: run, disposition: "requested" });
+    },
+    async flowRunHistory(fence) {
+      const started = startedRun;
+      if (!started) return fenceResponse(fence, runHistory);
+      return fenceResponse(fence, {
+        runs: [
+          {
+            runId: started.runId,
+            definitionId: started.definitionId,
+            projectLabel: started.projectLabel,
+            state: "succeeded",
+            outcome: "solved",
+            startedAtMs: 1_777_001_400_000,
+            completedAtMs: 1_777_001_440_000,
+          },
+          ...runHistory.runs,
+        ],
+        truncated: false,
+      });
     },
   };
 }

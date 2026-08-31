@@ -571,6 +571,30 @@ pub struct ProjectRequestSummary {
     pub completed_at_ms: Option<u64>,
 }
 
+/// Maximum number of flow runs returned by [`crate::Store::recent_flow_runs`].
+pub const MAX_FLOW_RUN_HISTORY: u32 = 50;
+
+/// One durable flow run, for a bounded newest-first history read.
+///
+/// Carries only scheduler and terminal metadata: never the definition, the
+/// checkpoint snapshot, the encoded result, or evidence content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlowRunSummary {
+    pub request_id: RequestId,
+    pub project_id: ProjectId,
+    /// The project's remembered canonical root, when the daemon has learned
+    /// one. Absent for projects it has only ever seen by ID.
+    pub project_root: Option<String>,
+    pub state: RequestState,
+    /// The digest of the definition this run executed, for matching a run
+    /// back to a catalog entry that still carries the same normalized source.
+    pub definition_digest: [u8; 32],
+    pub outcome: Option<RunOutcome>,
+    pub accepted_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+}
+
 /// Transactionally consistent current scheduler state for one project.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectCurrent {

@@ -236,6 +236,26 @@ test.describe("production-shaped interactions", () => {
     await expect(page).toHaveScreenshot("flows-validated-960x800.png");
   });
 
+  test("runs a flow, shows its outcome, and lists the durable run history", async ({ page }) => {
+    await page.setViewportSize({ width: 1_180, height: 800 });
+    await openFixture(page, "solved", "flows");
+    await page.getByRole("button", { name: /after-merge-checks/ }).click();
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+
+    // The run's project is a per-row label on the run; the view itself stays
+    // global — no picker, no project name in its chrome.
+    await expect(page.getByText("Ready for the next agent")).toBeVisible();
+    await expect(page.locator(".flow-run-head .state-pill")).toHaveText("/work/payments-api");
+    await expect(page.getByText(/^pam flow run after-merge-checks --run-id /)).toBeVisible();
+    await expect(page).toHaveScreenshot("flows-run-1180x800.png");
+
+    await page.getByRole("tab", { name: /History/ }).click();
+    await expect(page.getByText("flow-run-1c6f")).toBeVisible();
+    await expect(page).toHaveScreenshot("flows-history-1180x800.png");
+    const horizontal = await horizontalMetrics(page);
+    expect(horizontal.bodyScroll).toBe(horizontal.bodyClient);
+  });
+
   // The 2K density contract (docs/desktop-layout-contract.md): at the supported
   // width the workspace-internal panes are fixed px, the stat strip is one row
   // of exactly its tiles, and the full-width row lists flow two-up.

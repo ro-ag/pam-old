@@ -711,6 +711,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
                   fence={state.activeFence}
                   onError={showToast}
                   onToast={showToast}
+                  onEvidence={(handle) => void loadEvidence(handle)}
                 />
               )}
               {state.activeView === "activity" && (

@@ -206,6 +206,56 @@ export interface FlowSaveDataDto {
 
 export type FlowSaveDto = FencedResponse<FlowSaveDataDto>;
 
+export interface FlowRunDataDto {
+  runId: string;
+  definitionId: string;
+  /** The project this run is bound to. A run has a project; the global flow
+   * library it came from does not. */
+  projectLabel: string;
+  retryCommand: string;
+}
+
+export type FlowRunDto = FencedResponse<FlowRunDataDto>;
+
+export interface FlowRunProgressDataDto {
+  runId: string;
+  /** The replay cursor to send as `after` on the next poll. */
+  cursor: number;
+  facts: TimelineFactDto[];
+  truncated: boolean;
+  terminal: boolean;
+  outcome: OutcomeDto | null;
+  detailError: string | null;
+}
+
+export type FlowRunProgressDto = FencedResponse<FlowRunProgressDataDto>;
+
+export interface FlowRunCancelDataDto {
+  runId: string;
+  disposition: string;
+}
+
+export type FlowRunCancelDto = FencedResponse<FlowRunCancelDataDto>;
+
+export interface FlowRunHistoryEntryDto {
+  runId: string;
+  /** The catalog definition this run still matches, or null once the
+   * definition has been edited away. */
+  definitionId: string | null;
+  projectLabel: string;
+  state: string;
+  outcome: string | null;
+  startedAtMs: number;
+  completedAtMs: number | null;
+}
+
+export interface FlowRunHistoryDataDto {
+  runs: FlowRunHistoryEntryDto[];
+  truncated: boolean;
+}
+
+export type FlowRunHistoryDto = FencedResponse<FlowRunHistoryDataDto>;
+
 // Mirrors the serde JSON of pam_flow::FlowDefinition exactly (snake_case fields,
 // tagged enums via "kind"/"type", snake_case variant values).
 export type FlowEffectJson = "read_only" | "stateful";
@@ -785,6 +835,10 @@ export interface PamBridge {
   flowCompose(fence: CommandFence, definition: FlowDefinitionJson): Promise<FlowComposeDto>;
   validateFlow(fence: CommandFence, documentHandle: string, source: string): Promise<FlowReviewDto>;
   saveFlow(fence: CommandFence, documentHandle: string, source: string): Promise<FlowSaveDto>;
+  flowRun(fence: CommandFence, flowHandle: string): Promise<FlowRunDto>;
+  flowRunProgress(fence: CommandFence, run: string, after: number): Promise<FlowRunProgressDto>;
+  flowRunCancel(fence: CommandFence, run: string): Promise<FlowRunCancelDto>;
+  flowRunHistory(fence: CommandFence): Promise<FlowRunHistoryDto>;
 }
 
 export const MAX_EVIDENCE_TEXT = 4_096;
