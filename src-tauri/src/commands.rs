@@ -9,11 +9,12 @@ use pam_gui::{
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
     FlowRunCancelDto, FlowRunDto, FlowRunHistoryDto, FlowRunProgressDto, FlowSaveDto,
     FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDeleteWeightsDto,
-    ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
-    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto,
-    ModelMessageDto, ModelPresetsDto, ModelStatusDto, ModelSweepDto, ModelUnregisterDto,
-    ModelVerifyDto, OperationId, ProjectHandle, ResetDto, ResetTier, SkillAuditDto,
-    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    ModelDownloadDto, ModelDownloadSourceParams, ModelDownloadStatusDto, ModelImportDto,
+    ModelImportParams, ModelImportStatusDto, ModelInferDto, ModelInspectDto,
+    ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, ModelSweepDto,
+    ModelUnregisterDto, ModelUrlDownloadParams, ModelVerifyDto, OperationId, ProjectHandle,
+    ResetDto, ResetTier, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
+    SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -340,7 +341,60 @@ pub(crate) struct ModelDownloadRequest {
     generation: GenerationId,
     #[serde(deserialize_with = "canonical_uuid")]
     operation_id: OperationId,
-    preset_id: String,
+    source: ModelDownloadSourceRequest,
+}
+
+/// The two download paths, one command. The pasted-URL variant carries user
+/// consent material, so — like [`ModelImportRequest`] — this type must never
+/// derive `Debug` or log its fields wholesale.
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum ModelDownloadSourceRequest {
+    Preset {
+        preset_id: String,
+    },
+    Url {
+        model: String,
+        url: String,
+        expected_size_bytes: u64,
+        sha256: String,
+        license_id: String,
+        license_url: String,
+        license_notice_text: String,
+        #[serde(default)]
+        accepted: bool,
+    },
+}
+
+impl From<ModelDownloadSourceRequest> for ModelDownloadSourceParams {
+    fn from(source: ModelDownloadSourceRequest) -> Self {
+        match source {
+            ModelDownloadSourceRequest::Preset { preset_id } => Self::Preset { preset_id },
+            ModelDownloadSourceRequest::Url {
+                model,
+                url,
+                expected_size_bytes,
+                sha256,
+                license_id,
+                license_url,
+                license_notice_text,
+                accepted,
+            } => Self::Url(ModelUrlDownloadParams {
+                model,
+                url,
+                expected_size_bytes,
+                sha256,
+                license_id,
+                license_url,
+                license_notice_text,
+                accepted,
+            }),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -847,7 +901,7 @@ pub(crate) async fn model_download(
                 request.generation,
                 request.operation_id,
             ),
-            request.preset_id,
+            request.source.into(),
         )
         .await
 }

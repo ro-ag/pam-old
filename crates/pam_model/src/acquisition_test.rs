@@ -9,6 +9,7 @@ use std::{
 use pam_core::ContentDigest;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
+use url::Url;
 use uuid::Uuid;
 
 use super::{
@@ -705,6 +706,116 @@ async fn forbidden_redirect_never_creates_a_final_model() {
         Err(ModelError::RedirectNotAllowed)
     ));
     assert!(!destination.exists());
+}
+
+/// The pasted-URL policy the GUI relies on: with no extra allowed hosts, a
+/// redirect back to the source's own host is still followed, so a publisher
+/// that redirects `/latest` to `/v3` keeps working.
+#[tokio::test]
+async fn a_same_host_redirect_is_followed_with_no_extra_allowed_hosts() {
+    let directory = TestDirectory::new("same-host-redirect");
+    let fixture = Fixture::new();
+    let redirect = FakeResponse {
+        status: 302,
+        location: Some("https://models.example/v3/model.gguf".to_owned()),
+        ..FakeResponse::full(Vec::new())
+    };
+    let transport = FakeTransport::new(vec![redirect, FakeResponse::full(fixture.bytes.clone())]);
+    let mut request = download_request(&directory.0, &fixture);
+    request.allowed_redirect_hosts.clear();
+
+    let record = download_https(&transport, request).await.unwrap();
+
+    assert_eq!(fs::read(&record.path).unwrap(), fixture.bytes);
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].url().as_str(),
+        "https://models.example/v3/model.gguf"
+    );
+}
+
+/// The other half of that policy: with no extra allowed hosts, a hop onto a
+/// different host is refused outright, which is what stops a pasted URL from
+/// bouncing anywhere PAM never checked.
+#[tokio::test]
+async fn a_cross_host_redirect_is_refused_with_no_extra_allowed_hosts() {
+    let directory = TestDirectory::new("cross-host-redirect");
+    let fixture = Fixture::new();
+    let redirect = FakeResponse {
+        status: 302,
+        location: Some("https://cdn.example/model.gguf".to_owned()),
+        ..FakeResponse::full(Vec::new())
+    };
+    let transport = FakeTransport::new(vec![redirect]);
+    let mut request = download_request(&directory.0, &fixture);
+    request.allowed_redirect_hosts.clear();
+    let destination = request.destination.clone();
+
+    assert!(matches!(
+        download_https(&transport, request).await,
+        Err(ModelError::RedirectNotAllowed)
+    ));
+    assert!(!destination.exists());
+}
+
+/// Same-host redirects are still bounded: a source that keeps redirecting to
+/// itself is stopped by the hop limit rather than looping forever.
+#[tokio::test]
+async fn same_host_redirects_stop_at_the_hop_limit() {
+    let directory = TestDirectory::new("redirect-hop-limit");
+    let fixture = Fixture::new();
+    let hops = (0..=crate::acquisition::MAX_REDIRECTS)
+        .map(|hop| FakeResponse {
+            status: 302,
+            location: Some(format!("https://models.example/hop{hop}/model.gguf")),
+            ..FakeResponse::full(Vec::new())
+        })
+        .collect::<Vec<_>>();
+    let transport = FakeTransport::new(hops);
+    let mut request = download_request(&directory.0, &fixture);
+    request.allowed_redirect_hosts.clear();
+    let destination = request.destination.clone();
+
+    assert!(matches!(
+        download_https(&transport, request).await,
+        Err(ModelError::TooManyRedirects)
+    ));
+    assert_eq!(
+        transport.requests.lock().unwrap().len(),
+        crate::acquisition::MAX_REDIRECTS + 1
+    );
+    assert!(!destination.exists());
+}
+
+/// Provenance is the plain URL: `canonical_source_identity` drops any query
+/// and fragment, so a signed CDN link can never reach the durable record.
+#[tokio::test]
+async fn provenance_records_the_canonical_query_free_source() {
+    let directory = TestDirectory::new("canonical-provenance");
+    let fixture = Fixture::new();
+    let transport = FakeTransport::new(vec![FakeResponse::full(fixture.bytes.clone())]);
+    let request = download_request(&directory.0, &fixture);
+
+    let record = download_https(&transport, request).await.unwrap();
+
+    let ModelSource::Https { canonical_url } = &record.source else {
+        panic!("an HTTPS download records HTTPS provenance");
+    };
+    assert_eq!(canonical_url, "https://models.example/model.gguf");
+    assert!(!canonical_url.contains('?'));
+    assert!(!canonical_url.contains('#'));
+}
+
+#[test]
+fn canonical_source_identity_strips_query_and_fragment() {
+    let source =
+        Url::parse("https://models.example/model.gguf?token=secret&expires=1#part").unwrap();
+
+    assert_eq!(
+        crate::acquisition::canonical_source_identity(&source),
+        "https://models.example/model.gguf"
+    );
 }
 
 #[tokio::test]

@@ -27,8 +27,8 @@ mod runtime_test;
 
 pub use acquisition::{
     DownloadRequest, DownloadResponse, DownloadTransport, ImportRequest, ModelFileReport,
-    ReqwestDownloadTransport, TransferRequest, download_https, import_existing, inspect_model_file,
-    revalidate_registered_model,
+    ReqwestDownloadTransport, TransferRequest, address_is_non_public, download_https,
+    import_existing, inspect_model_file, revalidate_registered_model,
 };
 pub use catalog::{
     DanglingRegistration, ModelsDirectorySweep, OrphanWeights, WeightsRefusal,

@@ -3,7 +3,10 @@
 //! Every entry here is static data checked in by hand against the vendor's
 //! published artifact; PAM never fetches or infers preset metadata over the
 //! network. The GUI downloads and registers a preset through the
-//! `model_download` runtime, never a bare user-supplied URL.
+//! `model_download` runtime. A URL the owner pastes runs through that same
+//! runtime, but goes through [`crate::model_url_download`] first, which
+//! substitutes explicit checks for the hand-verification a preset already
+//! carries — and, unlike a preset, gets no CDN redirect allowlist.
 //!
 //! A preset carries its own size and digest literals. Membership in
 //! [`pam_model::CALIBRATED_ARTIFACTS`] — the measured, known-good set — is a

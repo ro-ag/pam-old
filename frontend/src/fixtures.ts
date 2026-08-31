@@ -33,6 +33,7 @@ import type {
   HealthDto,
   HostMemoryDto,
   ModelDownloadDto,
+  ModelDownloadSource,
   ModelDownloadStatusDto,
   ModelFailureDto,
   ModelImportDto,
@@ -740,6 +741,94 @@ function snapshot(project: ProjectSummaryDto, daemonRunning: boolean, scenario: 
   return data;
 }
 
+/** The pasted-URL refusals the desktop gate produces, in its order, so a
+ *  fixture-driven UI meets the same wording the native shell shows. Returns
+ *  null when the paste passes every check the browser can make; the address
+ *  gate is the desktop's alone. */
+function refusePastedDownload(
+  source: Extract<ModelDownloadSource, { kind: "url" }>,
+): ModelFailureDto | null {
+  const refuse = (detail: string, recovery: string): ModelFailureDto => ({
+    kind: "unavailable",
+    code: "invalid_download_url",
+    detail,
+    recovery,
+  });
+  const urlRecovery = "Paste the direct https:// URL of the .gguf file itself.";
+  if (!source.accepted) {
+    return refuse(
+      "PAM records the exact license you accept before it downloads anything.",
+      "Accept this model's license, then start the download.",
+    );
+  }
+  if (!/^[^/]+\/[^/]+$/.test(source.model.trim())) {
+    return refuse(
+      "model identity must use the vendor/name form",
+      "Name the model as vendor/name, e.g. qwen/qwen3-4b-instruct-q4.",
+    );
+  }
+  const raw = source.url.trim();
+  if (raw === "") return refuse("Enter the model's download URL.", urlRecovery);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return refuse("PAM could not read that as a URL.", urlRecovery);
+  }
+  if (parsed.protocol !== "https:") {
+    return refuse(
+      `PAM downloads models over HTTPS only; this URL uses the ${parsed.protocol.replace(":", "")} scheme.`,
+      urlRecovery,
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    return refuse(
+      "PAM refuses a download URL that carries embedded credentials.",
+      "Remove the user:password@ part of the URL and paste it again.",
+    );
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return refuse(
+      "PAM refuses a download URL with a query string or fragment; provenance records only the plain URL.",
+      "Paste the URL with everything from the ? or # onward removed.",
+    );
+  }
+  if (parsed.port !== "" && parsed.port !== "443") {
+    return refuse(
+      `PAM downloads models from port 443 only; this URL uses port ${parsed.port}.`,
+      "Paste a plain https:// URL with no explicit port.",
+    );
+  }
+  if (!/\/[^/]+\.gguf$/i.test(parsed.pathname)) {
+    return refuse("That URL does not end in a .gguf file name PAM can save.", urlRecovery);
+  }
+  if (!/^(sha256:)?[0-9a-f]{64}$/i.test(source.sha256.trim())) {
+    return refuse(
+      "The expected digest must be a 64-character hex SHA-256.",
+      "Copy the SHA-256 the publisher lists for this exact file.",
+    );
+  }
+  if (source.expectedSizeBytes < 24 || source.expectedSizeBytes > 2 ** 40) {
+    return refuse(
+      "The expected size must be the file's exact length in bytes.",
+      "Copy the byte count the publisher lists for this exact file.",
+    );
+  }
+  if (source.licenseNoticeText.trim() === "") {
+    return refuse(
+      "PAM records the exact license notice you accept, so it cannot be empty.",
+      "Paste the license notice text exactly as the publisher states it.",
+    );
+  }
+  if (source.licenseId.trim() === "" || !source.licenseUrl.trim().startsWith("https://")) {
+    return refuse(
+      "The license identifier and notice URL are required, and the notice URL must be plain HTTPS.",
+      "Fill in the SPDX identifier and the https:// URL of the license notice.",
+    );
+  }
+  return null;
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -770,7 +859,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   // One download at a time, tracked globally like the real daemon; each poll
   // advances it a fixed step so a fixture-driven UI shows real progress.
   let download: {
-    presetId: string;
+    downloadId: string;
+    downloadKind: "preset" | "url";
+    model: string;
     receivedBytes: number;
     totalBytes: number;
     status: "running" | "complete" | "failed" | "cancelled";
@@ -1347,7 +1438,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     async modelPresets(_fence): Promise<ModelPresetsDto> {
       return clone({ presets: modelPresets, hostModelBudgetBytes: FIXTURE_HOST_MODEL_BUDGET_BYTES });
     },
-    async modelDownload(_fence, presetId): Promise<ModelDownloadDto> {
+    async modelDownload(_fence, source): Promise<ModelDownloadDto> {
       if (!daemonRunning) {
         return {
           status: "unavailable",
@@ -1359,11 +1450,28 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           },
         };
       }
-      const preset = modelPresets.find((candidate) => candidate.id === presetId);
-      if (!preset) {
-        return {
-          status: "unavailable",
-          failure: { kind: "unavailable", code: "unknown_preset", detail: "This preset is not offered by PAM.", recovery: null },
+      let started: { downloadId: string; downloadKind: "preset" | "url"; model: string; totalBytes: number };
+      if (source.kind === "preset") {
+        const preset = modelPresets.find((candidate) => candidate.id === source.presetId);
+        if (!preset) {
+          return {
+            status: "unavailable",
+            failure: { kind: "unavailable", code: "unknown_preset", detail: "This preset is not offered by PAM.", recovery: null },
+          };
+        }
+        started = { downloadId: preset.id, downloadKind: "preset", model: preset.model, totalBytes: preset.expectedSizeBytes };
+      } else {
+        // The same refusals the desktop's pasted-URL gate produces, in the
+        // order it produces them, so fixture-driven UI meets real messages.
+        const refusal = refusePastedDownload(source);
+        if (refusal) {
+          return { status: "unavailable", failure: refusal };
+        }
+        started = {
+          downloadId: source.model,
+          downloadKind: "url",
+          model: source.model,
+          totalBytes: source.expectedSizeBytes,
         };
       }
       if (download?.status === "running") {
@@ -1380,8 +1488,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       downloadAttempts += 1;
       // Restarting a cancelled download resumes from the kept partial bytes,
       // mirroring the daemon's on-disk resume.
-      const resumeBytes = download?.status === "cancelled" && download.presetId === presetId ? download.receivedBytes : 0;
-      download = { presetId, receivedBytes: resumeBytes, totalBytes: preset.expectedSizeBytes, status: "running", failure: null };
+      const resumeBytes =
+        download?.status === "cancelled" && download.downloadId === started.downloadId ? download.receivedBytes : 0;
+      download = { ...started, receivedBytes: resumeBytes, status: "running", failure: null };
       return { status: "ok" };
     },
     async modelDownloadCancel(_fence): Promise<ModelDownloadDto> {
@@ -1396,7 +1505,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       return { status: "ok" };
     },
     async modelDownloadStatus(_fence): Promise<ModelDownloadStatusDto> {
-      if (!download) return { status: "idle", presetId: null, receivedBytes: 0, totalBytes: 0, failure: null };
+      if (!download) {
+        return { status: "idle", downloadId: null, downloadKind: null, receivedBytes: 0, totalBytes: 0, failure: null };
+      }
       if (download.status === "running") {
         download.receivedBytes = Math.min(download.totalBytes, download.receivedBytes + Math.ceil(download.totalBytes * 0.4));
         if (scenario === "model-download-fail" && downloadAttempts === 1) {
@@ -1409,12 +1520,13 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           };
         } else if (download.receivedBytes >= download.totalBytes) {
           download.status = "complete";
-          modelCatalog.push({ modelId: modelPresets.find((preset) => preset.id === download?.presetId)?.model ?? download.presetId, sizeBytes: download.totalBytes });
+          modelCatalog.push({ modelId: download.model, sizeBytes: download.totalBytes });
         }
       }
       return clone({
         status: download.status,
-        presetId: download.presetId,
+        downloadId: download.downloadId,
+        downloadKind: download.downloadKind,
         receivedBytes: download.receivedBytes,
         totalBytes: download.totalBytes,
         failure: download.failure,

@@ -11,6 +11,7 @@ mod model_discovery;
 mod model_download;
 mod model_import;
 mod model_presets;
+mod model_url_download;
 mod observatory;
 mod settings;
 mod skill_audit;
@@ -41,6 +42,8 @@ mod model_import_test;
 #[cfg(test)]
 mod model_presets_test;
 #[cfg(test)]
+mod model_url_download_test;
+#[cfg(test)]
 mod observatory_test;
 #[cfg(test)]
 mod settings_test;
@@ -65,17 +68,21 @@ pub use desktop::{
     FlowDocumentHandle, FlowDryRunDto, FlowDryRunStepDto, FlowGraphDto, FlowIdentityDto,
     FlowReviewDataDto, FlowReviewDto, FlowSaveDataDto, FlowSaveDto, FlowVersionDiffDto,
     FlowVersionDiffLineDto, FlowWorkspaceDataDto, FlowWorkspaceDto, GenerationId, HealthDto,
-    HostMemoryDto, ModelDeleteWeightsDto, ModelDownloadDto, ModelDownloadStatusDto,
-    ModelDownloadStatusKindDto, ModelHealthDto, ModelImportDto, ModelImportStageDto,
-    ModelImportStatusDto, ModelImportStatusKindDto, ModelInferDto, ModelInspectDto,
-    ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
-    ModelStatusDto, ModelSummaryDto, ModelSweepDto, ModelUnregisterDto, ModelUsageDto,
-    ModelVerifyDto, OperationId, OrphanWeightsDto, OutcomeDto, OutcomeSectionDto, ProjectHandle,
-    ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, ResetDto, ResetItemDto, ResetResultDto,
-    RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto,
-    TimelineKindDto,
+    HostMemoryDto, ModelDeleteWeightsDto, ModelDownloadDto, ModelDownloadKindDto,
+    ModelDownloadSourceParams, ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelHealthDto,
+    ModelImportDto, ModelImportStageDto, ModelImportStatusDto, ModelImportStatusKindDto,
+    ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto,
+    ModelPresetsDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelSweepDto,
+    ModelUnregisterDto, ModelUsageDto, ModelVerifyDto, OperationId, OrphanWeightsDto, OutcomeDto,
+    OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto,
+    ResetDto, ResetItemDto, ResetResultDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
+    StartupPhaseDto, TimelineFactDto, TimelineKindDto,
 };
 pub use pam_protocol::ResetTier;
+
+// Re-exported so the desktop shell can build a pasted-URL download request
+// without reaching into the GUI crate's private modules.
+pub use model_url_download::ModelUrlDownloadParams;
 
 // Re-exported so the desktop shell can accept the debug-redacted credential
 // action without depending on pam_protocol directly.

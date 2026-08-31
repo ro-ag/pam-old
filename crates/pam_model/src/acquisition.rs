@@ -28,7 +28,7 @@ use crate::{
 };
 
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
-const MAX_REDIRECTS: usize = 5;
+pub(crate) const MAX_REDIRECTS: usize = 5;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const GGUF_FIXED_HEADER_BYTES: u64 = 24;
@@ -1633,8 +1633,8 @@ fn validate_source(value: &str) -> Result<Url, ModelError> {
         || url.query().is_some()
         || url.host_str().is_none()
         || url.host().is_some_and(|host| match host {
-            url::Host::Ipv4(address) => non_public_ip(IpAddr::V4(address)),
-            url::Host::Ipv6(address) => non_public_ip(IpAddr::V6(address)),
+            url::Host::Ipv4(address) => address_is_non_public(IpAddr::V4(address)),
+            url::Host::Ipv6(address) => address_is_non_public(IpAddr::V6(address)),
             url::Host::Domain(_) => false,
         })
     {
@@ -1682,8 +1682,8 @@ fn validate_redirect(
         return Err(ModelError::RedirectNotAllowed);
     }
     if target.host().is_some_and(|host| match host {
-        url::Host::Ipv4(address) => non_public_ip(IpAddr::V4(address)),
-        url::Host::Ipv6(address) => non_public_ip(IpAddr::V6(address)),
+        url::Host::Ipv4(address) => address_is_non_public(IpAddr::V4(address)),
+        url::Host::Ipv6(address) => address_is_non_public(IpAddr::V6(address)),
         url::Host::Domain(_) => false,
     }) {
         return Err(ModelError::RedirectNotAllowed);
@@ -1691,7 +1691,14 @@ fn validate_redirect(
     Ok(target)
 }
 
-fn non_public_ip(address: IpAddr) -> bool {
+/// Whether an address is outside the public internet: loopback, private,
+/// link-local, unique-local, multicast, or any other reserved range.
+///
+/// Exported so a caller that resolves a user-supplied host itself — the GUI's
+/// pasted-URL download gate — refuses the same ranges this module's own URL
+/// and redirect checks refuse, from one table rather than two.
+#[must_use]
+pub fn address_is_non_public(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => non_public_ipv4(address),
         IpAddr::V6(address) => non_public_ipv6(address),
@@ -1737,7 +1744,7 @@ fn non_public_ipv6(address: Ipv6Addr) -> bool {
         || (segments[0] & 0xffc0) == 0xfec0
 }
 
-fn canonical_source_identity(source: &Url) -> String {
+pub(crate) fn canonical_source_identity(source: &Url) -> String {
     let mut sanitized = source.clone();
     sanitized.set_query(None);
     sanitized.set_fragment(None);
