@@ -127,3 +127,12 @@ Managed by memento.py — log with `memento hit`, do not hand-edit entry fields.
 - hits: 2026-08-27
 - cost: 0
 - status: watching
+
+## gh-pr-checks-watch-exits-zero-on-failure
+- kind: habit
+- scope: project
+- rule: Never gate a merge on 'gh pr checks --watch &&' alone: it can exit 0 while a check is FAILURE, silently merging a red PR
+- fix: After --watch returns, assert explicitly before merging: FAILED=$(gh pr checks <n> --json state --jq '[.[] | select(.state != "SUCCESS" and .state != "SKIPPED")] | length'); [ "$FAILED" = 0 ] && gh pr merge <n> --squash --delete-branch. Observed on PR 137: Desktop frontend FAILURE while --watch exited 0, merging a red PR to main.
+- hits: 2026-08-31
+- cost: 0
+- status: watching
