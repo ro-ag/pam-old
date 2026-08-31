@@ -104,6 +104,44 @@ pub struct AuditPruneOutcome {
     pub has_more: bool,
 }
 
+/// One class of durable state a reset tier removes, in rows and in the disk
+/// bytes the removal actually frees.
+///
+/// `bytes` is zero for classes that are only small rows inside the state
+/// database: a reset reports the space it really reclaims rather than an
+/// invented figure for a row's on-page cost.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResetTally {
+    pub count: u64,
+    pub bytes: u64,
+}
+
+/// Everything the `access` reset tier covers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AccessResetTally {
+    pub grants: u64,
+    pub approvals: u64,
+    pub flow_authorizations: u64,
+}
+
+impl AccessResetTally {
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.grants
+            .saturating_add(self.approvals)
+            .saturating_add(self.flow_authorizations)
+    }
+}
+
+/// The durable half of the `history` reset tier. Evidence travels the
+/// evidence worker instead, because only that worker holds the blob
+/// directory capability.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HistoryResetTally {
+    pub audit_events: ResetTally,
+    pub flow_runs: ResetTally,
+}
+
 /// Bounded newest-first slice of the durable audit ledger across all projects.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecentAuditEvents {

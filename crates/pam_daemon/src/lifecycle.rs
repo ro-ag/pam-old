@@ -2,7 +2,8 @@
 use std::os::unix::fs::DirBuilderExt as _;
 use std::{
     collections::HashMap,
-    fmt, fs,
+    fmt::{self, Write as _},
+    fs,
     future::Future,
     io::Write,
     path::{Path, PathBuf},
@@ -81,9 +82,9 @@ use pam_protocol::{
     ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
     ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
-    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
-    SourceAvailability, StatusResult, decode_request_envelope, decode_server_message_envelope,
-    encode,
+    RequestEnvelope, RequestPayload, ResetResult, ResetTier, ResultBody, ResultEnvelope,
+    ResultPayload, ServerMessage, SourceAvailability, StatusResult, decode_request_envelope,
+    decode_server_message_envelope, encode,
 };
 use pam_store::{
     AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
@@ -117,6 +118,7 @@ use crate::flow::{
 use crate::macos_admission::MacosRuntimeHostAdmission;
 use crate::model_service::{ModelService, ModelServiceError, ModelWorker};
 use crate::ptrack::PtrackBriefProvider;
+use crate::reset::{self, CredentialStore, ResetContext, ResetError, ResetPaths};
 
 const RESPONSE_CAPACITY: usize = 64;
 const SCHEDULER_CAPACITY: usize = 64;
@@ -384,6 +386,7 @@ where
         .parent()
         .map_or_else(|| PathBuf::from("logs"), |parent| parent.join("logs"));
     let log = DaemonLog::open(&log_dir);
+    let reset_state_path = state_path.clone();
     let store = Store::open(state_path)?;
     store.recover_all_leases(now_ms()).await?;
     #[cfg(test)]
@@ -422,6 +425,20 @@ where
             .map(|override_backend| override_backend.0),
     );
     connectors.warm(log.clone());
+    // Reset resolves its root from the state database this daemon actually
+    // opened, so a test daemon pointed at a scratch directory resets that
+    // directory and the platform data directory is never in reach. Caller
+    // credentials share the credential store connectors use, so a daemon
+    // started with an injected backend purges through that same backend.
+    let reset_context = ResetContext::new(
+        ResetPaths::for_state_path(&reset_state_path).map_err(DaemonError::Reset)?,
+        config
+            .connector_secret_backend
+            .clone()
+            .map_or(CredentialStore::Native, |override_backend| {
+                CredentialStore::Injected(override_backend.0)
+            }),
+    );
     // The endpoint is the daemon's only advertisement that it can serve, so it
     // is bound after the model is loaded rather than before. Loading a
     // multi-GB model is minutes of work and the control center probes health
@@ -490,6 +507,7 @@ where
                 let request_flow_preflight_admission = Arc::clone(&flow_preflight_admission);
                 let request_connectors = connectors.clone();
                 let request_log = log.clone();
+                let request_reset = reset_context.clone();
                 handlers.spawn(async move {
                     handle_incoming(
                         incoming,
@@ -504,6 +522,7 @@ where
                         flow_preflight_delay,
                         durable_status,
                         request_connectors,
+                        request_reset,
                         request_log,
                     )
                     .await
@@ -845,6 +864,7 @@ async fn handle_incoming(
     flow_preflight_delay: Duration,
     durable_status: bool,
     connectors: ConnectorRuntime,
+    reset_context: ResetContext,
     log: DaemonLog,
 ) -> Result<(), DaemonError> {
     let Ok(request) = decode_request_envelope(incoming.payload()) else {
@@ -1117,6 +1137,54 @@ async fn handle_incoming(
         (Capability::GrantRevoke, RequestPayload::GrantRevoke { capability }) => {
             handle_grant_revoke(&request, capability.clone(), incoming, &store, &outbound).await
         }
+        (Capability::ResetAccess, RequestPayload::ResetAccess { dry_run }) => {
+            handle_reset(
+                &request,
+                ResetTier::Access,
+                *dry_run,
+                incoming,
+                &store,
+                &outbound,
+                &reset_context,
+            )
+            .await
+        }
+        (Capability::ResetIdentity, RequestPayload::ResetIdentity { dry_run }) => {
+            handle_reset(
+                &request,
+                ResetTier::Identity,
+                *dry_run,
+                incoming,
+                &store,
+                &outbound,
+                &reset_context,
+            )
+            .await
+        }
+        (Capability::ResetHistory, RequestPayload::ResetHistory { dry_run }) => {
+            handle_reset(
+                &request,
+                ResetTier::History,
+                *dry_run,
+                incoming,
+                &store,
+                &outbound,
+                &reset_context,
+            )
+            .await
+        }
+        (Capability::ResetRegistry, RequestPayload::ResetRegistry { dry_run }) => {
+            handle_reset(
+                &request,
+                ResetTier::Registry,
+                *dry_run,
+                incoming,
+                &store,
+                &outbound,
+                &reset_context,
+            )
+            .await
+        }
         (Capability::ConnectorList, RequestPayload::ConnectorList) => {
             handle_connector_list(&request, incoming, &store, &outbound, &connectors).await
         }
@@ -1247,6 +1315,12 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::ConnectorList
             | Capability::ConnectorConfigure
             | Capability::ConnectorTest
+            // Reset clears daemon-global state, so its grants are written in
+            // the daemon scope and its refusals recover with `--daemon`.
+            | Capability::ResetAccess
+            | Capability::ResetIdentity
+            | Capability::ResetHistory
+            | Capability::ResetRegistry
     )
 }
 
@@ -1448,6 +1522,19 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
                 Capability::ConnectorTest,
                 RequestPayload::ConnectorTest { .. }
             )
+            | (Capability::ResetAccess, RequestPayload::ResetAccess { .. })
+            | (
+                Capability::ResetIdentity,
+                RequestPayload::ResetIdentity { .. }
+            )
+            | (
+                Capability::ResetHistory,
+                RequestPayload::ResetHistory { .. }
+            )
+            | (
+                Capability::ResetRegistry,
+                RequestPayload::ResetRegistry { .. }
+            )
     );
     capability_matches
         && (!matches!(request.capability, Capability::ApprovalDecide)
@@ -1639,11 +1726,23 @@ pub(super) fn policy_resource(
         RequestPayload::ModelInfer { model, .. } | RequestPayload::ModelUnregister { model } => {
             format!("model:{model}")
         }
+        // A dry run and a real reset are deliberately different resources: a
+        // grant that only ever forecast a reset must never be spendable on
+        // the wipe itself.
+        RequestPayload::ResetAccess { dry_run } => reset_resource("access", *dry_run),
+        RequestPayload::ResetIdentity { dry_run } => reset_resource("identity", *dry_run),
+        RequestPayload::ResetHistory { dry_run } => reset_resource("history", *dry_run),
+        RequestPayload::ResetRegistry { dry_run } => reset_resource("registry", *dry_run),
         // Flow execution requires an exact worktree fingerprint and is prepared by
         // `handle_incoming` before policy evaluation.
         RequestPayload::FlowRun { .. } => return Err(InvalidResourceName),
     };
     ResourceName::parse(resource)
+}
+
+fn reset_resource(tier: &str, dry_run: bool) -> String {
+    let mode = if dry_run { "preview" } else { "apply" };
+    format!("reset:{tier}:mode={mode}")
 }
 
 fn target_policy_resource(
@@ -1770,7 +1869,12 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::GetResult
         | Capability::ModelInfer
         | Capability::ModelUnregister
-        | Capability::FlowRun => format!(
+        | Capability::FlowRun
+        // Every reset tier has a CLI surface that takes --approval-id.
+        | Capability::ResetAccess
+        | Capability::ResetIdentity
+        | Capability::ResetHistory
+        | Capability::ResetRegistry => format!(
             "pam approval approve {approval_id}, then retry the original command with --approval-id {approval_id}"
         ),
         Capability::InspectEvidence | Capability::ReadEvidence => format!(
@@ -3023,6 +3127,94 @@ async fn handle_grant_revoke(
     )
     .await;
     Ok(())
+}
+
+/// Runs one scoped reset tier, or forecasts it exactly.
+///
+/// A dry run reports [`OperationTruth::Observed`] and audits as an
+/// observation, because it changes nothing; a real run reports
+/// [`OperationTruth::Changed`] and audits the exact counts that went. Both
+/// travel the same policy gate, and both refuse with a recovery line.
+async fn handle_reset(
+    request: &RequestEnvelope,
+    tier: ResetTier,
+    dry_run: bool,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    context: &ResetContext,
+) -> Result<(), DaemonError> {
+    let result = match reset::run_tier(store, context, tier, dry_run).await {
+        Ok(result) => result,
+        Err(error) => {
+            let mut failure =
+                failure_result(request, reset_failure_code(&error), &error.to_string());
+            if let ResultBody::Failure(body) = &mut failure.body {
+                body.recovery = error.recovery();
+            }
+            send_routed(
+                outbound,
+                incoming,
+                vec![ServerMessage::Result(failure)],
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    let truth = if dry_run {
+        OperationTruth::Observed
+    } else {
+        OperationTruth::Changed
+    };
+    let detail = reset_audit_detail(&result);
+    let occurred_at_ms = now_ms();
+    store
+        .append_audit_event(AppendAuditEvent {
+            event_id: request_audit_event_id(request, "reset", occurred_at_ms),
+            project_id: request.project_id.clone(),
+            caller_id: request.caller_id.clone(),
+            action: format!("reset.{}", tier.label()),
+            decision: if dry_run { "observe" } else { "allow" }.to_owned(),
+            outcome: truth_label(&truth).to_owned(),
+            redacted_detail: redact_audit_detail(detail.as_bytes()),
+            occurred_at_ms,
+            retain_until_ms: occurred_at_ms
+                .saturating_add(duration_ms(AUDIT_RETENTION))
+                .min(i64::MAX as u64),
+        })
+        .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            truth,
+            ResultPayload::Reset(result),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+const fn reset_failure_code(error: &ResetError) -> FailureCode {
+    match error {
+        ResetError::OutsideRoot(_) => FailureCode::InvalidRequest,
+        ResetError::DaemonRunning => FailureCode::LeaseConflict,
+        _ => FailureCode::Internal,
+    }
+}
+
+fn reset_audit_detail(result: &ResetResult) -> String {
+    let mut detail = format!(
+        "scope={} dry_run={} items={} bytes={}",
+        result.scope, result.dry_run, result.total_items, result.total_bytes
+    );
+    for entry in &result.items {
+        let _ = write!(detail, " {}={}", entry.kind, entry.count);
+    }
+    detail
 }
 
 async fn handle_connector_list(
@@ -4485,7 +4677,11 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::FlowRun { .. }
         | RequestPayload::ConnectorList
         | RequestPayload::ConnectorConfigure { .. }
-        | RequestPayload::ConnectorTest { .. } => None,
+        | RequestPayload::ConnectorTest { .. }
+        | RequestPayload::ResetAccess { .. }
+        | RequestPayload::ResetIdentity { .. }
+        | RequestPayload::ResetHistory { .. }
+        | RequestPayload::ResetRegistry { .. } => None,
     }
 }
 

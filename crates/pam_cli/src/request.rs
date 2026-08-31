@@ -7,6 +7,7 @@ use pam_platform::{
 };
 use pam_protocol::{
     ExpectedTargetKind, FlowProjectRoot, ModelMessage, ProtocolContractError, RequestEnvelope,
+    ResetTier,
 };
 use std::{
     error::Error,
@@ -73,6 +74,37 @@ impl RequestContext {
         approval_id: Option<ApprovalId>,
     ) -> Self {
         Self::new(caller_id, project.id().clone(), approval_id)
+    }
+
+    /// Builds a context bound to the reserved daemon scope.
+    ///
+    /// Reset is daemon-global, so it must not require a project on disk: the
+    /// owner may be anywhere when they clear PAM's state, and its grants are
+    /// written in the daemon scope.
+    pub(crate) async fn discover_daemon_scope(
+        approval_id: Option<ApprovalId>,
+    ) -> Result<Self, RequestContextError> {
+        let caller_id = caller_id(CallerKind::Cli).map_err(RequestContextError::Identity)?;
+        let credential = load_native_credential(caller_id.clone()).await?;
+        Ok(Self {
+            caller_id,
+            project_id: ProjectId::daemon_scope(),
+            credential,
+            approval_id,
+            project_root: None,
+        })
+    }
+
+    pub(crate) fn reset(&self, tier: ResetTier, dry_run: bool) -> RequestEnvelope {
+        let (request_id, idempotency_key) = operation_ids("reset");
+        self.authenticate(RequestEnvelope::reset(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+            tier,
+            dry_run,
+        ))
     }
 
     pub(crate) fn status(&self) -> RequestEnvelope {

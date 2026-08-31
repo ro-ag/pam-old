@@ -7,9 +7,9 @@ use crate::{
     app::{
         FlowResponseKind, audit_export, flow_recovery_cursor, flow_response_matches,
         flow_run_retry, migrate_legacy_flows, model_import, model_import_resource,
-        model_unregister, render_model_catalog, retention_prune, select_flow,
+        model_unregister, refuse_unconfirmed, render_model_catalog, retention_prune, select_flow,
     },
-    command::RetentionScopeArg,
+    command::{ResetConfirmation, RetentionScopeArg},
     flow::FlowCatalog,
     render::EXIT_OPERATION_FAILED,
     request::RequestContext,
@@ -439,4 +439,20 @@ fn terminal_flow_body() -> ResultBody {
         truth: OperationTruth::Unresolved,
         payload: ResultPayload::FlowRun(result.clone()),
     }
+}
+
+#[test]
+fn a_reset_that_would_change_state_refuses_without_an_explicit_confirmation() {
+    let confirmation = |dry_run: bool, yes: bool| ResetConfirmation {
+        dry_run,
+        yes,
+        approval_id: None,
+    };
+    assert_eq!(
+        refuse_unconfirmed(&confirmation(false, false)),
+        Some(EXIT_OPERATION_FAILED)
+    );
+    // A forecast changes nothing, so it never needs a confirmation.
+    assert_eq!(refuse_unconfirmed(&confirmation(true, false)), None);
+    assert_eq!(refuse_unconfirmed(&confirmation(false, true)), None);
 }

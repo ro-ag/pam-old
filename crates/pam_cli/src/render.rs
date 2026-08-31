@@ -3,7 +3,8 @@ use std::fmt::Write as _;
 use pam_protocol::{
     BriefItem, BriefProvenance, BriefResult, CancellationDisposition, ConfigurationPresence, Event,
     EventEnvelope, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, Failure, FailureCode,
-    ModelFinishReason, OperationTruth, PacState, ResultBody, ResultPayload, SourceAvailability,
+    ModelFinishReason, OperationTruth, PacState, ResetResult, ResultBody, ResultPayload,
+    SourceAvailability,
 };
 
 pub(crate) const EXIT_OK: i32 = 0;
@@ -610,7 +611,52 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             result.revoked,
             truth_label(truth)
         ),
+        ResultPayload::Reset(result) => render_reset_result(result, truth),
     }
+}
+
+/// One line for the tier, then one line per class it covers, so a dry run and
+/// the run that follows it are diffable side by side.
+fn render_reset_result(result: &ResetResult, truth: &OperationTruth) -> String {
+    render_reset_lines(result, truth_label(truth))
+}
+
+/// The same rendering for a locally performed factory reset, which never
+/// crosses the protocol and so has no result envelope to carry a truth value.
+pub(crate) fn render_reset(result: &ResetResult) -> String {
+    render_reset_lines(
+        result,
+        if result.dry_run {
+            "observed"
+        } else {
+            "changed"
+        },
+    )
+}
+
+fn render_reset_lines(result: &ResetResult, truth: &str) -> String {
+    let mut rendered = format!(
+        "scope={} dry_run={} items={} bytes={} truth={truth}\n",
+        escape_text(&result.scope),
+        result.dry_run,
+        result.total_items,
+        result.total_bytes,
+    );
+    for entry in &result.items {
+        writeln!(
+            rendered,
+            "  {} count={} bytes={}",
+            escape_text(&entry.kind),
+            entry.count,
+            entry.bytes
+        )
+        .expect("writing to a String cannot fail");
+        for name in &entry.names {
+            writeln!(rendered, "    {}", escape_text(name))
+                .expect("writing to a String cannot fail");
+        }
+    }
+    rendered
 }
 
 const fn connector_test_label(status: pam_protocol::ConnectorTestDisposition) -> &'static str {

@@ -29,8 +29,8 @@ pub use contract::{
     ModelRole, ModelStatusResult, ModelSummary, ModelUnregisterResult, ModelUsage,
     NetworkDiagnosticsResult, OperationTruth, PacState, ProjectCurrentResult, ProjectRequestState,
     ProjectRequestSummary, ProjectUsageSummary, ProtocolContractError, ReplayResult,
-    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
-    SourceAvailability, StatusResult,
+    RequestEnvelope, RequestPayload, ResetItem, ResetResult, ResetTier, ResultBody, ResultEnvelope,
+    ResultPayload, ServerMessage, SourceAvailability, StatusResult,
 };
 
 pub const PROTOCOL_VERSION: u16 = 9;

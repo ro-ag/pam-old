@@ -242,6 +242,11 @@ async fn run_async() -> i32 {
             approval_id,
             limit,
         } => app::retention_prune(scope, before_unix_ms, approval_id, limit).await,
+        Mode::ResetTier { tier, confirmation } => app::reset_tier(tier, confirmation).await,
+        Mode::ResetAll {
+            confirmation,
+            include_weights,
+        } => app::reset_all(confirmation, include_weights).await,
         Mode::Daemon { recover, model } => match pam_daemon::run(recover, model).await {
             Ok(()) => 0,
             Err(error) => {

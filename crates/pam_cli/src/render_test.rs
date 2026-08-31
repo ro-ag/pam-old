@@ -495,3 +495,39 @@ fn evidence_preview_escapes_every_control_and_non_ascii_byte() {
     assert!(rendered.ends_with("Preview:\nok\\n\\x1b[31m\\xff\n"));
     assert!(!rendered.as_bytes().contains(&0x1b));
 }
+
+#[test]
+fn a_reset_result_renders_one_line_per_class_it_covers() {
+    let result = pam_protocol::ResetResult {
+        scope: "factory".to_owned(),
+        dry_run: true,
+        items: vec![
+            pam_protocol::ResetItem {
+                kind: "grants".to_owned(),
+                count: 4,
+                bytes: 0,
+                names: Vec::new(),
+            },
+            pam_protocol::ResetItem {
+                kind: "flows".to_owned(),
+                count: 2,
+                bytes: 4_096,
+                names: vec!["release-readiness.toml".to_owned()],
+            },
+        ],
+        total_items: 6,
+        total_bytes: 4_096,
+    };
+    let rendered = present_result(&ResultBody::Success {
+        truth: OperationTruth::Observed,
+        payload: ResultPayload::Reset(result.clone()),
+    });
+
+    let text = rendered.stdout;
+    assert!(text.contains("scope=factory"));
+    assert!(text.contains("dry_run=true"));
+    assert!(text.contains("truth=observed"));
+    assert!(text.contains("grants count=4 bytes=0"));
+    // Naming the flows is what makes the confirmation informed.
+    assert!(text.contains("release-readiness.toml"));
+}

@@ -8,7 +8,7 @@ use pam_protocol::{
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
     FailureCode, GrantRevokeResult, ModelGenerationResult, ModelMessage, ModelRegisterResult,
     ModelRegistration, ModelStatusResult, ModelUnregisterResult, ProtocolContractError,
-    RequestEnvelope, ResultBody, ResultPayload,
+    RequestEnvelope, ResetResult, ResetTier, ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -27,6 +27,11 @@ const MODEL_REGISTER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const GRANT_REVOKE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL_REGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.register capability in Access, or approve the pending registration.";
 const MODEL_UNREGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.";
+// A reset walks the whole store, and clearing history also unlinks every
+// evidence blob, so it gets a far longer window than an ordinary write.
+const RESET_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(1);
+const RESET_BLOCKED_RECOVERY: &str =
+    "Grant the GUI caller this reset capability in Access, or approve the pending reset.";
 const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in PAM policy, or approve the pending connector request.";
 const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in PAM policy, or approve the pending connector request.";
 
@@ -441,6 +446,39 @@ fn now_unix_ms() -> u64 {
         })
 }
 
+/// Runs one scoped reset tier, or forecasts it, through the daemon that owns
+/// the store.
+///
+/// Reset is daemon-global, so this always speaks in the reserved daemon
+/// scope: its grants live there and its refusals recover there.
+pub(crate) async fn run_reset(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    tier: ResetTier,
+    dry_run: bool,
+) -> ObservatoryState<ResetResult> {
+    let request = RequestEnvelope::reset(
+        unique_request_id("gui-reset"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-reset"),
+        tier,
+        dry_run,
+    )
+    .authenticated(credential);
+    load(
+        request,
+        "reset",
+        RESET_EXCHANGE_TIMEOUT,
+        reset_failure_state,
+        |payload| match payload {
+            ResultPayload::Reset(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await
+}
+
 async fn load<T>(
     request: RequestEnvelope,
     surface: &str,
@@ -532,6 +570,12 @@ fn connector_configure_failure_state<T>(failure: Failure) -> ObservatoryState<T>
 /// [`infer_failure_state`], with connector recovery text.
 fn connector_test_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, CONNECTOR_TEST_BLOCKED_RECOVERY)
+}
+
+/// Every reset tier requires an explicit grant: classified exactly like
+/// [`model_register_failure_state`], with reset recovery text.
+fn reset_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, RESET_BLOCKED_RECOVERY)
 }
 
 fn grant_failure_state<T>(failure: Failure, default_recovery: &str) -> ObservatoryState<T> {

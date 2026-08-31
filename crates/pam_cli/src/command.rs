@@ -1,9 +1,10 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use pam_core::{ApprovalId, ContentDigest, EvidenceHandle, GrantId, IdempotencyKey, RequestId};
 use pam_model::ModelKey;
 use pam_policy::{CapabilityName, ResourceName};
+use pam_protocol::ResetTier;
 use pam_skills::{AgentArtifactId, CanonicalEntryId, MaterializationAgent, OriginAgent};
 
 const DEFAULT_WAIT_TIMEOUT: &str = "30s";
@@ -107,6 +108,11 @@ enum Command {
         #[command(subcommand)]
         command: RetentionCommand,
     },
+    /// Clear PAM's local state, one scope at a time.
+    Reset {
+        #[command(subcommand)]
+        command: ResetCommand,
+    },
     /// Run the foreground daemon.
     Daemon {
         /// Recover an endpoint left behind by an interrupted daemon.
@@ -118,6 +124,54 @@ enum Command {
     },
     /// Open the native control-center shell.
     Gui,
+}
+
+/// Reset is deliberately tiered: each subcommand names exactly one scope, and
+/// no subcommand is a superset of another except `all`, which additionally
+/// requires the daemon to be stopped.
+#[derive(Debug, Subcommand)]
+enum ResetCommand {
+    /// Revoke every capability grant and approval.
+    Access {
+        #[command(flatten)]
+        confirmation: ResetConfirmation,
+    },
+    /// Revoke every caller and purge its keychain entry, forcing re-pairing.
+    Identity {
+        #[command(flatten)]
+        confirmation: ResetConfirmation,
+    },
+    /// Clear the audit ledger, retained evidence, and flow-run history.
+    History {
+        #[command(flatten)]
+        confirmation: ResetConfirmation,
+    },
+    /// Unregister every model. Weights on disk are left untouched.
+    Models {
+        #[command(flatten)]
+        confirmation: ResetConfirmation,
+    },
+    /// Perform every tier, restore default settings, and delete the flow library.
+    All {
+        #[command(flatten)]
+        confirmation: ResetConfirmation,
+        /// Also delete the weights of every registered model.
+        #[arg(long)]
+        include_weights: bool,
+    },
+}
+
+#[derive(Args, Debug, Eq, PartialEq)]
+pub(crate) struct ResetConfirmation {
+    /// Report exactly what would go, in counts and bytes, and change nothing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Perform the reset. Required for any run that is not a dry run.
+    #[arg(long)]
+    pub(crate) yes: bool,
+    /// One-time exact-effect approval receipt, when policy requires it.
+    #[arg(long, value_parser = parse_approval_id)]
+    pub(crate) approval_id: Option<ApprovalId>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -785,6 +839,14 @@ pub(crate) enum Mode {
         approval_id: Option<ApprovalId>,
         limit: usize,
     },
+    ResetTier {
+        tier: ResetTier,
+        confirmation: ResetConfirmation,
+    },
+    ResetAll {
+        confirmation: ResetConfirmation,
+        include_weights: bool,
+    },
     Daemon {
         recover: bool,
         model: Option<ModelKey>,
@@ -818,6 +880,7 @@ impl fmt::Debug for Command {
             Self::Network { .. } => formatter.write_str("Network"),
             Self::Audit { .. } => formatter.write_str("Audit"),
             Self::Retention { .. } => formatter.write_str("Retention"),
+            Self::Reset { .. } => formatter.write_str("Reset"),
             Self::Daemon { .. } => formatter.write_str("Daemon"),
             Self::Gui => formatter.write_str("Gui"),
         }
@@ -908,6 +971,8 @@ impl fmt::Debug for Mode {
             Self::NetworkDiagnostics { .. } => formatter.write_str("NetworkDiagnostics"),
             Self::AuditExport { .. } => formatter.write_str("AuditExport"),
             Self::RetentionPrune { .. } => formatter.write_str("RetentionPrune"),
+            Self::ResetTier { .. } => formatter.write_str("ResetTier"),
+            Self::ResetAll { .. } => formatter.write_str("ResetAll"),
             Self::Daemon { .. } => formatter.write_str("Daemon"),
             Self::Gui => formatter.write_str("Gui"),
         }
@@ -1070,9 +1135,38 @@ impl Cli {
                 approval_id,
                 limit,
             },
+            Some(Command::Reset { command }) => reset_mode(command),
             Some(Command::Daemon { recover, model }) => Mode::Daemon { recover, model },
             Some(Command::Gui) => Mode::Gui,
         }
+    }
+}
+
+fn reset_mode(command: ResetCommand) -> Mode {
+    match command {
+        ResetCommand::Access { confirmation } => Mode::ResetTier {
+            tier: ResetTier::Access,
+            confirmation,
+        },
+        ResetCommand::Identity { confirmation } => Mode::ResetTier {
+            tier: ResetTier::Identity,
+            confirmation,
+        },
+        ResetCommand::History { confirmation } => Mode::ResetTier {
+            tier: ResetTier::History,
+            confirmation,
+        },
+        ResetCommand::Models { confirmation } => Mode::ResetTier {
+            tier: ResetTier::Registry,
+            confirmation,
+        },
+        ResetCommand::All {
+            confirmation,
+            include_weights,
+        } => Mode::ResetAll {
+            confirmation,
+            include_weights,
+        },
     }
 }
 

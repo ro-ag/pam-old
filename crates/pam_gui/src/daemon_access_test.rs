@@ -106,6 +106,12 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
             ("network.diagnostics", false),
             ("connector.configure", false),
             ("connector.test", false),
+            // Reset is tiered, so the danger zone needs one row per tier: a
+            // grant for one tier can never be spent on another.
+            ("reset.access", false),
+            ("reset.identity", false),
+            ("reset.history", false),
+            ("reset.registry", false),
         ]
     );
     assert_eq!(
