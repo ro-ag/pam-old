@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ResizeSeparator, Toolbar, appVersionLabel } from "./Shell";
+import type { DaemonState, DaemonView } from "../selectors";
+import { ResizeSeparator, Sidebar, Toolbar, appVersionLabel } from "./Shell";
 
 interface CaptureStubs {
   captured: Set<number>;
@@ -120,6 +121,113 @@ describe("Toolbar", () => {
     expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
     expect(screen.queryByRole("button", { name: "Open queue" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh daemon" })).toBeInTheDocument();
+  });
+});
+
+const daemonViews: Record<DaemonState, DaemonView> = {
+  running: { state: "running", detail: "Running", model: "Daemon 0.9.0", modelMemory: null, queueDepth: 0 },
+  stopped: { state: "stopped", detail: "Stopped", model: null, modelMemory: null, queueDepth: null },
+  unavailable: { state: "unavailable", detail: "Checking on PAM…", model: null, modelMemory: null, queueDepth: null },
+};
+
+function renderSidebar({
+  state = "running" as DaemonState,
+  collapsed = false,
+  pending = false,
+  onToggleDaemon = vi.fn(),
+  onRestartDaemon = vi.fn(),
+} = {}) {
+  render(
+    <Sidebar
+      daemon={daemonViews[state]}
+      queueCount={0}
+      activeView="overview"
+      collapsed={collapsed}
+      pending={pending}
+      trapFocus={false}
+      onNavigate={vi.fn()}
+      onToggleDaemon={onToggleDaemon}
+      onRestartDaemon={onRestartDaemon}
+      onDismiss={vi.fn()}
+      containerRef={createRef()}
+    />,
+  );
+  return { onToggleDaemon, onRestartDaemon };
+}
+
+describe("Sidebar daemon lifecycle", () => {
+  it("labels the control with the action and keeps the state as separate status text", () => {
+    renderSidebar({ state: "running" });
+
+    const stop = screen.getByRole("button", { name: "Stop PAM" });
+    expect(stop).not.toHaveAttribute("aria-pressed");
+    expect(screen.queryByRole("button", { name: "Start PAM" })).not.toBeInTheDocument();
+    expect(document.querySelector(".daemon-status")).toHaveTextContent("Running");
+  });
+
+  it("labels the control Start while the daemon is stopped", () => {
+    renderSidebar({ state: "stopped" });
+
+    expect(screen.getByRole("button", { name: "Start PAM" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop PAM" })).not.toBeInTheDocument();
+    expect(document.querySelector(".daemon-status")).toHaveTextContent("Stopped");
+  });
+
+  it("starts without asking for confirmation", async () => {
+    const user = userEvent.setup();
+    const { onToggleDaemon } = renderSidebar({ state: "stopped" });
+
+    await user.click(screen.getByRole("button", { name: "Start PAM" }));
+
+    expect(onToggleDaemon).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/unloads the loaded model/)).not.toBeInTheDocument();
+  });
+
+  it("asks before stopping and leaves the daemon alone when the ask is declined", async () => {
+    const user = userEvent.setup();
+    const { onToggleDaemon } = renderSidebar({ state: "running" });
+
+    await user.click(screen.getByRole("button", { name: "Stop PAM" }));
+    expect(onToggleDaemon).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Stop PAM? It unloads the loaded model and drops queued work."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Keep running" }));
+
+    expect(onToggleDaemon).not.toHaveBeenCalled();
+    expect(screen.queryByText(/unloads the loaded model and drops queued work/)).not.toBeInTheDocument();
+  });
+
+  it("stops the daemon once the ask is accepted", async () => {
+    const user = userEvent.setup();
+    const { onToggleDaemon } = renderSidebar({ state: "running" });
+
+    await user.click(screen.getByRole("button", { name: "Stop PAM" }));
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(onToggleDaemon).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/unloads the loaded model and drops queued work/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the restart control in its slot, disabled with a reason, while stopped", async () => {
+    const user = userEvent.setup();
+    const { onRestartDaemon } = renderSidebar({ state: "stopped" });
+
+    const restart = screen.getByRole("button", { name: "Restart PAM (unavailable while PAM is stopped)" });
+    expect(restart).toBeDisabled();
+
+    await user.click(restart);
+    expect(onRestartDaemon).not.toHaveBeenCalled();
+  });
+
+  it("keeps the verb in the accessible name while the sidebar is collapsed", () => {
+    renderSidebar({ state: "stopped", collapsed: true });
+
+    const start = screen.getByRole("button", { name: "Start PAM" });
+    expect(start).toHaveAttribute("title", "Start PAM");
+    // The status stays in the accessibility tree; only its glyph is visible.
+    expect(document.querySelector(".daemon-status")).toHaveTextContent("Stopped");
   });
 });
 

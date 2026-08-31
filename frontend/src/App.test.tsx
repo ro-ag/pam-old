@@ -138,9 +138,10 @@ describe("daemon observatory", () => {
     const refreshProject = vi.spyOn(bridge, "refreshProject");
     render(<App bridge={bridge} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "PAM is on watch" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Stop PAM" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
 
-    expect(await screen.findByRole("button", { name: "PAM is paused" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Start PAM" })).toBeEnabled();
     expect(stop).toHaveBeenCalledTimes(1);
     expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
     // Bootstrap probes once; the lifecycle action re-probes.
@@ -191,7 +192,7 @@ describe("daemon observatory", () => {
 
     expect(await screen.findByRole("heading", { name: "PAM is paused" })).toBeInTheDocument();
     expect(screen.getByText(/pick up where it left off/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start PAM" })).toBeEnabled();
+    expect(within(screen.getByRole("main")).getByRole("button", { name: "Start PAM" })).toBeEnabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -835,15 +836,15 @@ describe("daemon observatory", () => {
 
     expect(calls).toEqual(["stop", "start"]);
     expect(await screen.findByText("PAM restarted")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /PAM is on watch|PAM is active/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Stop PAM" })).toBeInTheDocument();
   });
 
-  it("hides the restart control while the daemon is stopped", async () => {
+  it("keeps the restart control in place, disabled, while the daemon is stopped", async () => {
     render(<App bridge={fixtureBridge("offline")} />);
     await screen.findByRole("heading", { name: "Overview" });
     await screen.findByText("The activity picture returns when PAM is back on watch.");
 
-    expect(screen.queryByRole("button", { name: /^Restart PAM/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart PAM (unavailable while PAM is stopped)" })).toBeDisabled();
   });
 
   it("chats with the local model in an ephemeral drawer with usage lines", async () => {
@@ -968,7 +969,7 @@ describe("global-first workspace", () => {
     expect(screen.queryByRole("heading", { name: "PAM needs a moment" })).not.toBeInTheDocument();
     expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
     // The daemon-health probe feeds the sidebar pill without any project.
-    expect(await screen.findByRole("button", { name: "PAM is on watch" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Stop PAM" })).toBeEnabled();
   });
 
   it("keeps the breadcrumb project-free even while a project is active", async () => {
@@ -1128,12 +1129,13 @@ describe("global-first workspace", () => {
     const health = vi.spyOn(bridge, "daemonHealth");
     render(<App bridge={bridge} />);
 
-    await user.click(await screen.findByRole("button", { name: "PAM is on watch" }));
-    expect(await screen.findByRole("button", { name: "PAM is paused" })).toBeEnabled();
+    await user.click(await screen.findByRole("button", { name: "Stop PAM" }));
+    await user.click(await screen.findByRole("button", { name: "Stop" }));
+    expect(await screen.findByRole("button", { name: "Start PAM" })).toBeEnabled();
     expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
 
-    await user.click(screen.getByRole("button", { name: "PAM is paused" }));
-    expect(await screen.findByRole("button", { name: "PAM is on watch" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Start PAM" }));
+    expect(await screen.findByRole("button", { name: "Stop PAM" })).toBeEnabled();
     expect(start.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
     // Bootstrap probe plus one re-probe per lifecycle action.
     await waitFor(() => expect(health).toHaveBeenCalledTimes(3));

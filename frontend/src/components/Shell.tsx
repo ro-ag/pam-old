@@ -38,6 +38,7 @@ import {
   type RefObject,
   useEffect,
   useRef,
+  useState,
 } from "react";
 import type { ViewId } from "../domain";
 import {
@@ -129,6 +130,18 @@ export function Sidebar({
   onDismiss: () => void;
   containerRef: RefObject<HTMLElement | null>;
 }) {
+  // The lifecycle control names the ACTION; the status line beside it carries
+  // the state, so the button never reads as the thing it is about to undo.
+  const [confirmingStop, setConfirmingStop] = useState(false);
+  const running = daemon.state === "running";
+  const lifecycleLabel = running ? "Stop PAM" : "Start PAM";
+  const restartLabel = running
+    ? "Restart PAM (unloads the loaded model)"
+    : "Restart PAM (unavailable while PAM is stopped)";
+  // A daemon that stops from elsewhere must not leave a stale ask behind.
+  useEffect(() => {
+    if (!running) setConfirmingStop(false);
+  }, [running]);
   const trapTabFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (trapFocus && event.key === "Escape") {
       event.preventDefault();
@@ -191,32 +204,59 @@ export function Sidebar({
         ))}
       </nav>
       <div className="sidebar-footer">
-        <div className="daemon-row">
-          <button
-            type="button"
-            className="daemon-control"
-            aria-pressed={daemon.state === "running"}
-            aria-label={collapsed ? daemon.detail : undefined}
-            title={collapsed ? daemon.detail : undefined}
-            disabled={pending || ["starting", "stopping", "unavailable"].includes(daemon.state)}
-            onClick={onToggleDaemon}
-          >
-            {daemon.state === "running" ? <StatusDot /> : <Power size={18} weight="bold" aria-hidden="true" />}
-            {!collapsed && <span>{daemon.detail}</span>}
-          </button>
-          {!collapsed && daemon.state === "running" && (
+        <div className="nav-separator" role="separator" aria-hidden="true" />
+        <section className="daemon-section" aria-label="Daemon lifecycle">
+          <p className="daemon-status" title={daemon.detail}>
+            <StatusDot state={running ? "coral" : "muted"} />
+            <span className="daemon-status-text">{daemon.detail}</span>
+          </p>
+          <div className="daemon-row">
             <button
               type="button"
-              className="daemon-restart"
-              aria-label="Restart PAM (unloads the loaded model)"
-              title="Restart PAM (unloads the loaded model)"
-              disabled={pending}
-              onClick={onRestartDaemon}
+              className="daemon-control"
+              aria-label={lifecycleLabel}
+              title={lifecycleLabel}
+              disabled={pending || daemon.state === "unavailable"}
+              onClick={() => (running ? setConfirmingStop(true) : onToggleDaemon())}
             >
-              <ArrowClockwise size={16} weight="bold" aria-hidden="true" />
+              <Power size={18} weight="bold" aria-hidden="true" />
+              {!collapsed && <span>{lifecycleLabel}</span>}
             </button>
+            {!collapsed && (
+              <button
+                type="button"
+                className="daemon-restart"
+                aria-label={restartLabel}
+                title={restartLabel}
+                disabled={pending || !running}
+                onClick={onRestartDaemon}
+              >
+                <ArrowClockwise size={16} weight="bold" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          {running && confirmingStop && (
+            <div className="connector-confirm daemon-confirm" role="group" aria-label="Confirm stopping PAM">
+              <span>Stop PAM? It unloads the loaded model and drops queued work.</span>
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                disabled={pending}
+                onClick={() => { setConfirmingStop(false); onToggleDaemon(); }}
+              >
+                Stop
+              </button>
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                disabled={pending}
+                onClick={() => setConfirmingStop(false)}
+              >
+                Keep running
+              </button>
+            </div>
           )}
-        </div>
+        </section>
         <button
           type="button"
           className={`nav-item ${activeView === "settings" ? "is-active" : ""}`}

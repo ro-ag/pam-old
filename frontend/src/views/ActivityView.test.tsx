@@ -35,7 +35,7 @@ describe("ActivityView", () => {
     render(<ActivityView {...props} />);
 
     expect(screen.getByRole("heading", { name: "Activity" })).toBeInTheDocument();
-    expect(screen.getByText("PAM is on watch")).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Daemon fixture-0.1.0")).toBeInTheDocument();
     expect(screen.getByText("Queue depth")).toBeInTheDocument();
 
