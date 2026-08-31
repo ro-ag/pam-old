@@ -302,6 +302,90 @@ pub(super) fn prune(
     })
 }
 
+/// Counts every retained evidence handle and the exact bytes its blobs hold.
+///
+/// Read-only: this is what a reset dry run reports, so it must never touch a
+/// row or a file.
+pub(super) fn tally_all(connection: &Connection) -> Result<(u64, u64), StoreError> {
+    let handles: i64 =
+        connection.query_row("SELECT COUNT(*) FROM evidence_handles", [], |row| {
+            row.get(0)
+        })?;
+    let bytes: i64 = connection.query_row(
+        "SELECT COALESCE(SUM(size_bytes), 0) FROM evidence_blobs",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok((
+        u64::try_from(handles).unwrap_or(0),
+        u64::try_from(bytes).unwrap_or(0),
+    ))
+}
+
+/// Deletes one bounded page of evidence handles regardless of project,
+/// retention class, or age, then runs the same blob cleanup [`prune`] runs.
+///
+/// This is the `clear history` tier of a reset, so unlike [`prune`] it does
+/// include `persistent` handles: the owner is asking for the whole ledger to
+/// go, not for a retention policy to be applied. Every deletion still travels
+/// the same index-then-cleanup path, so blob bytes are unlinked through the
+/// same capability-scoped directory handles and the same symlink refusal.
+pub(super) fn purge_all(
+    connection: &mut Connection,
+    files: &EvidenceFiles,
+    limit: u32,
+) -> Result<PruneOutcome, StoreError> {
+    if !(1..=MAX_EVIDENCE_PRUNE_BATCH_SIZE).contains(&limit) {
+        return Err(StoreError::InvalidEvidencePruneLimit {
+            limit,
+            maximum: MAX_EVIDENCE_PRUNE_BATCH_SIZE,
+        });
+    }
+    let query_limit = i64::from(limit) + 1;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut candidates = {
+        let mut statement = transaction.prepare(
+            "SELECT handle
+             FROM evidence_handles
+             ORDER BY created_at_ms, handle
+             LIMIT ?1",
+        )?;
+        statement
+            .query_map(params![query_limit], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let has_more = candidates.len()
+        > usize::try_from(limit)
+            .map_err(|_| StoreError::InvalidState("evidence purge limit overflow".to_owned()))?;
+    if has_more {
+        candidates.pop();
+    }
+    for handle in &candidates {
+        let deleted = transaction.execute(
+            "DELETE FROM evidence_handles WHERE handle = ?1",
+            params![handle],
+        )?;
+        if deleted != 1 {
+            return Err(StoreError::InvalidState(
+                "selected evidence handle changed during purge".to_owned(),
+            ));
+        }
+    }
+    transaction.commit()?;
+
+    let cleanup_now_ms = system_now_ms();
+    let intent_cleanup = cleanup_stale_install_intents(connection, files, cleanup_now_ms, limit);
+    let blob_cleanup = cleanup_unreferenced_blobs(connection, files, cleanup_now_ms, limit);
+    Ok(PruneOutcome {
+        handles_deleted: u32::try_from(candidates.len())
+            .map_err(|_| StoreError::InvalidState("evidence purge count overflow".to_owned()))?,
+        blobs_deleted: intent_cleanup.deleted.saturating_add(blob_cleanup.deleted),
+        blobs_pending: intent_cleanup.pending.saturating_add(blob_cleanup.pending),
+        cleanup_unresolved: intent_cleanup.unresolved || blob_cleanup.unresolved,
+        has_more: has_more || intent_cleanup.has_more || blob_cleanup.has_more,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BlobCleanupOutcome {
     deleted: u32,

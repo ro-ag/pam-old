@@ -15,8 +15,12 @@ use pam_core::{
     CallerCredential, CallerId, EvidenceHandle as ProtocolEvidenceHandle, ProjectId, RequestId,
 };
 use pam_daemon::registered_projects;
+use pam_daemon::{
+    CredentialStore, FactoryResetOptions, ResetContext, ResetError, ResetPaths,
+    preview_factory_reset, run_factory_reset,
+};
 use pam_flow::{FlowDefinition, FlowStep, MAX_FLOW_DOCUMENT_BYTES, StepAction, StepCondition};
-use pam_platform::{CallerKind, caller_id, discover_project, user_data_dir};
+use pam_platform::{CallerKind, LocalEndpoint, caller_id, discover_project, user_data_dir};
 use pam_protocol::{
     ActivityDaySummary, ActivityEventSummary, ActivityResult, ApprovalDecision, CallerListResult,
     CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
@@ -24,7 +28,7 @@ use pam_protocol::{
     DaemonStatsResult, FailureCode, FlowProjectRoot, LogSeverity, MAX_MODEL_OUTPUT_TOKENS,
     ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
     ModelSummary, ModelUnregisterResult, ProjectRequestState, ProjectRequestSummary,
-    ProjectUsageSummary,
+    ProjectUsageSummary, ResetResult, ResetTier,
 };
 use pam_store::Store;
 use serde::{Deserialize, Serialize};
@@ -66,7 +70,7 @@ use crate::{
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
-        run_connector_test, run_model_infer, run_model_unregister,
+        run_connector_test, run_model_infer, run_model_unregister, run_reset,
     },
     settings,
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
@@ -803,6 +807,49 @@ pub enum ModelInferDto {
     },
 }
 
+/// One reset tier's blast radius, or the refusal that stopped it.
+///
+/// A dry run and the run that follows it use the same shape, so the danger
+/// zone can show the forecast and the receipt without two renderers.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ResetDto {
+    Ok {
+        result: ResetResultDto,
+        /// Where a factory reset's receipt landed. Absent for every tier.
+        receipt_path: Option<String>,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetResultDto {
+    pub scope: String,
+    pub dry_run: bool,
+    pub items: Vec<ResetItemDto>,
+    pub total_items: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetItemDto {
+    pub kind: String,
+    pub count: u64,
+    pub bytes: u64,
+    pub names: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelUsageDto {
@@ -1522,7 +1569,7 @@ impl DesktopCore {
         };
         // The daemon starts only with a control-center launch grant, and runs
         // detached in its own process group: closing the UI never stops it.
-        let endpoint = pam_platform::LocalEndpoint::default_for_user();
+        let endpoint = LocalEndpoint::default_for_user();
         let grant = pam_platform::issue_launch_grant(endpoint.runtime_dir()).map_err(|error| {
             DesktopErrorDto::unavailable(
                 "PAM could not authorize a daemon launch.",
@@ -2524,6 +2571,91 @@ impl DesktopCore {
         settings::update_models_dir(&data_dir, &home, models_dir)
             .map(|snapshot| app_settings_dto(&snapshot))
             .map_err(|failure| DesktopErrorDto::invalid_input(failure.detail))
+    }
+
+    /// Runs one scoped reset tier, or forecasts it, through the daemon.
+    ///
+    /// Every tier is grant-gated, so a refusal comes back as
+    /// [`ResetDto::Blocked`] carrying the daemon's own recovery line rather
+    /// than as an `Err`; only fence problems are errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the daemon authority, or
+    /// was already used.
+    pub async fn reset_tier(
+        &self,
+        fence: CommandFence,
+        tier: ResetTier,
+        dry_run: bool,
+    ) -> DesktopResult<ResetDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_reset(caller, credential, tier, dry_run).await,
+            Err(state) => state,
+        };
+        Ok(reset_dto(observed))
+    }
+
+    /// Performs a factory reset in this process.
+    ///
+    /// It cannot travel the daemon: a daemon that owns the state database
+    /// cannot be the thing that deletes it, so this refuses with a recovery
+    /// line naming the stop control while one is running.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the daemon authority, or
+    /// was already used.
+    pub async fn factory_reset(
+        &self,
+        fence: CommandFence,
+        dry_run: bool,
+        include_weights: bool,
+    ) -> DesktopResult<ResetDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let paths = match ResetPaths::discover() {
+            Ok(paths) => paths,
+            Err(error) => return Ok(factory_reset_failure(&error)),
+        };
+        let context = ResetContext::new(paths, CredentialStore::Native);
+        let options = FactoryResetOptions { include_weights };
+        let endpoint = LocalEndpoint::default_for_user();
+        if pam_daemon::daemon_owns_store(&endpoint) {
+            return Ok(factory_reset_failure(&ResetError::DaemonRunning));
+        }
+        if dry_run {
+            return Ok(match preview_factory_reset(&context, &options).await {
+                Ok(result) => ResetDto::Ok {
+                    result: reset_result_dto(&result),
+                    receipt_path: None,
+                },
+                Err(error) => factory_reset_failure(&error),
+            });
+        }
+        let caller = match caller_id(CallerKind::Gui) {
+            Ok(caller) => caller,
+            Err(error) => {
+                return Ok(ResetDto::Unavailable {
+                    failure: unavailable_failure(
+                        None,
+                        error.to_string(),
+                        Some(GUI_REGISTRATION_RECOVERY.to_owned()),
+                    ),
+                });
+            }
+        };
+        Ok(
+            match run_factory_reset(&context, &options, &caller, &endpoint).await {
+                Ok(receipt) => ResetDto::Ok {
+                    result: reset_result_dto(&receipt.result),
+                    receipt_path: Some(bounded_path(&receipt.path)),
+                },
+                Err(error) => factory_reset_failure(&error),
+            },
+        )
     }
 
     /// Deletes the on-disk daemon log files, if any exist. Never touches the
@@ -4538,6 +4670,60 @@ fn model_unregister_dto(state: ObservatoryState<ModelUnregisterResult>) -> Model
         } => ModelUnregisterDto::Unavailable {
             failure: unavailable_failure(code, detail, recovery),
         },
+    }
+}
+
+fn reset_result_dto(result: &ResetResult) -> ResetResultDto {
+    ResetResultDto {
+        scope: bounded_detail(result.scope.clone()),
+        dry_run: result.dry_run,
+        items: result
+            .items
+            .iter()
+            .map(|entry| ResetItemDto {
+                kind: bounded_detail(entry.kind.clone()),
+                count: entry.count,
+                bytes: entry.bytes,
+                names: entry
+                    .names
+                    .iter()
+                    .map(|name| bounded_detail(name.clone()))
+                    .collect(),
+            })
+            .collect(),
+        total_items: result.total_items,
+        total_bytes: result.total_bytes,
+    }
+}
+
+fn reset_dto(state: ObservatoryState<ResetResult>) -> ResetDto {
+    match state {
+        ObservatoryState::Available(result) => ResetDto::Ok {
+            result: reset_result_dto(&result),
+            receipt_path: None,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ResetDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ResetDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+/// A locally performed factory reset never crosses the protocol, so its
+/// refusals are shaped here rather than classified from a daemon failure.
+fn factory_reset_failure(error: &ResetError) -> ResetDto {
+    ResetDto::Unavailable {
+        failure: unavailable_failure(None, error.to_string(), error.recovery()),
     }
 }
 

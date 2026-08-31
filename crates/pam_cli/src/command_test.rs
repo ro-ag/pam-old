@@ -6,7 +6,8 @@ use pam_policy::{CapabilityName, ResourceName};
 use pam_skills::{AgentArtifactId, CanonicalEntryId};
 
 use super::command::{
-    CallerKindArg, Cli, Mode, RetentionScopeArg, SkillsAgentArg, SkillsInstallSourceArg,
+    CallerKindArg, Cli, Mode, ResetConfirmation, RetentionScopeArg, SkillsAgentArg,
+    SkillsInstallSourceArg,
 };
 
 #[test]
@@ -1044,4 +1045,83 @@ fn access_grant_targets_the_daemon_scope_only_with_the_daemon_flag() {
             kind: CallerKindArg::Cli,
         }
     );
+}
+
+#[test]
+fn every_reset_tier_parses_with_its_own_confirmation_flags() {
+    let confirmation = |dry_run: bool, yes: bool| ResetConfirmation {
+        dry_run,
+        yes,
+        approval_id: None,
+    };
+    for (argument, tier) in [
+        ("access", pam_protocol::ResetTier::Access),
+        ("identity", pam_protocol::ResetTier::Identity),
+        ("history", pam_protocol::ResetTier::History),
+        ("models", pam_protocol::ResetTier::Registry),
+    ] {
+        assert_eq!(
+            Cli::try_parse_from(["pam", "reset", argument, "--dry-run"])
+                .unwrap()
+                .mode(),
+            Mode::ResetTier {
+                tier,
+                confirmation: confirmation(true, false),
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["pam", "reset", argument, "--yes"])
+                .unwrap()
+                .mode(),
+            Mode::ResetTier {
+                tier,
+                confirmation: confirmation(false, true),
+            }
+        );
+    }
+    // Neither flag is required at parse time: the refusal without --yes is a
+    // deliberate runtime refusal that can name its own recovery line.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "reset", "history"])
+            .unwrap()
+            .mode(),
+        Mode::ResetTier {
+            tier: pam_protocol::ResetTier::History,
+            confirmation: confirmation(false, false),
+        }
+    );
+}
+
+#[test]
+fn only_the_factory_reset_accepts_the_weights_opt_in() {
+    assert_eq!(
+        Cli::try_parse_from(["pam", "reset", "all", "--yes", "--include-weights"])
+            .unwrap()
+            .mode(),
+        Mode::ResetAll {
+            confirmation: ResetConfirmation {
+                dry_run: false,
+                yes: true,
+                approval_id: None,
+            },
+            include_weights: true,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "reset", "all", "--dry-run"])
+            .unwrap()
+            .mode(),
+        Mode::ResetAll {
+            confirmation: ResetConfirmation {
+                dry_run: true,
+                yes: false,
+                approval_id: None,
+            },
+            include_weights: false,
+        }
+    );
+    // Weights are multi-gigabyte and live outside the data directory, so no
+    // scoped tier may sweep them in.
+    assert!(Cli::try_parse_from(["pam", "reset", "history", "--include-weights"]).is_err());
+    assert!(Cli::try_parse_from(["pam", "reset", "everything"]).is_err());
 }

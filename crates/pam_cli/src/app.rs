@@ -12,6 +12,10 @@ use pam_core::{
     ApprovalId, CallerCredential, CallerId, EvidenceHandle, GrantId, IdempotencyKey, ProjectId,
     RequestId,
 };
+use pam_daemon::{
+    CONFIRMATION_RECOVERY, CredentialStore, DAEMON_RUNNING_RECOVERY, FactoryResetOptions,
+    ResetContext, ResetError, ResetPaths, preview_factory_reset, run_factory_reset,
+};
 use pam_model::{
     ImportRequest, LicenseConsent, LicenseSnapshot, ModelDescriptor, ModelKey, import_existing,
 };
@@ -23,7 +27,7 @@ use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, ResourceName, ResourceScope,
     redact_audit_detail,
 };
-use pam_protocol::{ModelMessage, ModelRole, ResultBody, ResultPayload};
+use pam_protocol::{ModelMessage, ModelRole, ResetTier, ResultBody, ResultPayload};
 use pam_store::{
     AppendAuditEvent, ApprovalDecision, ApprovalDecisionOutcome, AuditPruneOutcome,
     AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, CallerAuthentication,
@@ -35,12 +39,12 @@ use uuid::Uuid;
 
 use crate::{
     audit::encode_audit_export,
-    command::{CallerKindArg, RetentionScopeArg},
+    command::{CallerKindArg, ResetConfirmation, RetentionScopeArg},
     evidence::{EvidenceError, download_evidence, write_new_output},
     flow::{FlowCatalog, FlowCatalogError},
     render::{
         EXIT_OK, EXIT_OPERATION_FAILED, EXIT_PENDING, Presentation, escape_text, present_result,
-        render_events,
+        render_events, render_reset,
     },
     request::{
         NativeCredentialError, RequestContext, RequestContextError, delete_native_credential,
@@ -51,6 +55,9 @@ use crate::{
 const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+/// A tier reset walks the whole store and, for evidence, the blob directory,
+/// so it gets a longer window than an ordinary read.
+const RESET_TIMEOUT: Duration = Duration::from_mins(1);
 const APPROVAL_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 
 fn open_local_administrative_store() -> Result<(ProjectId, CallerId, Store), i32> {
@@ -1681,6 +1688,113 @@ pub(crate) async fn evidence_show(handle: EvidenceHandle, raw: bool, output: Opt
         )
     );
     0
+}
+
+/// Runs one scoped reset tier through the daemon that owns the store.
+///
+/// A run that would change state and carries no `--yes` refuses before it
+/// reaches the daemon: the refusal is the point, so it names the two flags
+/// that clear it.
+pub(crate) async fn reset_tier(tier: ResetTier, confirmation: ResetConfirmation) -> i32 {
+    if let Some(exit) = refuse_unconfirmed(&confirmation) {
+        return exit;
+    }
+    let Some(context) = discover_daemon_context(confirmation.approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    let request = context.reset(tier, confirmation.dry_run);
+    match exchange(&request, RESET_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("reset"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::Reset(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("reset"),
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Performs a factory reset in this process, because the daemon that would
+/// otherwise serve it must be stopped before its own state can be removed.
+pub(crate) async fn reset_all(confirmation: ResetConfirmation, include_weights: bool) -> i32 {
+    if let Some(exit) = refuse_unconfirmed(&confirmation) {
+        return exit;
+    }
+    let paths = match ResetPaths::discover() {
+        Ok(paths) => paths,
+        Err(error) => return report_reset_error(&error),
+    };
+    let context = ResetContext::new(paths, CredentialStore::Native);
+    let endpoint = LocalEndpoint::default_for_user();
+    if pam_daemon::daemon_owns_store(&endpoint) {
+        eprintln!("PAM is running, so a factory reset cannot remove the state it owns.");
+        eprintln!("Recovery: {DAEMON_RUNNING_RECOVERY}");
+        return EXIT_OPERATION_FAILED;
+    }
+    let options = FactoryResetOptions { include_weights };
+    if confirmation.dry_run {
+        return match preview_factory_reset(&context, &options).await {
+            Ok(result) => {
+                print!("{}", render_reset(&result));
+                0
+            }
+            Err(error) => report_reset_error(&error),
+        };
+    }
+    let caller_id = match caller_id(CallerKind::Cli) {
+        Ok(caller_id) => caller_id,
+        Err(error) => {
+            report_identity_error(&error);
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    match run_factory_reset(&context, &options, &caller_id, &endpoint).await {
+        Ok(receipt) => {
+            print!("{}", render_reset(&receipt.result));
+            println!("Receipt written to {}.", receipt.path.display());
+            0
+        }
+        Err(error) => report_reset_error(&error),
+    }
+}
+
+/// A reset that would change state needs `--yes`. `--dry-run` never does.
+pub(crate) fn refuse_unconfirmed(confirmation: &ResetConfirmation) -> Option<i32> {
+    if confirmation.dry_run || confirmation.yes {
+        return None;
+    }
+    eprintln!("Reset refused: this would remove local state without a confirmation.");
+    eprintln!("Recovery: {CONFIRMATION_RECOVERY}");
+    Some(EXIT_OPERATION_FAILED)
+}
+
+async fn discover_daemon_context(approval_id: Option<ApprovalId>) -> Option<RequestContext> {
+    match RequestContext::discover_daemon_scope(approval_id).await {
+        Ok(context) => Some(context),
+        Err(RequestContextError::Identity(error)) => {
+            report_identity_error(&error);
+            None
+        }
+        Err(RequestContextError::Credential(error)) => {
+            report_native_credential_error(&error);
+            None
+        }
+    }
+}
+
+fn report_reset_error(error: &ResetError) -> i32 {
+    eprintln!("{}", escape_text(&error.to_string()));
+    if let Some(recovery) = error.recovery() {
+        eprintln!("Recovery: {}", escape_text(&recovery));
+    }
+    EXIT_OPERATION_FAILED
 }
 
 async fn exchange(

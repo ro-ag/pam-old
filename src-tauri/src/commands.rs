@@ -11,8 +11,8 @@ use pam_gui::{
     FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
     ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelImportStatusDto, ModelInferDto,
     ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
-    ModelUnregisterDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto,
-    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
+    ModelUnregisterDto, OperationId, ProjectHandle, ResetDto, ResetTier, SkillAuditDto,
+    SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -90,6 +90,38 @@ pub(crate) struct StartDaemonRequest {
     operation_id: OperationId,
     #[serde(default)]
     model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ResetRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    /// Report what would go and change nothing.
+    dry_run: bool,
+}
+
+impl ResetRequest {
+    fn into_parts(self) -> (CommandFence, bool) {
+        (
+            fence(self.project_handle, self.generation, self.operation_id),
+            self.dry_run,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FactoryResetRequest {
+    #[serde(flatten)]
+    reset: ResetRequest,
+    /// Also delete the weights of every registered model.
+    #[serde(default)]
+    include_weights: bool,
 }
 
 #[derive(Deserialize)]
@@ -796,6 +828,69 @@ pub(crate) async fn settings_update(
             ),
             request.models_dir,
         )
+        .await
+}
+
+/// Each reset tier gets its own command, mirroring the tiered capability: a
+/// single command taking a scope string would let one grant reach every tier.
+#[tauri::command]
+pub(crate) async fn reset_access(
+    state: State<'_, DesktopState>,
+    request: ResetRequest,
+) -> Result<ResetDto, DesktopErrorDto> {
+    let (fence, dry_run) = request.into_parts();
+    state
+        .core
+        .reset_tier(fence, ResetTier::Access, dry_run)
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn reset_identity(
+    state: State<'_, DesktopState>,
+    request: ResetRequest,
+) -> Result<ResetDto, DesktopErrorDto> {
+    let (fence, dry_run) = request.into_parts();
+    state
+        .core
+        .reset_tier(fence, ResetTier::Identity, dry_run)
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn reset_history(
+    state: State<'_, DesktopState>,
+    request: ResetRequest,
+) -> Result<ResetDto, DesktopErrorDto> {
+    let (fence, dry_run) = request.into_parts();
+    state
+        .core
+        .reset_tier(fence, ResetTier::History, dry_run)
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn reset_registry(
+    state: State<'_, DesktopState>,
+    request: ResetRequest,
+) -> Result<ResetDto, DesktopErrorDto> {
+    let (fence, dry_run) = request.into_parts();
+    state
+        .core
+        .reset_tier(fence, ResetTier::Registry, dry_run)
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn factory_reset(
+    state: State<'_, DesktopState>,
+    request: FactoryResetRequest,
+) -> Result<ResetDto, DesktopErrorDto> {
+    let include_weights = request.include_weights;
+    let (fence, dry_run) = request.reset.into_parts();
+    state
+        .core
+        .factory_reset(fence, dry_run, include_weights)
         .await
 }
 

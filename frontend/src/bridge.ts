@@ -42,6 +42,7 @@ import type {
   ModelPresetsDto,
   ModelStatusDto,
   ModelUnregisterDto,
+  ResetDto,
   PamBridge,
   SkillAuditDto,
   SkillInventoryDto,
@@ -209,6 +210,19 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     logsDelete: (fence) =>
       invokeCommand<AppSettingsDto>("logs_delete", request(flatFence(fence))),
+    resetAccess: (fence, dryRun) =>
+      invokeCommand<ResetDto>("reset_access", request({ ...flatFence(fence), dryRun })),
+    resetIdentity: (fence, dryRun) =>
+      invokeCommand<ResetDto>("reset_identity", request({ ...flatFence(fence), dryRun })),
+    resetHistory: (fence, dryRun) =>
+      invokeCommand<ResetDto>("reset_history", request({ ...flatFence(fence), dryRun })),
+    resetRegistry: (fence, dryRun) =>
+      invokeCommand<ResetDto>("reset_registry", request({ ...flatFence(fence), dryRun })),
+    factoryReset: (fence, dryRun, includeWeights) =>
+      invokeCommand<ResetDto>(
+        "factory_reset",
+        request({ ...flatFence(fence), dryRun, includeWeights }),
+      ),
     revealPath: (fence, path) =>
       invokeCommand<void>("reveal_path", request({ ...flatFence(fence), path })),
     activateProject: (projectHandle, operationId) =>

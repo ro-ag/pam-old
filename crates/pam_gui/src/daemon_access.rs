@@ -27,7 +27,7 @@ use crate::{
 /// [`pam_policy::BASELINE_CAPABILITIES`]: revoking a row drops every grant
 /// for that capability, which only reads as "not granted" while default-deny
 /// still applies.
-pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 6] = [
+pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 10] = [
     (
         "model.infer",
         "Model inference",
@@ -57,6 +57,26 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 6] = [
         "connector.test",
         "Connector self-test",
         "Access runs a connector's self-test against its configured host.",
+    ),
+    (
+        "reset.access",
+        "Reset grants and approvals",
+        "The Settings danger zone revokes every capability grant and approval.",
+    ),
+    (
+        "reset.identity",
+        "Reset caller identity",
+        "The Settings danger zone revokes every caller and purges its keychain entry.",
+    ),
+    (
+        "reset.history",
+        "Clear history",
+        "The Settings danger zone clears the audit ledger, evidence, and flow-run history.",
+    ),
+    (
+        "reset.registry",
+        "Reset the model registry",
+        "The Settings danger zone unregisters every model, leaving weights on disk.",
     ),
 ];
 

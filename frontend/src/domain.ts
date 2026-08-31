@@ -737,6 +737,30 @@ export interface AppSettingsDto {
   logsSizeBytes: number;
 }
 
+// Reset is tiered on purpose: every scope is its own capability and its own
+// command, so the danger zone can show one blast radius at a time.
+export type ResetScope = "access" | "identity" | "history" | "registry" | "factory";
+
+export interface ResetItemDto {
+  kind: string;
+  count: number;
+  bytes: number;
+  names: string[];
+}
+
+export interface ResetResultDto {
+  scope: string;
+  dryRun: boolean;
+  items: ResetItemDto[];
+  totalItems: number;
+  totalBytes: number;
+}
+
+export type ResetDto =
+  | { status: "ok"; result: ResetResultDto; receiptPath: string | null }
+  | { status: "blocked"; failure: FailureDto }
+  | { status: "unavailable"; failure: FailureDto };
+
 export interface CallerDto {
   callerId: string;
   registeredAtMs: number;
@@ -823,6 +847,11 @@ export interface PamBridge {
   appSettings(fence: CommandFence): Promise<AppSettingsDto>;
   settingsUpdate(fence: CommandFence, modelsDir: string | null): Promise<AppSettingsDto>;
   logsDelete(fence: CommandFence): Promise<AppSettingsDto>;
+  resetAccess(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;
+  resetIdentity(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;
+  resetHistory(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;
+  resetRegistry(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;
+  factoryReset(fence: CommandFence, dryRun: boolean, includeWeights: boolean): Promise<ResetDto>;
   revealPath(fence: CommandFence, path: string): Promise<void>;
   activateProject(projectHandle: string, operationId: string): Promise<SnapshotDto>;
   refreshProject(fence: CommandFence): Promise<SnapshotDto>;

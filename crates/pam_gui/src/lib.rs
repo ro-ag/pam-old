@@ -70,9 +70,10 @@ pub use desktop::{
     ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
     ModelStatusDto, ModelSummaryDto, ModelUnregisterDto, ModelUsageDto, OperationId, OutcomeDto,
     OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto,
-    RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto,
-    TimelineKindDto,
+    ResetDto, ResetItemDto, ResetResultDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
+    StartupPhaseDto, TimelineFactDto, TimelineKindDto,
 };
+pub use pam_protocol::ResetTier;
 
 // Re-exported so the desktop shell can accept the debug-redacted credential
 // action without depending on pam_protocol directly.

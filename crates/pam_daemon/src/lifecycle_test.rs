@@ -2957,3 +2957,45 @@ fn caller_summaries_preserve_registration_and_revocation() {
     assert_eq!(summary.revoked_at_ms, Some(9));
     assert_eq!(summary.kind.as_deref(), Some("coding-agent"));
 }
+
+#[test]
+fn a_reset_preview_and_a_real_reset_are_different_policy_resources() {
+    let make = |tier: pam_protocol::ResetTier, dry_run: bool| {
+        RequestEnvelope::reset(
+            RequestId::new("reset-request"),
+            CallerId::new("caller-cli"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::new("reset-idempotency"),
+            tier,
+            dry_run,
+        )
+    };
+    let preview = make(pam_protocol::ResetTier::History, true);
+    let apply = make(pam_protocol::ResetTier::History, false);
+
+    assert_eq!(
+        policy_resource(&preview).unwrap().as_str(),
+        "reset:history:mode=preview"
+    );
+    assert_eq!(
+        policy_resource(&apply).unwrap().as_str(),
+        "reset:history:mode=apply"
+    );
+    // A grant that only ever forecast a reset must not authorize the wipe.
+    assert_ne!(
+        policy_resource(&preview).unwrap(),
+        policy_resource(&apply).unwrap()
+    );
+    // Reset is daemon-global, so its recovery names the daemon scope.
+    assert_eq!(
+        grant_recovery(&apply, &policy_resource(&apply)),
+        "pam access grant reset.history --daemon --resource reset:history:mode=apply"
+    );
+    // Each tier is its own capability: one grant can never reach another.
+    assert_eq!(
+        policy_resource(&make(pam_protocol::ResetTier::Access, false))
+            .unwrap()
+            .as_str(),
+        "reset:access:mode=apply"
+    );
+}

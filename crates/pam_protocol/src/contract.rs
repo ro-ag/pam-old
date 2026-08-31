@@ -790,6 +790,54 @@ impl RequestEnvelope {
         })
     }
 
+    /// Creates an authenticated, policy-gated reset request for one tier.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before
+    /// sending the request. Reset is deliberately tiered: the capability is
+    /// the whole scope, so a grant for one tier can never be spent on
+    /// another. `dry_run` reports the blast radius and changes nothing.
+    #[must_use]
+    pub fn reset(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        tier: ResetTier,
+        dry_run: bool,
+    ) -> Self {
+        let (capability, payload) = match tier {
+            ResetTier::Access => (
+                Capability::ResetAccess,
+                RequestPayload::ResetAccess { dry_run },
+            ),
+            ResetTier::Identity => (
+                Capability::ResetIdentity,
+                RequestPayload::ResetIdentity { dry_run },
+            ),
+            ResetTier::History => (
+                Capability::ResetHistory,
+                RequestPayload::ResetHistory { dry_run },
+            ),
+            ResetTier::Registry => (
+                Capability::ResetRegistry,
+                RequestPayload::ResetRegistry { dry_run },
+            ),
+        };
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload,
+        }
+    }
+
     /// Revalidates the bounded direct-inference payload after deserialization.
     ///
     /// # Errors
@@ -1097,6 +1145,14 @@ pub enum Capability {
     ConnectorList,
     ConnectorConfigure,
     ConnectorTest,
+    // Tiered reset. Each tier is its own capability so an owner can grant the
+    // narrow one they are actually exercising without handing out the others:
+    // clearing history while testing policy must never also be authority to
+    // drop every caller's pairing.
+    ResetAccess,
+    ResetIdentity,
+    ResetHistory,
+    ResetRegistry,
 }
 
 impl Capability {
@@ -1128,7 +1184,58 @@ impl Capability {
             Self::ConnectorList => "connector.list",
             Self::ConnectorConfigure => "connector.configure",
             Self::ConnectorTest => "connector.test",
+            // Tiered reset.
+            Self::ResetAccess => "reset.access",
+            Self::ResetIdentity => "reset.identity",
+            Self::ResetHistory => "reset.history",
+            Self::ResetRegistry => "reset.registry",
         }
+    }
+}
+
+/// The four scoped reset tiers, in blast-radius order.
+///
+/// Deliberately not a wire type: the capability carries the scope, so this
+/// only names which request to build.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ResetTier {
+    /// Grants, approvals, and flow authorizations.
+    Access,
+    /// Caller pairings, their identity files, and their keychain entries.
+    Identity,
+    /// Audit events, evidence, and flow-run history.
+    History,
+    /// The model registry. Weights on disk are never touched.
+    Registry,
+}
+
+impl ResetTier {
+    /// The tier's stable lowercase name, as it appears in receipts and audit.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Access => "access",
+            Self::Identity => "identity",
+            Self::History => "history",
+            Self::Registry => "registry",
+        }
+    }
+
+    /// The capability that authorizes this tier.
+    #[must_use]
+    pub const fn capability(self) -> Capability {
+        match self {
+            Self::Access => Capability::ResetAccess,
+            Self::Identity => Capability::ResetIdentity,
+            Self::History => Capability::ResetHistory,
+            Self::Registry => Capability::ResetRegistry,
+        }
+    }
+
+    /// Every tier, in the order a factory reset performs them.
+    #[must_use]
+    pub const fn all() -> [Self; 4] {
+        [Self::Access, Self::Identity, Self::History, Self::Registry]
     }
 }
 
@@ -1347,6 +1454,21 @@ pub enum RequestPayload {
     ConnectorTest {
         connector: String,
     },
+    // Tiered reset. `dry_run` is the whole payload: a reset is scoped by its
+    // capability, never by a client-supplied filter, so there is nothing else
+    // for a request to widen.
+    ResetAccess {
+        dry_run: bool,
+    },
+    ResetIdentity {
+        dry_run: bool,
+    },
+    ResetHistory {
+        dry_run: bool,
+    },
+    ResetRegistry {
+        dry_run: bool,
+    },
 }
 
 /// One verified model registration, exactly as the durable registry records it.
@@ -1509,6 +1631,39 @@ pub enum ResultPayload {
     ConnectorList(ConnectorListResult),
     ConnectorConfigure(ConnectorConfigureResult),
     ConnectorTest(ConnectorTestResult),
+    Reset(ResetResult),
+}
+
+/// One reset tier's exact blast radius, in counts and bytes.
+///
+/// A dry run and the run that follows it report the same shape: the dry run
+/// describes what would go, the real run describes what went. `bytes` is only
+/// ever the disk space the removal actually frees, so a tier that deletes
+/// small durable rows and no files reports honest zeroes rather than an
+/// invented figure.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResetResult {
+    /// Tier identity: `access`, `identity`, `history`, `registry`, `factory`.
+    pub scope: String,
+    /// True when nothing was changed and the counts are a forecast.
+    pub dry_run: bool,
+    pub items: Vec<ResetItem>,
+    pub total_items: u64,
+    pub total_bytes: u64,
+}
+
+/// One named class of state inside a reset tier.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResetItem {
+    /// Lowercase snake-case class name, for example `evidence_blobs`.
+    pub kind: String,
+    pub count: u64,
+    pub bytes: u64,
+    /// Exact names this item covers, when naming them makes the confirmation
+    /// informed -- the flow library is listed so a factory reset says which
+    /// authored flows it is about to remove. Bounded and often empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 /// Acknowledgement of one durable model registration.

@@ -47,6 +47,9 @@ import type {
   ModelUnregisterDto,
   PamBridge,
   ProjectSummaryDto,
+  ResetDto,
+  ResetItemDto,
+  ResetResultDto,
   SnapshotDataDto,
   SkillAuditDataDto,
   SkillInventoryDataDto,
@@ -305,6 +308,7 @@ export const fixtureScenarios = [
   "model-unregister-blocked",
   "connector-unconfigured",
   "connector-blocked",
+  "reset-blocked",
 ] as const;
 
 export type FixtureScenario = typeof fixtureScenarios[number];
@@ -774,6 +778,65 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   } | null = null;
   let modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
   let logsSizeBytes = FIXTURE_LOGS_SIZE_BYTES;
+  // Reset state the fixture actually clears, so a dry run and the run that
+  // follows it report the same counts exactly once.
+  const resetState: Record<string, ResetItemDto[]> = {
+    access: [
+      { kind: "grants", count: 6, bytes: 0, names: [] },
+      { kind: "approvals", count: 2, bytes: 0, names: [] },
+      { kind: "flow_authorizations", count: 1, bytes: 0, names: [] },
+    ],
+    identity: [
+      { kind: "callers", count: 2, bytes: 0, names: [] },
+      { kind: "caller_files", count: 3, bytes: 192, names: [] },
+      { kind: "keychain_entries", count: 2, bytes: 0, names: [] },
+    ],
+    history: [
+      { kind: "audit_events", count: 418, bytes: 61_440, names: [] },
+      { kind: "evidence", count: 37, bytes: 5_242_880, names: [] },
+      { kind: "flow_runs", count: 9, bytes: 131_072, names: [] },
+    ],
+    registry: [{ kind: "models", count: 2, bytes: 0, names: [] }],
+  };
+  const factoryExtras: ResetItemDto[] = [
+    {
+      kind: "flows",
+      count: 2,
+      bytes: 4_096,
+      names: ["release-readiness.toml", "worktree-triage.toml"],
+    },
+    { kind: "settings", count: 1, bytes: 64, names: [] },
+    { kind: "logs", count: 3, bytes: FIXTURE_LOGS_SIZE_BYTES, names: [] },
+    { kind: "runtime", count: 2, bytes: 128, names: [] },
+    { kind: "state_database", count: 1, bytes: 2_097_152, names: [] },
+    { kind: "other_data_files", count: 0, bytes: 0, names: [] },
+  ];
+  const resetResult = (scope: string, items: ResetItemDto[], dryRun: boolean): ResetResultDto => ({
+    scope,
+    dryRun,
+    items: clone(items),
+    totalItems: items.reduce((total, item) => total + item.count, 0),
+    totalBytes: items.reduce((total, item) => total + item.bytes, 0),
+  });
+  const runReset = (scope: keyof typeof resetState, dryRun: boolean): ResetDto => {
+    if (scenario === "reset-blocked") {
+      return {
+        status: "blocked",
+        failure: {
+          kind: "blocked",
+          code: "forbidden",
+          detail: "project policy denied this capability",
+          recovery: `pam access grant reset.${scope} --daemon --resource reset:${scope}:mode=apply`,
+        },
+      };
+    }
+    const items = resetState[scope];
+    const result = resetResult(scope, items, dryRun);
+    if (!dryRun) {
+      resetState[scope] = items.map((item) => ({ ...item, count: 0, bytes: 0, names: [] }));
+    }
+    return { status: "ok", result, receiptPath: null };
+  };
   const appSettingsSnapshot = (): AppSettingsDto => ({
     modelsDir,
     modelsDirIsDefault: modelsDir === FIXTURE_DEFAULT_MODELS_DIR,
@@ -1264,6 +1327,46 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     async logsDelete(_fence): Promise<AppSettingsDto> {
       logsSizeBytes = 0;
       return clone(appSettingsSnapshot());
+    },
+    async resetAccess(_fence, dryRun): Promise<ResetDto> {
+      return runReset("access", dryRun);
+    },
+    async resetIdentity(_fence, dryRun): Promise<ResetDto> {
+      return runReset("identity", dryRun);
+    },
+    async resetHistory(_fence, dryRun): Promise<ResetDto> {
+      return runReset("history", dryRun);
+    },
+    async resetRegistry(_fence, dryRun): Promise<ResetDto> {
+      return runReset("registry", dryRun);
+    },
+    async factoryReset(_fence, dryRun, includeWeights): Promise<ResetDto> {
+      if (daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: null,
+            detail: "a running daemon still owns PAM's durable state",
+            recovery:
+              "Stop PAM first -- quit the running `pam daemon`, or press Stop in the PAM control center -- then run the reset again.",
+          },
+        };
+      }
+      const items = [
+        ...Object.values(resetState).flat(),
+        ...factoryExtras,
+        ...(includeWeights
+          ? [{ kind: "model_weights", count: 2, bytes: 22_300_000_000, names: [] }]
+          : []),
+      ];
+      return {
+        status: "ok",
+        result: resetResult("factory", items, dryRun),
+        receiptPath: dryRun
+          ? null
+          : "/Users/fixture/Library/Application Support/pam-reset-receipt-1730000000000.txt",
+      };
     },
     async revealPath(_fence, path): Promise<void> {
       const known = [modelsDir, FIXTURE_DATA_DIR, FIXTURE_FLOWS_DIR, FIXTURE_LOGS_DIR];

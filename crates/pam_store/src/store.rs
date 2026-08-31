@@ -32,24 +32,24 @@ use uuid::Uuid;
 
 use crate::evidence::{self, EvidenceFiles};
 use crate::{
-    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, ActivityDay, AppendAuditEvent,
-    ApprovalDecision, ApprovalDecisionOutcome, AuditEventRecord, AuditExport, AuditPruneOutcome,
-    AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, AuthorizeFlowRun,
-    CallerAuthentication, CallerRegistration, CallerRevocation, CancelOutcome, ConnectorRecord,
-    ConnectorTestStatus, EventRecord, EvidenceMetadata, EvidencePruneOutcome, EvidenceRetention,
-    ExpectedOperationKind, FlowAuthorizationOutcome, FlowAuthorizationRecoveryOutcome,
-    FlowCheckpoint, FlowCheckpointDisposition, FlowCheckpointSaveOutcome, FlowEffectAuthorization,
-    FlowRunSummary, FlowTerminalResult, GrantRevocation, Lease, LeasedRequest,
-    MAX_AUDIT_ACTION_BYTES, MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES,
-    MAX_AUDIT_DECISION_BYTES, MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES,
-    MAX_AUDIT_OUTCOME_BYTES, MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES,
-    MAX_FLOW_RUN_HISTORY, MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_FLOW_TRANSITION_BYTES,
-    MAX_PROJECT_CURRENT_QUEUED, MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT,
-    MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent, ProjectPolicy, ProjectRequestSummary,
-    ProjectUsage, ProjectWorkload, PutEvidence, PutGrant, RecentAuditEvents, Replay,
-    RequestSnapshot, RequestState, SaveFlowCheckpoint, SkillInventoryDrift, StoreError,
-    StoredAgentArtifact, StoredResult, StoredSkillsAuditReport, TerminalState,
-    UpsertConnectorConfig,
+    AUDIT_EXPORT_VERSION, AcceptOutcome, AcceptRequest, AccessResetTally, ActivityDay,
+    AppendAuditEvent, ApprovalDecision, ApprovalDecisionOutcome, AuditEventRecord, AuditExport,
+    AuditPruneOutcome, AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest,
+    AuthorizeFlowRun, CallerAuthentication, CallerRegistration, CallerRevocation, CancelOutcome,
+    ConnectorRecord, ConnectorTestStatus, EventRecord, EvidenceMetadata, EvidencePruneOutcome,
+    EvidenceRetention, ExpectedOperationKind, FlowAuthorizationOutcome,
+    FlowAuthorizationRecoveryOutcome, FlowCheckpoint, FlowCheckpointDisposition,
+    FlowCheckpointSaveOutcome, FlowEffectAuthorization, FlowRunSummary, FlowTerminalResult,
+    GrantRevocation, HistoryResetTally, Lease, LeasedRequest, MAX_AUDIT_ACTION_BYTES,
+    MAX_AUDIT_BATCH_SIZE, MAX_AUDIT_CALLER_ID_BYTES, MAX_AUDIT_DECISION_BYTES,
+    MAX_AUDIT_DETAIL_BYTES, MAX_AUDIT_EVENT_ID_BYTES, MAX_AUDIT_OUTCOME_BYTES,
+    MAX_AUDIT_PROJECT_ID_BYTES, MAX_FLOW_CHECKPOINT_BYTES, MAX_FLOW_RUN_HISTORY,
+    MAX_FLOW_TERMINAL_RESULT_BYTES, MAX_FLOW_TRANSITION_BYTES, MAX_PROJECT_CURRENT_QUEUED,
+    MAX_SKILL_INVENTORY_TOMBSTONES_PER_PROJECT, MAX_SKILLS_AUDIT_REPORT_BYTES, ProjectCurrent,
+    ProjectPolicy, ProjectRequestSummary, ProjectUsage, ProjectWorkload, PutEvidence, PutGrant,
+    RecentAuditEvents, Replay, RequestSnapshot, RequestState, ResetTally, SaveFlowCheckpoint,
+    SkillInventoryDrift, StoreError, StoredAgentArtifact, StoredResult, StoredSkillsAuditReport,
+    TerminalState, UpsertConnectorConfig,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -877,6 +877,138 @@ impl Store {
         self.send(Command::Model(ModelCommand::List {
             response: response_tx,
         }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Counts the grants, approvals, and flow authorizations an `access`
+    /// reset would remove, without removing any of them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn access_reset_tally(&self) -> Result<AccessResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::AccessTally {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Removes every grant, approval, and flow authorization in one
+    /// transaction, and reports exactly what went.
+    ///
+    /// Callers are left registered: dropping a caller's authority is not the
+    /// same operation as dropping the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn reset_access(&self) -> Result<AccessResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::AccessPurge {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Counts the audit events and flow runs a `history` reset would remove,
+    /// with the bytes their stored payloads hold, without removing any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn history_reset_tally(&self) -> Result<HistoryResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::HistoryTally {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Removes every audit event and flow-run record, and reports what went.
+    ///
+    /// Evidence is not part of this call: only the evidence worker holds the
+    /// blob directory capability, so [`Self::reset_evidence`] removes that
+    /// half.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn reset_history(&self) -> Result<HistoryResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::HistoryPurge {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Counts the registered models a `registry` reset would unregister.
+    ///
+    /// Reported bytes are always zero: unregistering never touches the
+    /// weights on disk, so it frees no space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn registry_reset_tally(&self) -> Result<ResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::RegistryTally {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Unregisters every model. Weights on disk are never touched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn reset_registry(&self) -> Result<ResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Reset(ResetCommand::RegistryPurge {
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Counts every retained evidence handle and the bytes its blobs hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable state is unavailable.
+    pub async fn evidence_reset_tally(&self) -> Result<ResetTally, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send_evidence(EvidenceCommand::ResetTally {
+            response: response_tx,
+        })
+        .await?;
+        receive(response_rx).await
+    }
+
+    /// Removes one bounded page of evidence handles of any project, retention
+    /// class, or age, then unlinks the blobs that page leaves unreferenced.
+    ///
+    /// This is the same index-then-cleanup path [`Self::prune_evidence`] uses,
+    /// with the retention predicate removed: `has_more` reports whether
+    /// another page remains, so a full clear loops until it is false.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a `limit` outside `1..=MAX_EVIDENCE_PRUNE_BATCH_SIZE`,
+    /// or when durable state is unavailable.
+    pub async fn reset_evidence(&self, limit: u32) -> Result<EvidencePruneOutcome, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send_evidence(EvidenceCommand::ResetPurge {
+            limit,
+            response: response_tx,
+        })
         .await?;
         receive(response_rx).await
     }
@@ -1751,6 +1883,7 @@ enum Command {
     Policy(PolicyCommand),
     Audit(AuditCommand),
     Model(ModelCommand),
+    Reset(ResetCommand),
     Inventory(InventoryCommand),
     SkillsAuditReport(SkillsAuditReportCommand),
     Accept {
@@ -2077,12 +2210,42 @@ enum EvidenceCommand {
         limit: u32,
         response: Response<EvidencePruneOutcome>,
     },
+    ResetTally {
+        response: Response<ResetTally>,
+    },
+    ResetPurge {
+        limit: u32,
+        response: Response<EvidencePruneOutcome>,
+    },
     #[cfg(test)]
     Hold {
         entered: mpsc::SyncSender<()>,
         release: mpsc::Receiver<()>,
     },
     Shutdown(Response<()>),
+}
+
+/// The durable half of a tiered reset: every command here either counts what
+/// a tier would remove or removes exactly that tier's rows, never another's.
+enum ResetCommand {
+    AccessTally {
+        response: Response<AccessResetTally>,
+    },
+    AccessPurge {
+        response: Response<AccessResetTally>,
+    },
+    HistoryTally {
+        response: Response<HistoryResetTally>,
+    },
+    HistoryPurge {
+        response: Response<HistoryResetTally>,
+    },
+    RegistryTally {
+        response: Response<ResetTally>,
+    },
+    RegistryPurge {
+        response: Response<ResetTally>,
+    },
 }
 
 #[allow(clippy::too_many_lines)] // Keep the exhaustive command dispatcher in one auditable match.
@@ -2093,6 +2256,7 @@ fn run_worker(mut connection: Connection, mut commands: tokio_mpsc::Receiver<Com
             Command::Connector(command) => run_connector_command(&mut connection, command),
             Command::Policy(command) => run_policy_command(&mut connection, command),
             Command::Audit(command) => run_audit_command(&mut connection, command),
+            Command::Reset(command) => run_reset_command(&mut connection, command),
             Command::Model(command) => run_model_command(&mut connection, command),
             Command::Inventory(command) => run_inventory_command(&mut connection, command),
             Command::SkillsAuditReport(command) => {
@@ -2448,6 +2612,114 @@ fn run_model_command(connection: &mut Connection, command: ModelCommand) {
             respond(response, delete_model(connection, &key));
         }
     }
+}
+
+fn run_reset_command(connection: &mut Connection, command: ResetCommand) {
+    match command {
+        ResetCommand::AccessTally { response } => {
+            respond(response, access_reset_tally(connection));
+        }
+        ResetCommand::AccessPurge { response } => {
+            respond(response, reset_access(connection));
+        }
+        ResetCommand::HistoryTally { response } => {
+            respond(response, history_reset_tally(connection));
+        }
+        ResetCommand::HistoryPurge { response } => {
+            respond(response, reset_history(connection));
+        }
+        ResetCommand::RegistryTally { response } => {
+            respond(response, registry_reset_tally(connection));
+        }
+        ResetCommand::RegistryPurge { response } => {
+            respond(response, reset_registry(connection));
+        }
+    }
+}
+
+fn count_rows(connection: &Connection, query: &str) -> Result<u64, StoreError> {
+    let count: i64 = connection.query_row(query, [], |row| row.get(0))?;
+    Ok(u64::try_from(count).unwrap_or(0))
+}
+
+fn access_reset_tally(connection: &Connection) -> Result<AccessResetTally, StoreError> {
+    Ok(AccessResetTally {
+        grants: count_rows(connection, "SELECT COUNT(*) FROM capability_grants")?,
+        approvals: count_rows(connection, "SELECT COUNT(*) FROM approvals")?,
+        flow_authorizations: count_rows(connection, "SELECT COUNT(*) FROM flow_authorizations")?,
+    })
+}
+
+/// Drops every grant, approval, and flow authorization in one transaction.
+///
+/// Order matters: `flow_authorizations.approval_id` references `approvals`,
+/// so the referencing rows go first or the foreign key rejects the delete.
+fn reset_access(connection: &mut Connection) -> Result<AccessResetTally, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let flow_authorizations = transaction.execute("DELETE FROM flow_authorizations", [])?;
+    let approvals = transaction.execute("DELETE FROM approvals", [])?;
+    let grants = transaction.execute("DELETE FROM capability_grants", [])?;
+    transaction.commit()?;
+    Ok(AccessResetTally {
+        grants: u64::try_from(grants).unwrap_or(0),
+        approvals: u64::try_from(approvals).unwrap_or(0),
+        flow_authorizations: u64::try_from(flow_authorizations).unwrap_or(0),
+    })
+}
+
+const AUDIT_BYTES_QUERY: &str =
+    "SELECT COUNT(*), COALESCE(SUM(length(redacted_detail)), 0) FROM audit_events";
+const FLOW_RUN_BYTES_QUERY: &str = "SELECT COUNT(*), COALESCE(SUM(length(snapshot) \
+     + COALESCE(length(terminal_result), 0)), 0) FROM flow_runs";
+
+fn tally_query(connection: &Connection, query: &str) -> Result<ResetTally, StoreError> {
+    let (count, bytes): (i64, i64) =
+        connection.query_row(query, [], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(ResetTally {
+        count: u64::try_from(count).unwrap_or(0),
+        bytes: u64::try_from(bytes).unwrap_or(0),
+    })
+}
+
+fn history_reset_tally(connection: &Connection) -> Result<HistoryResetTally, StoreError> {
+    Ok(HistoryResetTally {
+        audit_events: tally_query(connection, AUDIT_BYTES_QUERY)?,
+        flow_runs: tally_query(connection, FLOW_RUN_BYTES_QUERY)?,
+    })
+}
+
+/// Drops the whole audit ledger and every flow-run record.
+///
+/// The tally is read inside the same transaction as the deletes, so the
+/// reported bytes describe exactly the rows that went.
+fn reset_history(connection: &mut Connection) -> Result<HistoryResetTally, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let audit_events = tally_query(&transaction, AUDIT_BYTES_QUERY)?;
+    let flow_runs = tally_query(&transaction, FLOW_RUN_BYTES_QUERY)?;
+    transaction.execute("DELETE FROM flow_runs", [])?;
+    transaction.execute("DELETE FROM audit_events", [])?;
+    transaction.commit()?;
+    Ok(HistoryResetTally {
+        audit_events,
+        flow_runs,
+    })
+}
+
+/// Counts registered models. Bytes stay zero on purpose: unregistering a
+/// model leaves every byte of its weights exactly where it was.
+fn registry_reset_tally(connection: &Connection) -> Result<ResetTally, StoreError> {
+    Ok(ResetTally {
+        count: count_rows(connection, "SELECT COUNT(*) FROM models")?,
+        bytes: 0,
+    })
+}
+
+fn reset_registry(connection: &mut Connection) -> Result<ResetTally, StoreError> {
+    let removed = connection.execute("DELETE FROM models", [])?;
+    Ok(ResetTally {
+        count: u64::try_from(removed).unwrap_or(0),
+        bytes: 0,
+    })
 }
 
 fn put_model(
@@ -5334,6 +5606,22 @@ fn run_evidence_worker(
                     blobs_pending: outcome.blobs_pending,
                     cleanup_unresolved: outcome.cleanup_unresolved,
                     has_more: outcome.has_more,
+                }),
+            ),
+            EvidenceCommand::ResetTally { response } => respond(
+                response,
+                evidence::tally_all(&connection).map(|(count, bytes)| ResetTally { count, bytes }),
+            ),
+            EvidenceCommand::ResetPurge { limit, response } => respond(
+                response,
+                evidence::purge_all(&mut connection, &files, limit).map(|outcome| {
+                    EvidencePruneOutcome {
+                        handles_deleted: outcome.handles_deleted,
+                        blobs_deleted: outcome.blobs_deleted,
+                        blobs_pending: outcome.blobs_pending,
+                        cleanup_unresolved: outcome.cleanup_unresolved,
+                        has_more: outcome.has_more,
+                    }
                 }),
             ),
             #[cfg(test)]
