@@ -284,3 +284,18 @@ describe("visual QA fixture scenarios", () => {
       .toMatchObject({ action: "disable", key, stateChanged: true, cleanup: "removed" });
   });
 });
+
+describe("activity window", () => {
+  it("covers the whole heatmap grid", async () => {
+    const { HEATMAP_DAYS } = await import("./views/OverviewView");
+    const bridge = fixtureBridge("active");
+    const stats = await bridge.daemonStats(withDaemonOperation(), HEATMAP_DAYS);
+    if (stats.status !== "ok") throw new Error("the default fixture serves statistics");
+    const dayMs = 86_400_000;
+    const oldest = Math.min(...stats.days.map((day) => day.dayStartMs));
+    const newest = Math.max(...stats.days.map((day) => day.dayStartMs));
+    // A fixture shorter than the grid renders permanently empty leading
+    // columns, which reads as a rendering fault rather than a short fixture.
+    expect((newest - oldest) / dayMs).toBeGreaterThanOrEqual(HEATMAP_DAYS - 7);
+  });
+});

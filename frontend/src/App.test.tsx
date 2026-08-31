@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { fixtureBridge } from "./fixtures";
+import { HEATMAP_WEEKS } from "./views/OverviewView";
 
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -67,7 +68,9 @@ describe("daemon observatory", () => {
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getAllByText("Watch status").length).toBeGreaterThan(0);
     expect(screen.getByRole("region", { name: "Daemon overview" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "The last 26 weeks" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: `The last ${HEATMAP_WEEKS} weeks` }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Usage by project" })).toBeInTheDocument();
     // The model is one read-only tile here; every model action is on Models.
     expect(await screen.findByRole("button", { name: /Local model/ })).toBeInTheDocument();
