@@ -94,7 +94,7 @@ const activityEvents: ActivityEventDto[] = [
 ];
 
 const daemonLogEntries: DaemonLogEntryDto[] = [
-  { timestampMs: 1_777_001_300_000, severity: "info", message: "PAM daemon ready (version fixture-0.1.0, protocol 7)." },
+  { timestampMs: 1_777_001_300_000, severity: "info", message: "PAM daemon ready (version fixture-0.1.0, protocol 8)." },
   { timestampMs: 1_777_001_405_000, severity: "warn", message: "rejected malformed client frame: expected identity and body frames, received 3" },
   { timestampMs: 1_777_001_500_000, severity: "error", message: "queued operation failed: store row for request gui-flow-7 vanished mid-lease" },
   { timestampMs: 1_777_001_521_000, severity: "info", message: "request handler completed project.current in 12 ms" },
@@ -784,6 +784,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   // ungranted and only the Access view's own action flips a row.
   const daemonCapabilities: DaemonCapabilityDto[] = [
     { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
+    { capability: "model.register", name: "Model registration", summary: "Models registers an imported or downloaded GGUF in the daemon's registry.", granted: true },
     { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
     { capability: "connector.configure", name: "Connector configuration", summary: "Access saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
     { capability: "connector.test", name: "Connector self-test", summary: "Access runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },

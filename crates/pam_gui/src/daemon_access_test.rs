@@ -44,6 +44,10 @@ fn after_now_ms() -> u64 {
         + 1
 }
 
+/// These fixtures own their own scratch store, so no daemon owns it: the
+/// writes stay direct instead of reaching for a real endpoint.
+const NO_DAEMON: bool = false;
+
 fn caller() -> CallerId {
     CallerId::from("gui-caller")
 }
@@ -97,6 +101,7 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
             .collect::<Vec<_>>(),
         vec![
             ("model.infer", false),
+            ("model.register", false),
             ("network.diagnostics", false),
             ("connector.configure", false),
             ("connector.test", false),
@@ -107,10 +112,15 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
         AuthorizationOutcome::Denied
     );
 
-    let granted =
-        update_daemon_access(state_path.clone(), caller(), "model.infer".to_owned(), true)
-            .await
-            .unwrap();
+    let granted = update_daemon_access(
+        state_path.clone(),
+        caller(),
+        "model.infer".to_owned(),
+        true,
+        NO_DAEMON,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         granted
             .capabilities
@@ -126,9 +136,15 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
     );
 
     // Granting twice is idempotent, not a second row.
-    let again = update_daemon_access(state_path.clone(), caller(), "model.infer".to_owned(), true)
-        .await
-        .unwrap();
+    let again = update_daemon_access(
+        state_path.clone(),
+        caller(),
+        "model.infer".to_owned(),
+        true,
+        NO_DAEMON,
+    )
+    .await
+    .unwrap();
     assert_eq!(again, granted);
     let store = Store::open(&state_path).unwrap();
     let rows = store
@@ -143,6 +159,7 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
         caller(),
         "model.infer".to_owned(),
         false,
+        NO_DAEMON,
     )
     .await
     .unwrap();
@@ -159,9 +176,15 @@ async fn a_capability_the_window_does_not_use_is_rejected_before_any_write() {
     let state_path = directory.state_path();
     register_gui_caller(&state_path).await;
 
-    let error = update_daemon_access(state_path.clone(), caller(), "daemon.stop".to_owned(), true)
-        .await
-        .unwrap_err();
+    let error = update_daemon_access(
+        state_path.clone(),
+        caller(),
+        "daemon.stop".to_owned(),
+        true,
+        NO_DAEMON,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
         error.to_string(),
         "This is not a daemon-scoped capability the PAM window uses."

@@ -27,6 +27,10 @@ const MAX_FLOW_REQUEST_ATTACHMENT_BYTES: usize =
 pub const MAX_FLOW_PROJECT_ROOT_BYTES: usize = 4 * 1024;
 pub const MAX_PROJECT_CURRENT_QUEUED: usize = 64;
 pub const MAX_PROJECT_OPERATION_KIND_BYTES: usize = 128;
+pub const MAX_MODEL_PATH_BYTES: usize = 4 * 1024;
+pub const MAX_MODEL_URL_BYTES: usize = 4 * 1024;
+pub const MAX_MODEL_LICENSE_ID_BYTES: usize = 128;
+pub const MAX_GRANT_CAPABILITY_BYTES: usize = 128;
 pub const MAX_CONNECTOR_ID_BYTES: usize = 128;
 pub const MAX_CONNECTOR_BASE_URL_BYTES: usize = 1024;
 pub const MAX_CONNECTOR_SECRET_BYTES: usize = 4096;
@@ -679,6 +683,76 @@ impl RequestEnvelope {
         Ok(request)
     }
 
+    /// Creates an authenticated, policy-gated model registration request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The daemon owns the durable model registry, so a client
+    /// that has already verified an artifact registers it through this request
+    /// rather than by writing to the store the daemon holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a registration that is not bounded,
+    /// canonical, and complete.
+    pub fn model_register(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        registration: ModelRegistration,
+    ) -> Result<Self, ProtocolContractError> {
+        validate_model_registration(&registration)?;
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelRegister,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelRegister { registration },
+        })
+    }
+
+    /// Creates an authenticated request that revokes every active grant this
+    /// envelope's caller holds for one capability in this envelope's project.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The payload deliberately has no caller field: revocation is
+    /// bound to the authenticated caller, so it can only ever drop the
+    /// requester's own authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a capability name that is not bounded
+    /// lowercase dotted text.
+    pub fn grant_revoke(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        capability: impl Into<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        let capability = capability.into();
+        validate_grant_capability(&capability)?;
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::GrantRevoke,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::GrantRevoke { capability },
+        })
+    }
+
     /// Revalidates the bounded direct-inference payload after deserialization.
     ///
     /// # Errors
@@ -695,6 +769,21 @@ impl RequestEnvelope {
                 validate_model_generation(model, messages, *max_output_tokens)?;
                 validate_model_deadline(self.deadline_unix_ms)
             }
+            RequestPayload::ModelRegister { registration } => {
+                validate_model_registration(registration)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Revalidates a bounded grant payload after deserialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for an invalid capability name.
+    pub fn validate_grant_request(&self) -> Result<(), ProtocolContractError> {
+        match &self.payload {
+            RequestPayload::GrantRevoke { capability } => validate_grant_capability(capability),
             _ => Ok(()),
         }
     }
@@ -963,6 +1052,8 @@ pub enum Capability {
     ReadEvidence,
     ModelInfer,
     ModelStatus,
+    ModelRegister,
+    GrantRevoke,
     FlowRun,
     ConnectorList,
     ConnectorConfigure,
@@ -991,6 +1082,8 @@ impl Capability {
             Self::ReadEvidence => "evidence.read",
             Self::ModelInfer => "model.infer",
             Self::ModelStatus => "model.status",
+            Self::ModelRegister => "model.register",
+            Self::GrantRevoke => "grant.revoke",
             Self::FlowRun => "flow.run",
             Self::ConnectorList => "connector.list",
             Self::ConnectorConfigure => "connector.configure",
@@ -1188,6 +1281,12 @@ pub enum RequestPayload {
         max_output_tokens: u32,
     },
     ModelStatus,
+    ModelRegister {
+        registration: ModelRegistration,
+    },
+    GrantRevoke {
+        capability: String,
+    },
     FlowRun {
         definition: FlowDefinitionDocument,
         project_root: FlowProjectRoot,
@@ -1205,6 +1304,36 @@ pub enum RequestPayload {
     ConnectorTest {
         connector: String,
     },
+}
+
+/// One verified model registration, exactly as the durable registry records it.
+///
+/// Every field crosses the wire as bounded text or a bounded integer. The
+/// daemon rebuilds the domain record through its own validating constructors,
+/// so this contract carries no authority of its own: it cannot smuggle an
+/// unverified artifact past the registry's own checks.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelRegistration {
+    /// Stable `vendor/name` identity.
+    pub model: String,
+    /// Absolute path of the verified GGUF artifact.
+    pub path: String,
+    /// Canonical `sha256:<hex>` digest of the artifact's exact bytes.
+    pub digest: String,
+    pub size_bytes: u64,
+    pub gguf_version: u32,
+    pub gguf_tensor_count: u64,
+    pub gguf_metadata_kv_count: u64,
+    /// License identifier the owner accepted.
+    pub license_id: String,
+    /// HTTPS URL of the exact notice the owner accepted.
+    pub license_url: String,
+    /// Canonical `sha256:<hex>` digest of the accepted notice text.
+    pub license_digest: String,
+    /// Canonical HTTPS provenance URL; absent for a local import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    pub registered_at_ms: u64,
 }
 
 /// One credential change carried by a connector configuration request.
@@ -1330,10 +1459,32 @@ pub enum ResultPayload {
     EvidenceChunk(EvidenceChunk),
     ModelGeneration(ModelGenerationResult),
     ModelStatus(ModelStatusResult),
+    ModelRegister(ModelRegisterResult),
+    GrantRevoke(GrantRevokeResult),
     FlowRun(pam_flow::FlowRunResult),
     ConnectorList(ConnectorListResult),
     ConnectorConfigure(ConnectorConfigureResult),
     ConnectorTest(ConnectorTestResult),
+}
+
+/// Acknowledgement of one durable model registration.
+///
+/// Registration is idempotent, so `registered_at_ms` is the timestamp the
+/// registry actually holds: for a re-registration of the same artifact it is
+/// the original one, not the timestamp the request carried.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelRegisterResult {
+    /// Stable `vendor/name` identity now present in the registry.
+    pub model: String,
+    pub registered_at_ms: u64,
+}
+
+/// Acknowledgement of one capability revocation for the requesting caller.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GrantRevokeResult {
+    pub capability: String,
+    /// How many of the caller's active grants this request revoked.
+    pub revoked: u32,
 }
 
 /// The complete connector registry known to this daemon.
@@ -1668,6 +1819,8 @@ pub enum ProtocolContractError {
     InvalidConnectorIdentity,
     InvalidConnectorBaseUrl,
     InvalidConnectorSecret,
+    InvalidModelRegistration,
+    InvalidGrantCapability,
 }
 
 impl fmt::Display for ProtocolContractError {
@@ -1749,6 +1902,13 @@ impl fmt::Display for ProtocolContractError {
             Self::InvalidConnectorSecret => write!(
                 formatter,
                 "connector secret must contain 1 to {MAX_CONNECTOR_SECRET_BYTES} control-free bytes"
+            ),
+            Self::InvalidModelRegistration => formatter.write_str(
+                "model registration must carry a bounded vendor/name identity, absolute path, canonical digests, positive size, and HTTPS license and source URLs",
+            ),
+            Self::InvalidGrantCapability => write!(
+                formatter,
+                "grant capability must contain 1 to {MAX_GRANT_CAPABILITY_BYTES} bytes of lowercase dotted text"
             ),
         }
     }
@@ -1842,6 +2002,65 @@ fn valid_model_segment(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn validate_model_registration(
+    registration: &ModelRegistration,
+) -> Result<(), ProtocolContractError> {
+    validate_model_id(&registration.model)
+        .map_err(|_| ProtocolContractError::InvalidModelRegistration)?;
+    let path_is_bounded = !registration.path.is_empty()
+        && registration.path.len() <= MAX_MODEL_PATH_BYTES
+        && Path::new(&registration.path).is_absolute()
+        && !registration.path.chars().any(char::is_control);
+    let license_is_bounded = !registration.license_id.is_empty()
+        && registration.license_id.len() <= MAX_MODEL_LICENSE_ID_BYTES
+        && !registration
+            .license_id
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace());
+    let digests_are_canonical = ContentDigest::parse(registration.digest.clone()).is_ok()
+        && ContentDigest::parse(registration.license_digest.clone()).is_ok();
+    if path_is_bounded
+        && license_is_bounded
+        && digests_are_canonical
+        && registration.size_bytes > 0
+        && bounded_https_url(&registration.license_url)
+        && registration
+            .source_url
+            .as_deref()
+            .is_none_or(bounded_https_url)
+    {
+        Ok(())
+    } else {
+        Err(ProtocolContractError::InvalidModelRegistration)
+    }
+}
+
+fn bounded_https_url(url: &str) -> bool {
+    url.len() <= MAX_MODEL_URL_BYTES
+        && url.strip_prefix("https://").is_some_and(|remainder| {
+            let authority = remainder.split('/').next().unwrap_or_default();
+            !authority.is_empty() && !authority.contains('@')
+        })
+        && !url
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+}
+
+fn validate_grant_capability(capability: &str) -> Result<(), ProtocolContractError> {
+    let bounded = !capability.is_empty() && capability.len() <= MAX_GRANT_CAPABILITY_BYTES;
+    let well_formed = capability.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    });
+    if bounded && well_formed {
+        Ok(())
+    } else {
+        Err(ProtocolContractError::InvalidGrantCapability)
+    }
 }
 
 fn validate_connector_id(connector: &str) -> Result<(), ProtocolContractError> {

@@ -6,8 +6,9 @@ use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
-    FailureCode, ModelGenerationResult, ModelMessage, ModelStatusResult, ProtocolContractError,
-    RequestEnvelope, ResultBody, ResultPayload,
+    FailureCode, GrantRevokeResult, ModelGenerationResult, ModelMessage, ModelRegisterResult,
+    ModelRegistration, ModelStatusResult, ProtocolContractError, RequestEnvelope, ResultBody,
+    ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -20,6 +21,11 @@ const MODEL_INFER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.infer
 // wraps a daemon-side probe with its own ~10 second deadline.
 const CONNECTOR_CONFIGURE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTOR_TEST_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
+// Registration writes one durable registry row; revocation writes at most a
+// handful of grant rows. Both are local store writes behind a short exchange.
+const MODEL_REGISTER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+const GRANT_REVOKE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+const MODEL_REGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.register capability in Access, or approve the pending registration.";
 const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in PAM policy, or approve the pending connector request.";
 const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in PAM policy, or approve the pending connector request.";
 
@@ -307,6 +313,71 @@ pub(crate) async fn run_connector_test(
     .await)
 }
 
+/// Registers one verified model through the daemon that owns the store.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a registration the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_model_register(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    registration: ModelRegistration,
+) -> Result<ObservatoryState<ModelRegisterResult>, ProtocolContractError> {
+    let request = RequestEnvelope::model_register(
+        unique_request_id("gui-model-register"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-register"),
+        registration,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "model-register",
+        MODEL_REGISTER_EXCHANGE_TIMEOUT,
+        model_register_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelRegister(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+/// Revokes every daemon-scope grant the GUI caller holds for one capability,
+/// through the daemon that owns the store.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a capability name the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_grant_revoke(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    capability: String,
+) -> Result<ObservatoryState<GrantRevokeResult>, ProtocolContractError> {
+    let request = RequestEnvelope::grant_revoke(
+        unique_request_id("gui-grant-revoke"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-grant-revoke"),
+        capability,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "grant-revoke",
+        GRANT_REVOKE_EXCHANGE_TIMEOUT,
+        failure_state,
+        |payload| match payload {
+            ResultPayload::GrantRevoke(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
 fn connector_configure_request(
     caller_id: CallerId,
     project_id: ProjectId,
@@ -400,6 +471,12 @@ fn failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 /// including an offline daemon, is unavailable.
 fn infer_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, MODEL_INFER_BLOCKED_RECOVERY)
+}
+
+/// `model.register` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with registration recovery text.
+fn model_register_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_REGISTER_BLOCKED_RECOVERY)
 }
 
 /// `connector.configure` requires an explicit grant: classified exactly like

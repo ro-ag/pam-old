@@ -5,11 +5,15 @@ use std::{
 };
 
 use pam_client::request_exchange;
-use pam_core::{CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId};
+use pam_core::{
+    CallerCredential, CallerId, ContentDigest, GrantId, IdempotencyKey, ProjectId, RequestId,
+};
 use pam_daemon::{DaemonConfig, serve_until};
 use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceScope};
-use pam_protocol::{FailureCode, OperationTruth, RequestEnvelope, ResultBody, ResultPayload};
+use pam_protocol::{
+    FailureCode, ModelRegistration, OperationTruth, RequestEnvelope, ResultBody, ResultPayload,
+};
 use pam_store::Store;
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -427,5 +431,225 @@ async fn daemon_scope_grant_authorizes_the_access_boundary_read() {
 
     shutdown.send(()).unwrap();
     daemon.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(runtime);
+}
+
+fn registration() -> ModelRegistration {
+    ModelRegistration {
+        model: "qwen/routed-model".to_owned(),
+        path: "/models/qwen/routed-model.gguf".to_owned(),
+        digest: ContentDigest::from_sha256([7; 32]).as_str().to_owned(),
+        size_bytes: 64,
+        gguf_version: 3,
+        gguf_tensor_count: 17,
+        gguf_metadata_kv_count: 29,
+        license_id: "Apache-2.0".to_owned(),
+        license_url: "https://example.test/license".to_owned(),
+        license_digest: ContentDigest::from_sha256([8; 32]).as_str().to_owned(),
+        source_url: None,
+        registered_at_ms: 5,
+    }
+}
+
+fn register_request(request_id: &str, caller: &str) -> RequestEnvelope {
+    authenticated(
+        RequestEnvelope::model_register(
+            RequestId::from(request_id),
+            CallerId::from(caller),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::new(format!("{request_id}-key")),
+            registration(),
+        )
+        .unwrap(),
+    )
+}
+
+async fn daemon_scope_grant(store: &Store, id: &str, caller: &str, capability: &str) {
+    store
+        .put_grant(pam_store::PutGrant {
+            grant: Grant {
+                id: GrantId::from(id),
+                caller: CallerId::from(caller),
+                project: ProjectId::daemon_scope(),
+                capability: CapabilityName::parse(capability).unwrap(),
+                resource: ResourceScope::Any,
+                effect: Effect::Allow,
+                approval: ApprovalRequirement::None,
+                expires_at_ms: None,
+                revoked_at_ms: None,
+            },
+            created_at_ms: 2,
+        })
+        .await
+        .unwrap();
+}
+
+/// The GUI registers a model it has already verified through this exact
+/// envelope, so the authorization boundary is proven where it actually runs:
+/// a real request through the daemon's own dispatch, not a DTO in a unit test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_register_needs_its_grant_and_then_writes_the_registry() {
+    let runtime = test_runtime("daemon-scope-model-register");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed_caller(&seed, "ungranted-operator", TEST_CREDENTIAL).await;
+    daemon_scope_grant(
+        &seed,
+        "daemon-scope-register-grant",
+        "scope-operator",
+        "model.register",
+    )
+    .await;
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    // `model.register` is not baseline: an ungranted caller is refused.
+    let denied = request_exchange(
+        &endpoint,
+        &register_request("scope-register-denied", "ungranted-operator"),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(denied.result.body, ResultBody::Failure(ref failure) if failure.code == FailureCode::Forbidden),
+        "an ungranted caller must not register a model: {:?}",
+        denied.result.body
+    );
+
+    // The granted caller registers, and registering again is idempotent.
+    let registered = request_exchange(
+        &endpoint,
+        &register_request("scope-register", "scope-operator"),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelRegister(acknowledged),
+    } = registered.result.body
+    else {
+        panic!("a granted daemon-scope registration must be served");
+    };
+    assert_eq!(truth, OperationTruth::Changed);
+    assert_eq!(acknowledged.model, "qwen/routed-model");
+    assert_eq!(acknowledged.registered_at_ms, 5);
+
+    let again = request_exchange(
+        &endpoint,
+        &register_request("scope-register-again", "scope-operator"),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        again.result.body,
+        ResultBody::Success {
+            payload: ResultPayload::ModelRegister(_),
+            ..
+        }
+    ));
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    // The daemon, not the client, wrote the registry.
+    let store = Store::open(&state_path).unwrap();
+    let models = store.list_models().await.unwrap();
+    store.shutdown().await.unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.key.id())
+            .collect::<Vec<_>>(),
+        vec!["qwen/routed-model".to_owned()]
+    );
+
+    let _ = fs::remove_dir_all(runtime);
+}
+
+/// Revocation is baseline because it is bound to the requesting caller: this
+/// sends the real envelope for one caller and proves the other caller's
+/// identical grant survives it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grant_revoke_drops_only_the_requesting_callers_own_grants() {
+    let runtime = test_runtime("daemon-scope-grant-revoke");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed_caller(&seed, "other-operator", TEST_CREDENTIAL).await;
+    // Neither caller holds a `grant.revoke` grant: admission comes from the
+    // policy baseline alone.
+    daemon_scope_grant(&seed, "own-infer-grant", "scope-operator", "model.infer").await;
+    daemon_scope_grant(&seed, "other-infer-grant", "other-operator", "model.infer").await;
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    let revoked = request_exchange(
+        &endpoint,
+        &authenticated(
+            RequestEnvelope::grant_revoke(
+                RequestId::from("scope-revoke"),
+                CallerId::from("scope-operator"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("scope-revoke-key"),
+                "model.infer",
+            )
+            .unwrap(),
+        ),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::GrantRevoke(result),
+    } = revoked.result.body
+    else {
+        panic!("a baseline revocation of the caller's own grant must be served");
+    };
+    assert_eq!(truth, OperationTruth::Changed);
+    assert_eq!(result.capability, "model.infer");
+    assert_eq!(result.revoked, 1);
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    let store = Store::open(&state_path).unwrap();
+    let now = 3;
+    let own = store
+        .active_grants(
+            CallerId::from("scope-operator"),
+            ProjectId::daemon_scope(),
+            now,
+        )
+        .await
+        .unwrap();
+    let other = store
+        .active_grants(
+            CallerId::from("other-operator"),
+            ProjectId::daemon_scope(),
+            now,
+        )
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+    assert!(own.is_empty(), "the requester's own grant must be gone");
+    assert_eq!(
+        other.len(),
+        1,
+        "another caller's identical grant must survive"
+    );
+
     let _ = fs::remove_dir_all(runtime);
 }

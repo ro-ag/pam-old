@@ -591,6 +591,18 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             escape_text(&result.detail),
             truth_label(truth)
         ),
+        ResultPayload::ModelRegister(result) => format!(
+            "model={} registered_at_ms={} truth={}\n",
+            escape_text(&result.model),
+            result.registered_at_ms,
+            truth_label(truth)
+        ),
+        ResultPayload::GrantRevoke(result) => format!(
+            "capability={} revoked={} truth={}\n",
+            escape_text(&result.capability),
+            result.revoked,
+            truth_label(truth)
+        ),
     }
 }
 

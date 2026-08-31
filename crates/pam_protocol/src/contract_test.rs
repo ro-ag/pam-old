@@ -13,11 +13,11 @@ use super::{
     ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FLOW_PROJECT_ROOT_BYTES,
     MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_TOKENS,
     MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
-    ProjectRequestState, ProjectRequestSummary, ProtocolContractError, ReplayResult,
-    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, SourceAvailability,
-    StatusResult,
+    ModelGenerationResult, ModelMessage, ModelRegistration, ModelRole, ModelStatusResult,
+    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
+    ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary, ProtocolContractError,
+    ReplayResult, RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload,
+    SourceAvailability, StatusResult,
 };
 
 const PROJECT_ROOT: &str = "/canonical/project";
@@ -1270,4 +1270,116 @@ fn connector_test_is_policy_named_and_results_carry_no_secret_fields() {
     // Presence is the only credential fact this contract can carry.
     assert!(rendered.contains("credential_present"));
     assert!(!rendered.contains("secret"));
+}
+
+fn model_registration() -> ModelRegistration {
+    ModelRegistration {
+        model: "qwen/qwen3-4b".to_owned(),
+        path: "/models/qwen/qwen3-4b.gguf".to_owned(),
+        digest: ContentDigest::from_sha256([1; 32]).as_str().to_owned(),
+        size_bytes: 4096,
+        gguf_version: 3,
+        gguf_tensor_count: 17,
+        gguf_metadata_kv_count: 29,
+        license_id: "Apache-2.0".to_owned(),
+        license_url: "https://example.test/license".to_owned(),
+        license_digest: ContentDigest::from_sha256([2; 32]).as_str().to_owned(),
+        source_url: None,
+        registered_at_ms: 5,
+    }
+}
+
+#[test]
+fn model_register_is_authenticated_and_policy_named() {
+    let request = RequestEnvelope::model_register(
+        RequestId::from("model-register-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-register-key"),
+        model_registration(),
+    )
+    .unwrap();
+
+    assert_eq!(request.capability, Capability::ModelRegister);
+    assert_eq!(request.capability.policy_name(), "model.register");
+    assert!(request.authentication.is_none());
+    assert!(request.validate_model_request().is_ok());
+}
+
+#[test]
+fn model_register_rejects_registrations_the_registry_could_not_hold() {
+    let unregistrable = [
+        ModelRegistration {
+            model: "not-a-vendor-name".to_owned(),
+            ..model_registration()
+        },
+        ModelRegistration {
+            path: "models/relative.gguf".to_owned(),
+            ..model_registration()
+        },
+        ModelRegistration {
+            digest: "sha1:deadbeef".to_owned(),
+            ..model_registration()
+        },
+        ModelRegistration {
+            size_bytes: 0,
+            ..model_registration()
+        },
+        ModelRegistration {
+            license_url: "http://example.test/license".to_owned(),
+            ..model_registration()
+        },
+        ModelRegistration {
+            source_url: Some("https://user:pass@example.test/model.gguf".to_owned()),
+            ..model_registration()
+        },
+    ];
+
+    for registration in unregistrable {
+        let error = RequestEnvelope::model_register(
+            RequestId::from("model-register-1"),
+            CallerId::from("gui-1"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("model-register-key"),
+            registration,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ProtocolContractError::InvalidModelRegistration);
+    }
+}
+
+#[test]
+fn grant_revoke_names_only_a_capability_and_rejects_malformed_ones() {
+    let request = RequestEnvelope::grant_revoke(
+        RequestId::from("grant-revoke-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("grant-revoke-key"),
+        "model.infer",
+    )
+    .unwrap();
+
+    assert_eq!(request.capability, Capability::GrantRevoke);
+    assert_eq!(request.capability.policy_name(), "grant.revoke");
+    assert_eq!(
+        request.payload,
+        RequestPayload::GrantRevoke {
+            capability: "model.infer".to_owned(),
+        }
+    );
+    assert!(request.validate_grant_request().is_ok());
+
+    for malformed in ["", "Model.Infer", "model..infer", &"m".repeat(129)] {
+        let error = RequestEnvelope::grant_revoke(
+            RequestId::from("grant-revoke-1"),
+            CallerId::from("gui-1"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("grant-revoke-key"),
+            malformed,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ProtocolContractError::InvalidGrantCapability);
+    }
 }
