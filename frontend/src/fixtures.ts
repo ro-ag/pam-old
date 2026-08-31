@@ -101,10 +101,15 @@ const daemonLogEntries: DaemonLogEntryDto[] = [
 ];
 
 const DAY_MS = 86_400_000;
-// Anchored to the wall clock so the overview heatmap demo fills to today.
+// Anchored to the wall clock so the overview heatmap demo fills to today. The
+// span must cover HEATMAP_DAYS or the demo grid renders empty leading columns
+// that look like a rendering fault rather than a short fixture; fixtures.test
+// pins the two together. Not imported from the view: bridge.ts imports this
+// module, so reaching back into a view would close an import cycle.
+const DAEMON_STAT_DAYS = 364;
 const statsAnchorDay = Math.floor(Date.now() / DAY_MS) * DAY_MS;
-const daemonStatDays: ActivityDayDto[] = Array.from({ length: 140 }, (_, index) => ({
-  dayStartMs: statsAnchorDay - (139 - index) * DAY_MS,
+const daemonStatDays: ActivityDayDto[] = Array.from({ length: DAEMON_STAT_DAYS }, (_, index) => ({
+  dayStartMs: statsAnchorDay - (DAEMON_STAT_DAYS - 1 - index) * DAY_MS,
   events: (index * 7) % 11 === 0 ? 0 : ((index * 13) % 23) + 1,
 })).filter((day) => day.events > 0);
 

@@ -137,9 +137,15 @@ by the full-width heatmap panel; Activity opens with the same strip carrying
 three tiles. At the supported width the strip is a single row of exactly as
 many equal cells as it has tiles (`grid-auto-flow: column`), never an auto-fit
 reflow with an orphan second row; below the wide breakpoint it degrades to
-auto-fit `minmax(176px, 1fr)` and may wrap. The heatmap fills the panel width
-at desktop sizes and scrolls horizontally only when the panel is narrower than
-its content.
+auto-fit `minmax(176px, 1fr)` and may wrap. The heatmap covers the trailing 52 weeks, the
+window HEATMAP_WEEKS in `OverviewView.tsx` requests from `daemon.stats` and
+sizes the grid from; widening it past 52 weeks means raising the daemon's
+MAX_STATS_DAYS (366) and the store's MAX_ACTIVITY_DAYS (400) first. A month
+axis sits above the grid and Mon/Wed/Fri labels beside it, both sharing the
+cell tracks so they stay aligned; the intensity key sits in the panel header,
+outside the plot. Columns stretch from an 11px floor, so a year fills the panel
+on a 2K window and stays legible on a narrow one, and each cell takes its
+height from its own width to stay square at any column width.
 
 The two workspace-internal panes are fixed-width, not percentage-elastic: a
 percentage track grows with the window, so the same catalog reflowed at every

@@ -1,5 +1,5 @@
 import { Brain, CalendarBlank, Lightning, Pulse, Queue } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { withDaemonOperation } from "../bridge";
 import { PanelEmpty, PanelError } from "../components/PanelState";
 import type {
@@ -15,7 +15,18 @@ import { presentError } from "../state";
 import { formatModelSize } from "./ActivityView";
 
 const DAY_MS = 86_400_000;
-export const HEATMAP_WEEKS = 26;
+/**
+ * The one knob for the activity window: widen it and the requested days, the
+ * grid, the month axis and the copy all follow.
+ *
+ * Ceiling: the daemon clamps `daemon.stats` at MAX_STATS_DAYS (366) and the
+ * store retains MAX_ACTIVITY_DAYS (400), so going past 52 weeks here means
+ * raising those first — otherwise the served window is shorter than the grid
+ * and the extra columns render permanently empty.
+ */
+export const HEATMAP_WEEKS = 52;
+/** The window the daemon is asked for, so the grid is never wider than its data. */
+export const HEATMAP_DAYS = HEATMAP_WEEKS * 7;
 
 export interface HeatmapCell {
   dayStartMs: number;
@@ -53,6 +64,41 @@ export function buildHeatmapWeeks(days: ActivityDayDto[], todayStartMs: number):
     weeks.push(column);
   }
   return weeks;
+}
+
+export interface HeatmapMonth {
+  label: string;
+  /** 1-based grid column of the week this month starts on. */
+  column: number;
+  span: number;
+}
+
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** The weekday rows that carry a label, matching the calendar convention. */
+export const HEATMAP_WEEKDAYS: ReadonlyArray<{ row: number; label: string }> = [
+  { row: 2, label: "Mon" },
+  { row: 4, label: "Wed" },
+  { row: 6, label: "Fri" },
+];
+
+// One label per month, placed on the column where that month first appears.
+// A run too narrow to hold its label is dropped rather than overlapped.
+export function buildHeatmapMonths(weeks: HeatmapCell[][]): HeatmapMonth[] {
+  const months: HeatmapMonth[] = [];
+  weeks.forEach((week, index) => {
+    const month = new Date(week[0].dayStartMs).getUTCMonth();
+    const previous = months.at(-1);
+    if (previous && previous.label === MONTH_LABELS[month]) {
+      previous.span += 1;
+      return;
+    }
+    months.push({ label: MONTH_LABELS[month], column: index + 1, span: 1 });
+  });
+  return months.filter((month) => month.span >= 3);
 }
 
 export interface ActivityStreaks {
@@ -141,7 +187,7 @@ export function useDaemonStats(bridge: PamBridge, daemon: DaemonView, refreshTic
     setLoadError(null);
     try {
       // Activity statistics are daemon-global: always the daemon authority.
-      const response = await bridge.daemonStats(withDaemonOperation());
+      const response = await bridge.daemonStats(withDaemonOperation(), HEATMAP_DAYS);
       if (sequence !== requestSequence.current) return;
       setStats(response);
     } catch (error) {
@@ -226,6 +272,7 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
   const days = stats?.status === "ok" ? stats.days : [];
   const streaks = computeStreaks(days, todayStartMs);
   const weeks = buildHeatmapWeeks(days, todayStartMs);
+  const months = buildHeatmapMonths(weeks);
 
   return (
     <>
@@ -250,7 +297,7 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
           icon={<Lightning size={21} weight="bold" />}
           label="Events"
           value={streaks.totalEvents.toLocaleString()}
-          hint="last 26 weeks"
+          hint={`last ${HEATMAP_WEEKS} weeks`}
         />
         <StatTile
           icon={<CalendarBlank size={21} weight="bold" />}
@@ -269,7 +316,14 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
         <div className="panel-title">
           <div>
             <span className="eyebrow">Daemon activity</span>
-            <h2 id="overview-heatmap-heading">The last 26 weeks</h2>
+            <h2 id="overview-heatmap-heading">{`The last ${HEATMAP_WEEKS} weeks`}</h2>
+          </div>
+          <div className="heatmap-legend" aria-hidden="true">
+            <small>Less</small>
+            {[0, 1, 2, 3, 4].map((level) => (
+              <span className={`heatmap-cell heat-${level}`} key={level} />
+            ))}
+            <small>More</small>
           </div>
         </div>
         {loadError ? (
@@ -284,25 +338,44 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
           </PanelEmpty>
         ) : (
           <div className="heatmap-scroll">
-            <div className="heatmap" role="img" aria-label="Daily daemon activity for the last 26 weeks">
-              {weeks.map((week) => (
-                <div className="heatmap-week" key={week[0].dayStartMs}>
-                  {week.map((cell) => (
-                    <span
-                      key={cell.dayStartMs}
-                      className={`heatmap-cell heat-${cell.intensity}${cell.inWindow ? "" : " heatmap-cell--outside"}`}
-                      title={`${formatDay(cell.dayStartMs)} · ${cell.events} event${cell.events === 1 ? "" : "s"}`}
-                    />
-                  ))}
-                </div>
-              ))}
-            </div>
-            <div className="heatmap-legend" aria-hidden="true">
-              <small>Less</small>
-              {[0, 1, 2, 3, 4].map((level) => (
-                <span className={`heatmap-cell heat-${level}`} key={level} />
-              ))}
-              <small>More</small>
+            <div
+              className="heatmap-figure"
+              style={{ "--heatmap-weeks": HEATMAP_WEEKS } as CSSProperties}
+            >
+              <div className="heatmap-months" aria-hidden="true">
+                {months.map((month) => (
+                  <span
+                    key={`${month.label}-${month.column}`}
+                    style={{ gridColumn: `${month.column} / span ${month.span}` }}
+                  >
+                    {month.label}
+                  </span>
+                ))}
+              </div>
+              <div className="heatmap-weekdays" aria-hidden="true">
+                {HEATMAP_WEEKDAYS.map((weekday) => (
+                  <span key={weekday.label} style={{ gridRow: weekday.row }}>
+                    {weekday.label}
+                  </span>
+                ))}
+              </div>
+              <div
+                className="heatmap"
+                role="img"
+                aria-label={`Daily daemon activity for the last ${HEATMAP_WEEKS} weeks: ${streaks.totalEvents.toLocaleString()} events across ${streaks.activeDays} active days`}
+              >
+                {weeks.map((week) => (
+                  <div className="heatmap-week" key={week[0].dayStartMs}>
+                    {week.map((cell) => (
+                      <span
+                        key={cell.dayStartMs}
+                        className={`heatmap-cell heat-${cell.intensity}${cell.inWindow ? "" : " heatmap-cell--outside"}`}
+                        title={`${formatDay(cell.dayStartMs)} · ${cell.events} event${cell.events === 1 ? "" : "s"}`}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

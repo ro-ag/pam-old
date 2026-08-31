@@ -1491,11 +1491,24 @@ label.model-import-consent { display: flex; align-items: center; gap: 8px; color
 /* Control-center overview heatmap */
 .heatmap-panel { padding-bottom: 14px; }
 .heatmap-scroll { overflow-x: auto; padding: 6px 18px 12px; }
-.heatmap { display: flex; gap: 3px; width: 100%; min-width: max-content; justify-content: space-between; }
-.heatmap-week { display: flex; flex-direction: column; gap: 3px; }
+/* A year of columns only fits by being dense: the cell and gap are fixed, and
+   the month axis reuses the same track so its labels stay column-aligned.
+   --heatmap-weeks comes from HEATMAP_WEEKS, so widening the window widens the
+   axis with it. */
+/* Columns stretch from a dense floor, so a year fills the panel on a 2K window
+   and stays legible on a narrow one; the cell takes its height from its own
+   width, which keeps every cell square at any column width. The weekday gutter
+   and the cell grid share one figure row, so the gutter's seven 1fr rows land
+   on the seven cell rows without either knowing the other's size. */
+.heatmap-figure { --heatmap-cell: 11px; --heatmap-gap: 2px; --heatmap-gutter: 26px; display: grid; width: 100%; grid-template-columns: var(--heatmap-gutter) minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 4px; row-gap: 3px; }
+.heatmap-months { display: grid; grid-column: 2; grid-row: 1; grid-template-columns: repeat(var(--heatmap-weeks), minmax(var(--heatmap-cell), 1fr)); column-gap: var(--heatmap-gap); color: var(--pam-muted); font-size: 10px; }
+.heatmap-months span { overflow: visible; white-space: nowrap; }
+.heatmap-weekdays { display: grid; grid-column: 1; grid-row: 2; grid-template-rows: repeat(7, 1fr); row-gap: var(--heatmap-gap); align-items: center; justify-items: end; color: var(--pam-muted); font-size: 10px; }
+.heatmap { display: grid; grid-column: 2; grid-row: 2; grid-auto-flow: column; grid-auto-columns: minmax(var(--heatmap-cell), 1fr); column-gap: var(--heatmap-gap); }
+.heatmap-week { display: grid; grid-template-rows: repeat(7, auto); row-gap: var(--heatmap-gap); }
 /* Five measured steps per mode: adjacent levels stay >=12 L* apart and the
    empty cell keeps >=1.5:1 contrast against level 1 (see design-qa.md). */
-.heatmap-cell { width: 12px; height: 12px; border-radius: 3px; background: color-mix(in srgb, var(--pam-text) 7%, var(--pam-surface-raised)); }
+.heatmap-cell { width: 100%; aspect-ratio: 1; min-width: var(--heatmap-cell, 11px); border-radius: 3px; background: color-mix(in srgb, var(--pam-text) 7%, var(--pam-surface-raised)); }
 .heatmap-cell--outside { opacity: 0; }
 .heat-1 { background: color-mix(in srgb, var(--pam-violet) 42%, var(--pam-surface-raised)); }
 .heat-2 { background: color-mix(in srgb, var(--pam-violet) 68%, var(--pam-surface-raised)); }
@@ -1505,7 +1518,9 @@ label.model-import-consent { display: flex; align-items: center; gap: 8px; color
 :root[data-mode="dark"] .heat-2 { background: color-mix(in srgb, var(--pam-violet) 56%, var(--pam-surface-raised)); }
 :root[data-mode="dark"] .heat-3 { background: color-mix(in srgb, var(--pam-violet) 78%, var(--pam-surface-raised)); }
 :root[data-mode="dark"] .heat-4 { background: var(--pam-violet); }
-.heatmap-legend { display: flex; align-items: center; gap: 4px; padding: 0 18px; color: var(--pam-muted); }
+.heatmap-legend { display: flex; align-items: center; gap: 4px; margin-left: auto; color: var(--pam-muted); }
+/* The legend swatch is a fixed key, not a data cell, so it keeps its own size. */
+.heatmap-legend .heatmap-cell { width: 11px; min-width: 11px; }
 .project-detail { margin-top: 4px; }
 
 /* Control-center projects panel: the whole known fleet, display-only */
