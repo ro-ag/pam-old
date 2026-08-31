@@ -308,6 +308,13 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .sidebar-footer { display: grid; width: 100%; gap: var(--pam-space-100); margin-top: auto; }
 .daemon-control { display: flex; min-height: 32px; gap: var(--pam-space-100); align-items: center; padding: 0 var(--pam-space-100); border: 0; color: var(--pam-content-secondary); background: transparent; cursor: pointer; font-size: 11px; text-align: left; }
 .sidebar.is-collapsed .daemon-control { justify-content: center; padding: 0; }
+.daemon-section { display: grid; gap: 4px; }
+.daemon-status { display: flex; min-height: 18px; gap: var(--pam-space-100); align-items: center; margin: 0; padding: 0 var(--pam-space-100); color: var(--pam-muted); font-size: 11px; }
+.sidebar.is-collapsed .daemon-status { justify-content: center; padding: 0; }
+.sidebar.is-collapsed .daemon-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.daemon-confirm { padding: 0 var(--pam-space-100) 2px; line-height: 1.35; }
+.sidebar.is-collapsed .daemon-confirm { display: grid; gap: 4px; padding: 0; justify-items: stretch; font-size: 10px; }
+.sidebar.is-collapsed .daemon-confirm .button { min-height: 26px; padding: 0 4px; font-size: 10px; }
 .utility-nav { display: flex; gap: 3px; }
 .utility-nav button, .toolbar button, .drawer-close {
   display: grid;
@@ -909,6 +916,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   .sidebar.is-collapsed .nav-separator { margin: 8px 2px; border-top: 0; border-left: 1px solid var(--pam-chrome-separator); }
   .sidebar.is-collapsed .sidebar-footer { width: auto; margin: 0 0 0 auto; }
   .sidebar.is-collapsed .daemon-control { width: 36px; min-height: 38px; }
+  .sidebar.is-collapsed .daemon-status { min-height: 0; }
   .sidebar:not(.is-collapsed) { position: fixed; height: 100vh; }
   .resize-separator { display: none; }
   .workspace { height: 100dvh; grid-column: 1; grid-row: 2; grid-template-rows: auto minmax(0, 1fr); margin: var(--pam-space-050); }
@@ -1015,6 +1023,9 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .daemon-row .daemon-control { min-width: 0; flex: 1 1 auto; }
 .daemon-restart { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; padding: 0; border: 0; border-radius: 8px; color: var(--pam-chrome-muted); background: transparent; cursor: pointer; }
 .daemon-restart:hover { color: var(--pam-chrome-text); background: var(--pam-chrome-raised); }
+.daemon-restart:disabled { color: var(--pam-chrome-muted); background: transparent; cursor: not-allowed; opacity: 0.45; }
+.daemon-status { color: var(--pam-chrome-muted); }
+.daemon-confirm { font-size: 11px; }
 .daemon-control { min-height: max(28px, calc(38px * var(--pam-density))); padding: 0 12px; border-radius: 10px; color: var(--pam-chrome-muted); }
 .daemon-control:hover { color: var(--pam-chrome-text); background: var(--pam-chrome-raised); }
 .utility-nav button { width: 34px; height: 34px; color: var(--pam-chrome-muted); }

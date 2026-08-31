@@ -228,11 +228,11 @@ function healthView(health: HealthDto) {
   if (health.status === "healthy") {
     return {
       health: health.queueDepth > 0 ? "busy" as const : "ready" as const,
-      daemon: { state: "running" as const, detail: "PAM is on watch", model: `Daemon ${health.daemonVersion}`, modelMemory: null, queueDepth: health.queueDepth },
+      daemon: { state: "running" as const, detail: "Running", model: `Daemon ${health.daemonVersion}`, modelMemory: null, queueDepth: health.queueDepth },
     };
   }
   if (health.status === "offline") {
-    return { health: "offline" as const, daemon: { state: "stopped" as const, detail: "PAM is paused", model: null, modelMemory: null, queueDepth: null } };
+    return { health: "offline" as const, daemon: { state: "stopped" as const, detail: "Stopped", model: null, modelMemory: null, queueDepth: null } };
   }
   return { health: "attention" as const, daemon: { state: "unavailable" as const, detail: health.detail, model: null, modelMemory: null, queueDepth: null } };
 }

@@ -469,7 +469,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
     const stopping = daemon.state === "running";
     void runDaemonLifecycle(
       () => stopping ? bridge.stopDaemon(withDaemonOperation()) : bridge.startDaemon(withDaemonOperation()),
-      stopping ? "PAM is paused" : "PAM is back on watch",
+      stopping ? "PAM stopped" : "PAM started",
     );
   };
   const restartDaemon = () => {
