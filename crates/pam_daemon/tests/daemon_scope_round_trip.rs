@@ -473,6 +473,19 @@ fn register_request(request_id: &str, caller: &str) -> RequestEnvelope {
     )
 }
 
+fn unregister_request(request_id: &str, caller: &str, model: &str) -> RequestEnvelope {
+    authenticated(
+        RequestEnvelope::model_unregister(
+            RequestId::from(request_id),
+            CallerId::from(caller),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::new(format!("{request_id}-key")),
+            model,
+        )
+        .unwrap(),
+    )
+}
+
 async fn daemon_scope_grant(store: &Store, id: &str, caller: &str, capability: &str) {
     store
         .put_grant(pam_store::PutGrant {
@@ -579,6 +592,142 @@ async fn model_register_needs_its_grant_and_then_writes_the_registry() {
             .collect::<Vec<_>>(),
         vec!["qwen/routed-model".to_owned()]
     );
+
+    let _ = fs::remove_dir_all(runtime);
+}
+
+/// Unregistering is the disposal half of the registry, and it is refused
+/// until the owner grants it: this drives the real envelope through the
+/// daemon's own dispatch, then proves the row and the audit line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// One daemon proves the whole disposal boundary: refusal, not-found, removal.
+#[allow(clippy::too_many_lines)]
+async fn model_unregister_needs_its_grant_and_then_removes_the_registry_row() {
+    let runtime = test_runtime("daemon-scope-model-unregister");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed_caller(&seed, "ungranted-operator", TEST_CREDENTIAL).await;
+    daemon_scope_grant(
+        &seed,
+        "daemon-scope-register-grant",
+        "scope-operator",
+        "model.register",
+    )
+    .await;
+    daemon_scope_grant(
+        &seed,
+        "daemon-scope-unregister-grant",
+        "scope-operator",
+        "model.unregister",
+    )
+    .await;
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    request_exchange(
+        &endpoint,
+        &register_request("scope-unregister-seed", "scope-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+
+    // `model.unregister` is not baseline: an ungranted caller is refused, and
+    // the refusal carries the exact grant command.
+    let denied = request_exchange(
+        &endpoint,
+        &unregister_request(
+            "scope-unregister-denied",
+            "ungranted-operator",
+            "qwen/routed-model",
+        ),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = denied.result.body else {
+        panic!("an ungranted caller must not unregister a model");
+    };
+    assert_eq!(failure.code, FailureCode::Forbidden);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("pam access grant model.unregister --daemon --resource model:qwen/routed-model")
+    );
+
+    // A model that was never registered is a plain not-found.
+    let missing = request_exchange(
+        &endpoint,
+        &unregister_request("scope-unregister-missing", "scope-operator", "qwen/absent"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(missing.result.body, ResultBody::Failure(ref failure) if failure.code == FailureCode::NotFound),
+        "an unregistered model must report not-found: {:?}",
+        missing.result.body
+    );
+
+    // The granted caller removes the row, and the acknowledgement describes
+    // exactly what left the registry.
+    let removed = request_exchange(
+        &endpoint,
+        &unregister_request("scope-unregister", "scope-operator", "qwen/routed-model"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelUnregister(acknowledged),
+    } = removed.result.body
+    else {
+        panic!("a granted daemon-scope unregistration must be served");
+    };
+    assert_eq!(truth, OperationTruth::Changed);
+    assert_eq!(acknowledged.model, "qwen/routed-model");
+    assert_eq!(acknowledged.size_bytes, 64);
+    assert_eq!(
+        acknowledged.digest,
+        ContentDigest::from_sha256([7; 32]).as_str()
+    );
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    // The daemon, not the client, wrote the registry — and left an audit line
+    // for the change it made.
+    let store = Store::open(&state_path).unwrap();
+    let models = store.list_models().await.unwrap();
+    let events = store
+        .export_audit_events(ProjectId::daemon_scope(), 0, None, 100)
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+    assert!(
+        models.is_empty(),
+        "the registry row must be gone: {models:?}"
+    );
+    let unregistered = events
+        .events
+        .iter()
+        .find(|event| event.action == "model.unregister")
+        .expect("unregistering must leave a changed-truth audit line");
+    assert_eq!(unregistered.decision, "allow");
+    assert_eq!(unregistered.outcome, "unregistered");
+    assert!(
+        unregistered
+            .redacted_detail
+            .contains("model=qwen/routed-model"),
+        "the audit detail must name the model: {}",
+        unregistered.redacted_detail
+    );
+    assert!(unregistered.redacted_detail.contains("size_bytes=64"));
 
     let _ = fs::remove_dir_all(runtime);
 }

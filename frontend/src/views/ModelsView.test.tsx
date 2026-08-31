@@ -26,6 +26,7 @@ async function modelProps(scenario: FixtureScenario = "solved") {
     onOpenModelChat: vi.fn(),
     onStartWithModel: vi.fn(),
     onModelImported: vi.fn(),
+    onModelUnregistered: vi.fn(),
   };
 }
 
@@ -123,6 +124,77 @@ describe("model runtime panel", () => {
       within(panel).getAllByRole("button", { name: /Restart PAM with this model/ })[0],
     );
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
+  });
+
+  it("offers an unregister action on every registered catalog row", async () => {
+    const props = await modelProps("model-on-deck");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const rows = within(panel).getAllByRole("article");
+
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(within(row).getByRole("button", { name: "Unregister" })).toBeInTheDocument();
+    }
+  });
+
+  it("gates unregistering behind a confirmation that says the weights stay on disk", async () => {
+    const props = await modelProps("model-on-deck");
+    const unregister = vi.spyOn(props.bridge, "modelUnregister");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Unregister" }));
+
+    expect(
+      within(row).getByText(/Remove qwen\/qwen3-14b-instruct-q4 from PAM's registry\? The GGUF file stays on disk\./),
+    ).toBeInTheDocument();
+    expect(unregister).not.toHaveBeenCalled();
+
+    // Keeping the model backs out without touching durable state.
+    await userEvent.click(within(row).getByRole("button", { name: "Keep" }));
+    expect(unregister).not.toHaveBeenCalled();
+    expect(within(row).getByRole("button", { name: "Unregister" })).toBeInTheDocument();
+  });
+
+  it("confirms the removal through the bridge and reports the model that left", async () => {
+    const props = await modelProps("model-on-deck");
+    const unregister = vi.spyOn(props.bridge, "modelUnregister");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Unregister" }));
+    await userEvent.click(within(row).getAllByRole("button", { name: "Unregister" })[0]);
+
+    await waitFor(() =>
+      expect(unregister).toHaveBeenCalledWith(
+        expect.objectContaining({ projectHandle: "daemon" }),
+        "qwen/qwen3-14b-instruct-q4",
+      ),
+    );
+    await waitFor(() =>
+      expect(props.onModelUnregistered).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4"),
+    );
+  });
+
+  it("keeps a refused removal beside its row with the recovery line", async () => {
+    const props = await modelProps("model-unregister-blocked");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Unregister" }));
+    await userEvent.click(within(row).getAllByRole("button", { name: "Unregister" })[0]);
+
+    const refusal = await within(row).findByRole("alert");
+    expect(refusal).toHaveTextContent("Project policy has not granted model.unregister to this caller yet.");
+    expect(refusal).toHaveTextContent(
+      "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.",
+    );
+    expect(props.onModelUnregistered).not.toHaveBeenCalled();
   });
 
   it("imports a model entirely from the panel when none is registered", async () => {

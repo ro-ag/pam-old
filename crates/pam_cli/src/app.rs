@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    fmt::Write as _,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -28,6 +29,7 @@ use pam_store::{
     AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, CallerAuthentication,
     CallerRevocation, EvidencePruneOutcome, EvidenceRetention, GrantRevocation, PutGrant, Store,
 };
+use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -37,7 +39,7 @@ use crate::{
     evidence::{EvidenceError, download_evidence, write_new_output},
     flow::{FlowCatalog, FlowCatalogError},
     render::{
-        EXIT_OPERATION_FAILED, EXIT_PENDING, Presentation, escape_text, present_result,
+        EXIT_OK, EXIT_OPERATION_FAILED, EXIT_PENDING, Presentation, escape_text, present_result,
         render_events,
     },
     request::{
@@ -656,6 +658,169 @@ fn hash_model_import_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
 }
+
+/// Removes one model's registration through the daemon that owns the store.
+///
+/// This is a durable change to daemon-owned state, so it is routed as a
+/// capability request rather than written locally: the daemon authorizes it,
+/// refuses it while that model is loaded, and records the audit line. The
+/// weights on disk are never touched.
+pub(crate) async fn model_unregister(
+    model: ModelKey,
+    yes: bool,
+    approval_id: Option<ApprovalId>,
+) -> i32 {
+    if !yes {
+        eprintln!(
+            "Unregistering {model} removes its registry entry. Re-run with --yes to confirm. The GGUF file on disk is never deleted."
+        );
+        return EXIT_OPERATION_FAILED;
+    }
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    let request = match context.model_unregister(model.id()) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("{}", escape_text(&error.to_string()));
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    match exchange(&request, READ_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model unregistration"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::ModelUnregister(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("model unregistration"),
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Reports the daemon's model surface: registered count, loaded model, and the
+/// reason a requested model is not serving.
+pub(crate) async fn model_status(approval_id: Option<ApprovalId>) -> i32 {
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    match exchange(&context.model_status(), READ_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model status"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::ModelStatus(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("model status"),
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Prints the registered model catalog from the durable registry.
+///
+/// The catalog is daemon-global durable state and this is a plain observation
+/// of it, so it reads the store directly and works outside any project — the
+/// same way the local skills inventory listing does.
+pub(crate) async fn model_list(json: bool) -> i32 {
+    let data_dir = match user_data_dir() {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            report_identity_error(&error);
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    let store = match Store::open(data_dir.join("state.sqlite3")) {
+        Ok(store) => store,
+        Err(error) => return report_store_error(&error),
+    };
+    let catalog = store.list_models().await;
+    let shutdown = store.shutdown().await;
+    let catalog = match catalog {
+        Ok(catalog) => catalog,
+        Err(error) => return report_store_error(&error),
+    };
+    if let Err(error) = shutdown {
+        return report_store_error(&error);
+    }
+    match render_model_catalog(&catalog, json) {
+        Ok(rendered) => {
+            print!("{rendered}");
+            EXIT_OK
+        }
+        Err(error) => {
+            eprintln!("{}", escape_text(&error.to_string()));
+            EXIT_OPERATION_FAILED
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonModelCatalog {
+    schema_version: u32,
+    models: Vec<JsonRegisteredModel>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonRegisteredModel {
+    model: String,
+    size_bytes: u64,
+    digest: String,
+    source: &'static str,
+    source_url: Option<String>,
+    registered_at_ms: u64,
+}
+
+pub(crate) fn render_model_catalog(
+    catalog: &[pam_model::RegisteredModel],
+    json: bool,
+) -> Result<String, serde_json::Error> {
+    if json {
+        return serde_json::to_string_pretty(&JsonModelCatalog {
+            schema_version: MODEL_CATALOG_SCHEMA_VERSION,
+            models: catalog
+                .iter()
+                .map(|model| JsonRegisteredModel {
+                    model: model.key.id(),
+                    size_bytes: model.size_bytes,
+                    digest: model.digest.as_str().to_owned(),
+                    source: model.source.kind(),
+                    source_url: model.source.identity().map(str::to_owned),
+                    registered_at_ms: model.registered_at_ms,
+                })
+                .collect(),
+        })
+        .map(|rendered| format!("{rendered}\n"));
+    }
+    let mut rendered = format!("models={} truth=observed\n", catalog.len());
+    for model in catalog {
+        let _ = writeln!(
+            rendered,
+            "model={} size_bytes={} digest={} source={} registered_at_ms={}",
+            escape_text(&model.key.id()),
+            model.size_bytes,
+            escape_text(model.digest.as_str()),
+            model.source.kind(),
+            model.registered_at_ms
+        );
+    }
+    Ok(rendered)
+}
+
+const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 pub(crate) async fn model_generate(
     model: ModelKey,

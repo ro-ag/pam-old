@@ -432,6 +432,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .console-line p { font-family: var(--pam-font-mono); font-size: 12.5px; }
 .access-icon { display: grid; width: calc(37px * var(--pam-density)); height: calc(37px * var(--pam-density)); place-items: center; border: 1px solid color-mix(in srgb, var(--pam-violet) 26%, transparent); border-radius: 50%; color: var(--pam-copper); }
 .access-list article > div { display: grid; min-width: 0; gap: 4px; }
+/* Per-model row actions sit in the row's third column and wrap together;
+   the inline confirmation joins them rather than displacing the row. */
+.access-list article > .model-row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
 .access-list p { margin: 0; overflow-wrap: anywhere; color: var(--pam-muted); font-size: 13px; }
 .daemon-access-action { display: flex; gap: 10px; align-items: center; justify-content: end; }
 .state-pill { display: inline-flex; width: max-content; padding: 3px 8px; border: 1px solid rgba(236, 188, 151, 0.28); border-radius: 999px; color: var(--pam-muted); font-size: 9px; font-weight: 850; letter-spacing: 0.04em; text-transform: uppercase; }

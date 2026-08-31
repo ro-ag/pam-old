@@ -1,10 +1,13 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     app::{
         FlowResponseKind, audit_export, flow_recovery_cursor, flow_response_matches,
-        flow_run_retry, migrate_legacy_flows, model_import, model_import_resource, retention_prune,
-        select_flow,
+        flow_run_retry, migrate_legacy_flows, model_import, model_import_resource,
+        model_unregister, render_model_catalog, retention_prune, select_flow,
     },
     command::RetentionScopeArg,
     flow::FlowCatalog,
@@ -13,7 +16,9 @@ use crate::{
 };
 
 use pam_core::{CallerId, ContentDigest, IdempotencyKey, RequestId};
-use pam_model::{LicenseSnapshot, ModelDescriptor, ModelKey};
+use pam_model::{
+    GgufMetadata, LicenseSnapshot, ModelDescriptor, ModelKey, ModelSource, RegisteredModel,
+};
 use pam_platform::discover_project;
 use pam_protocol::{
     CancellationDisposition, CancellationResult, Failure, FailureCode, OperationTruth,
@@ -170,6 +175,86 @@ async fn model_import_requires_explicit_license_acceptance_before_path_or_store_
         .await,
         EXIT_OPERATION_FAILED
     );
+}
+
+#[tokio::test]
+async fn model_unregister_requires_explicit_confirmation_before_any_daemon_exchange() {
+    // No daemon runs in this test: reaching the exchange at all would fail
+    // differently, so the refusal proves consent is checked first.
+    assert_eq!(
+        model_unregister(ModelKey::new("vendor", "model").unwrap(), false, None).await,
+        EXIT_OPERATION_FAILED
+    );
+}
+
+#[test]
+fn model_catalog_lists_identity_size_digest_source_and_registration_time() {
+    let catalog = vec![
+        catalog_model("acme", "a-model", 24, ModelSource::Local),
+        catalog_model(
+            "byteshape",
+            "qwen3.6-q4ks",
+            16_492_334_496,
+            ModelSource::https("https://models.example/qwen.gguf").unwrap(),
+        ),
+    ];
+
+    let rendered = render_model_catalog(&catalog, false).unwrap();
+    let lines = rendered.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines[0], "models=2 truth=observed");
+    assert_eq!(
+        lines[1],
+        format!(
+            "model=acme/a-model size_bytes=24 digest={} source=local registered_at_ms=42",
+            ContentDigest::from_sha256([1; 32])
+        )
+    );
+    assert!(lines[2].contains("model=byteshape/qwen3.6-q4ks"));
+    assert!(lines[2].contains("source=https"));
+
+    // An empty registry still reports the observation it made.
+    assert_eq!(
+        render_model_catalog(&[], false).unwrap(),
+        "models=0 truth=observed\n"
+    );
+
+    let json = render_model_catalog(&catalog, true).unwrap();
+    assert!(json.contains("\"schemaVersion\": 1"));
+    assert!(json.contains("\"model\": \"acme/a-model\""));
+    assert!(json.contains("\"sizeBytes\": 16492334496"));
+    assert!(json.contains("\"source\": \"https\""));
+    assert!(json.contains("\"registeredAtMs\": 42"));
+}
+
+fn catalog_model(
+    vendor: &str,
+    name: &str,
+    size_bytes: u64,
+    source: ModelSource,
+) -> RegisteredModel {
+    RegisteredModel {
+        key: ModelKey::new(vendor, name).unwrap(),
+        path: PathBuf::from("/models/weights.gguf"),
+        digest: ContentDigest::from_sha256([1; 32]),
+        size_bytes,
+        gguf: GgufMetadata {
+            version: 3,
+            tensor_count: 17,
+            metadata_kv_count: 29,
+            architecture: None,
+            model_name: None,
+            license: None,
+        },
+        license: LicenseSnapshot::new(
+            "Apache-2.0",
+            "https://example.test/LICENSE",
+            ContentDigest::from_sha256([2; 32]),
+        )
+        .unwrap(),
+        source,
+        registered_at_ms: 42,
+    }
 }
 
 #[test]

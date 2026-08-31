@@ -77,9 +77,9 @@ use pam_protocol::{
     DaemonLogsResult, DaemonStatsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
     EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode,
     GrantRevokeResult, LogSeverity, ModelFinishReason, ModelGenerationResult, ModelRegisterResult,
-    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
-    ProjectRequestState as ProtocolProjectRequestState,
+    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelUnregisterResult,
+    ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
+    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
     RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
     SourceAvailability, StatusResult, decode_request_envelope, decode_server_message_envelope,
@@ -1103,6 +1103,17 @@ async fn handle_incoming(
         (Capability::ModelRegister, RequestPayload::ModelRegister { registration }) => {
             handle_model_register(&request, registration.clone(), incoming, &store, &outbound).await
         }
+        (Capability::ModelUnregister, RequestPayload::ModelUnregister { model: requested }) => {
+            handle_model_unregister(
+                &request,
+                requested.clone(),
+                incoming,
+                &store,
+                &outbound,
+                model.loaded.as_ref(),
+            )
+            .await
+        }
         (Capability::GrantRevoke, RequestPayload::GrantRevoke { capability }) => {
             handle_grant_revoke(&request, capability.clone(), incoming, &store, &outbound).await
         }
@@ -1230,6 +1241,7 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::ModelStatus
             | Capability::ModelInfer
             | Capability::ModelRegister
+            | Capability::ModelUnregister
             | Capability::GrantRevoke
             | Capability::NetworkDiagnostics
             | Capability::ConnectorList
@@ -1420,6 +1432,10 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
             | (
                 Capability::ModelRegister,
                 RequestPayload::ModelRegister { .. }
+            )
+            | (
+                Capability::ModelUnregister,
+                RequestPayload::ModelUnregister { .. }
             )
             | (Capability::GrantRevoke, RequestPayload::GrantRevoke { .. })
             | (Capability::FlowRun, RequestPayload::FlowRun { .. })
@@ -1619,7 +1635,10 @@ pub(super) fn policy_resource(
         // the denial's own recovery hint was un-followable. The cost is that a
         // `model.infer` approval binds to the model, not to one exact
         // conversation -- a chat message can never be pre-approved anyway.
-        RequestPayload::ModelInfer { model, .. } => format!("model:{model}"),
+        // `model.unregister` names the same authority: one exact model.
+        RequestPayload::ModelInfer { model, .. } | RequestPayload::ModelUnregister { model } => {
+            format!("model:{model}")
+        }
         // Flow execution requires an exact worktree fingerprint and is prepared by
         // `handle_incoming` before policy evaluation.
         RequestPayload::FlowRun { .. } => return Err(InvalidResourceName),
@@ -1750,6 +1769,7 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::WaitForResult
         | Capability::GetResult
         | Capability::ModelInfer
+        | Capability::ModelUnregister
         | Capability::FlowRun => format!(
             "pam approval approve {approval_id}, then retry the original command with --approval-id {approval_id}"
         ),
@@ -2766,6 +2786,136 @@ async fn handle_model_register(
             ResultPayload::ModelRegister(ModelRegisterResult {
                 model: record.key.id(),
                 registered_at_ms: record.registered_at_ms,
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Message for refusing to unregister the model this daemon currently holds.
+pub(super) const MODEL_UNREGISTER_LOADED_MESSAGE: &str =
+    "the requested model is loaded in this daemon and cannot be unregistered";
+
+/// The refusal for unregistering the model this daemon currently holds, or
+/// `None` when the request names any other model.
+///
+/// A serving daemon maps its model at startup and has no way to release it, so
+/// dropping the registration under a live mapping would leave the runtime
+/// serving an artifact the registry no longer knows. The recovery names the
+/// only route available today: a restart without that model. Task #238 adds
+/// `model.unload`; when it lands this line points at that command instead of a
+/// restart.
+pub(super) fn model_unregister_loaded_refusal(
+    request: &RequestEnvelope,
+    model: &str,
+    requested: &ModelKey,
+    loaded: Option<&ModelKey>,
+) -> Option<ResultEnvelope> {
+    if loaded != Some(requested) {
+        return None;
+    }
+    let mut failure = failure_result(
+        request,
+        FailureCode::LeaseConflict,
+        MODEL_UNREGISTER_LOADED_MESSAGE,
+    );
+    if let ResultBody::Failure(body) = &mut failure.body {
+        body.recovery = Some(format!(
+            "restart PAM without this model using `pam daemon`, then unregister {model}"
+        ));
+    }
+    Some(failure)
+}
+
+/// Removes one model's registration from the durable registry the daemon owns.
+///
+/// The weights are never touched. `pam model import` verifies a GGUF where its
+/// owner already keeps it, so the file on disk is usually not PAM's to delete;
+/// removing bytes is a separate, explicit operation.
+async fn handle_model_unregister(
+    request: &RequestEnvelope,
+    model: String,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    loaded: Option<&LoadedModelService>,
+) -> Result<(), DaemonError> {
+    let Some(key) = model
+        .split_once('/')
+        .and_then(|(vendor, name)| ModelKey::new(vendor, name).ok())
+    else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "model identity is not a valid registry identity",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    // Any other registered model unregisters normally while one is loaded.
+    if let Some(failure) =
+        model_unregister_loaded_refusal(request, &model, &key, loaded.map(|loaded| &loaded.key))
+    {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure)],
+            None,
+        )
+        .await;
+        return Ok(());
+    }
+    let record = match store.delete_model(key).await {
+        Ok(record) => record,
+        Err(StoreError::ModelNotFound(model_id)) => {
+            send_routed(
+                outbound,
+                incoming,
+                vec![ServerMessage::Result(failure_result(
+                    request,
+                    FailureCode::NotFound,
+                    &format!("model {model_id} is not registered"),
+                ))],
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let removed = record.key.id();
+    append_change_audit(
+        store,
+        request,
+        "model.unregister",
+        "unregistered",
+        &format!(
+            "model={removed} size_bytes={} digest={}",
+            record.size_bytes,
+            record.digest.as_str()
+        ),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ModelUnregister(ModelUnregisterResult {
+                model: removed,
+                size_bytes: record.size_bytes,
+                digest: record.digest.as_str().to_owned(),
             }),
         ))],
         None,
@@ -4330,6 +4480,7 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::ModelInfer { .. }
         | RequestPayload::ModelStatus
         | RequestPayload::ModelRegister { .. }
+        | RequestPayload::ModelUnregister { .. }
         | RequestPayload::GrantRevoke { .. }
         | RequestPayload::FlowRun { .. }
         | RequestPayload::ConnectorList

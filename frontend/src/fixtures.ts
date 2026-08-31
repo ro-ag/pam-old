@@ -44,6 +44,7 @@ import type {
   ModelPresetsDto,
   ModelStatusDto,
   ModelSummaryDto,
+  ModelUnregisterDto,
   PamBridge,
   ProjectSummaryDto,
   SnapshotDataDto,
@@ -301,6 +302,7 @@ export const fixtureScenarios = [
   "model-on-deck",
   "model-loading",
   "model-download-fail",
+  "model-unregister-blocked",
   "connector-unconfigured",
   "connector-blocked",
 ] as const;
@@ -735,7 +737,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   let daemonRunning = scenario !== "offline";
   // The registered catalog and the loaded slot depend on the model scenario;
   // startDaemon(model) moves a registered model into the loaded slot.
-  const modelCatalog = scenario === "model-none" || scenario === "model-download-fail" ? [] : registeredModels;
+  let modelCatalog: ModelSummaryDto[] =
+    scenario === "model-none" || scenario === "model-download-fail" ? [] : [...registeredModels];
   let modelLoaded: ModelSummaryDto | null =
     scenario === "model-none" || scenario === "model-on-deck" || scenario === "model-download-fail"
       ? null
@@ -790,6 +793,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   const daemonCapabilities: DaemonCapabilityDto[] = [
     { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
     { capability: "model.register", name: "Model registration", summary: "Models registers an imported or downloaded GGUF in the daemon's registry.", granted: true },
+    { capability: "model.unregister", name: "Model removal", summary: "Models removes a registered model from the daemon's registry; the weights stay on disk.", granted: scenario !== "model-unregister-blocked" },
     { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
     { capability: "connector.configure", name: "Connector configuration", summary: "Access saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
     { capability: "connector.test", name: "Connector self-test", summary: "Access runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
@@ -982,6 +986,46 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           emittedOutputTokens: outputTokens,
         },
       };
+    },
+    async modelUnregister(_fence, model): Promise<ModelUnregisterDto> {
+      if (scenario === "model-unregister-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "forbidden",
+            detail: "Project policy has not granted model.unregister to this caller yet.",
+            recovery: "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.",
+          },
+        };
+      }
+      // The daemon maps its model for its whole life and refuses to drop the
+      // registration under it; the fixture answers exactly as it does.
+      if (daemonRunning && modelLoaded?.modelId === model) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: null,
+            detail: "the requested model is loaded in this daemon and cannot be unregistered",
+            recovery: `restart PAM without this model using \`pam daemon\`, then unregister ${model}`,
+          },
+        };
+      }
+      const removed = modelCatalog.find((entry) => entry.modelId === model);
+      if (!removed) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "not_found",
+            detail: `model ${model} is not registered`,
+            recovery: null,
+          },
+        };
+      }
+      modelCatalog = modelCatalog.filter((entry) => entry.modelId !== model);
+      return { status: "ok", model: removed.modelId, sizeBytes: removed.sizeBytes };
     },
     async modelImport(_fence, params): Promise<ModelImportDto> {
       if (!daemonRunning) {

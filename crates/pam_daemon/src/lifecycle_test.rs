@@ -11,7 +11,7 @@ use pam_core::{
     ApprovalId, CallerCredential, CallerId, ContentDigest, EvidenceHandle, GrantId, IdempotencyKey,
     ProjectId, RequestId,
 };
-use pam_model::{RuntimeError, RuntimeFinishReason, RuntimeResponse, RuntimeUsage};
+use pam_model::{ModelKey, RuntimeError, RuntimeFinishReason, RuntimeResponse, RuntimeUsage};
 use pam_platform::{ClientTransport, LocalEndpoint};
 use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, MAX_RESOURCE_NAME_BYTES, ResourceName,
@@ -33,11 +33,11 @@ use pam_store::{
 use tokio::sync::oneshot;
 
 use super::lifecycle::{
-    BriefProvider, DaemonConfig, Ownership, approval_recovery, cancellation_presentation,
-    clamp_activity_limit, degrade_after_model_load_failure, grant_recovery, model_runtime_result,
-    model_status_result, policy_resource, prepare_endpoint, protocol_activity_event,
-    protocol_caller_summary, protocol_project_current, request_audit_event_id, request_preflight,
-    serve_until_with_delay,
+    BriefProvider, DaemonConfig, MODEL_UNREGISTER_LOADED_MESSAGE, Ownership, approval_recovery,
+    cancellation_presentation, clamp_activity_limit, degrade_after_model_load_failure,
+    grant_recovery, model_runtime_result, model_status_result, model_unregister_loaded_refusal,
+    policy_resource, prepare_endpoint, protocol_activity_event, protocol_caller_summary,
+    protocol_project_current, request_audit_event_id, request_preflight, serve_until_with_delay,
 };
 use crate::DaemonError;
 use crate::logging::{DaemonLog, LogLevel};
@@ -237,6 +237,64 @@ fn model_policy_resource_is_stable_across_conversation_turns() {
     assert_eq!(
         grant_recovery(&baseline, &Ok(baseline_resource)),
         "pam access grant model.infer --daemon --resource model:vendor/model"
+    );
+}
+
+#[test]
+fn unregistering_the_loaded_model_is_refused_with_its_exact_recovery_command() {
+    let unregister = |model: &str| {
+        RequestEnvelope::model_unregister(
+            RequestId::from("model-unregister-1"),
+            CallerId::from("model-caller"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("model-unregister-key"),
+            model,
+        )
+        .unwrap()
+    };
+    let loaded = ModelKey::new("vendor", "loaded").unwrap();
+    let other = ModelKey::new("vendor", "other").unwrap();
+
+    // The model this daemon holds cannot be unregistered under the mapping.
+    let request = unregister("vendor/loaded");
+    let refusal =
+        model_unregister_loaded_refusal(&request, "vendor/loaded", &loaded, Some(&loaded))
+            .expect("unregistering the loaded model must be refused");
+    let ResultBody::Failure(failure) = refusal.body else {
+        panic!("the refusal must be a failure");
+    };
+    assert_eq!(failure.code, FailureCode::LeaseConflict);
+    assert_eq!(failure.message, MODEL_UNREGISTER_LOADED_MESSAGE);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("restart PAM without this model using `pam daemon`, then unregister vendor/loaded")
+    );
+
+    // Any other registered model unregisters while one is loaded, and so does
+    // every model on a daemon serving without one.
+    let request = unregister("vendor/other");
+    assert!(
+        model_unregister_loaded_refusal(&request, "vendor/other", &other, Some(&loaded)).is_none()
+    );
+    assert!(model_unregister_loaded_refusal(&request, "vendor/other", &other, None).is_none());
+}
+
+#[test]
+fn model_unregister_names_the_exact_model_in_its_policy_resource_and_grant() {
+    let request = RequestEnvelope::model_unregister(
+        RequestId::from("model-unregister-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unregister-key"),
+        "vendor/model",
+    )
+    .unwrap();
+    let resource = policy_resource(&request).unwrap();
+
+    assert_eq!(resource.as_str(), "model:vendor/model");
+    assert_eq!(
+        grant_recovery(&request, &Ok(resource)),
+        "pam access grant model.unregister --daemon --resource model:vendor/model"
     );
 }
 
@@ -2840,7 +2898,7 @@ fn model_status_reports_the_loaded_model_without_path_or_digest() {
         Some("model load failed: reason")
     );
 
-    let key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
+    let key = ModelKey::new("vendor", "model-a").unwrap();
     let status = model_status_result(Some((&key, 42)), Vec::new(), None).unwrap();
     let encoded = encode(&status).unwrap();
     for secret_field in [&b"path"[..], b"digest", b"license"] {
@@ -2859,7 +2917,7 @@ fn model_status_reports_the_loaded_model_without_path_or_digest() {
 #[test]
 fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
     let on_deck = ModelSummary::new("vendor/model-b".to_owned(), 84).unwrap();
-    let loaded_key = pam_model::ModelKey::new("vendor", "model-a").unwrap();
+    let loaded_key = ModelKey::new("vendor", "model-a").unwrap();
     let loaded_entry = ModelSummary::new("vendor/model-a".to_owned(), 42).unwrap();
 
     // Nothing loaded: the catalog still surfaces every registered model, so a

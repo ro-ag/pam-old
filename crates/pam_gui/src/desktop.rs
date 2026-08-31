@@ -23,7 +23,8 @@ use pam_protocol::{
     ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
     DaemonStatsResult, FailureCode, FlowProjectRoot, LogSeverity, MAX_MODEL_OUTPUT_TOKENS,
     ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
-    ModelSummary, ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
+    ModelSummary, ModelUnregisterResult, ProjectRequestState, ProjectRequestSummary,
+    ProjectUsageSummary,
 };
 use pam_store::Store;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ use crate::{
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
-        run_connector_test, run_model_infer,
+        run_connector_test, run_model_infer, run_model_unregister,
     },
     settings,
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
@@ -821,6 +822,20 @@ pub struct ModelUsageDto {
 )]
 pub enum ModelImportDto {
     Ok,
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+/// Acknowledgement of one removed registration. The GGUF file is never
+/// deleted: only the registry row goes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelUnregisterDto {
+    Ok { model: String, size_bytes: u64 },
     Blocked { failure: FailureDto },
     Unavailable { failure: FailureDto },
 }
@@ -2158,6 +2173,41 @@ impl DesktopCore {
                 ),
             },
         };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Removes one model's registration through the daemon that owns the
+    /// registry.
+    ///
+    /// Unlike registration, this has no direct-store fallback: the refusal
+    /// that matters — unregistering the model the daemon currently holds —
+    /// can only be made by the daemon itself, so a paused daemon reports
+    /// unavailable rather than being raced by a second writer. Policy and
+    /// approval refusals are classified as blocked in the returned DTO with
+    /// recovery text; everything else, including the daemon's own loaded-model
+    /// refusal, is unavailable with the daemon's recovery line.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused, or
+    /// when the model identity violates the protocol contract before any
+    /// daemon exchange.
+    pub async fn model_unregister(
+        &self,
+        fence: CommandFence,
+        model: String,
+    ) -> DesktopResult<ModelUnregisterDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_unregister(caller, credential, model)
+                .await
+                .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+            Err(state) => state,
+        };
+        let data = model_unregister_dto(observed);
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -4468,6 +4518,29 @@ async fn registered_model_catalog_in(state_path: PathBuf) -> Option<Vec<ModelSum
     Some(summaries.iter().map(model_summary_dto).collect())
 }
 
+fn model_unregister_dto(state: ObservatoryState<ModelUnregisterResult>) -> ModelUnregisterDto {
+    match state {
+        ObservatoryState::Available(result) => ModelUnregisterDto::Ok {
+            model: bounded_detail(result.model),
+            size_bytes: result.size_bytes,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelUnregisterDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelUnregisterDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
 fn model_infer_dto(state: ObservatoryState<ModelGenerationResult>) -> ModelInferDto {
     match state {
         ObservatoryState::Available(result) => ModelInferDto::Ok {
@@ -5232,6 +5305,13 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_unregister_dto_for_test(
+    state: ObservatoryState<ModelUnregisterResult>,
+) -> ModelUnregisterDto {
+    model_unregister_dto(state)
 }
 
 #[cfg(test)]

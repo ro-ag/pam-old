@@ -32,11 +32,12 @@ use super::{
         failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
         flow_workspace_at_for_test, gui_registration_current_for_test,
         manage_skill_library_without_io_for_test, mark_model_loading_for_test,
-        model_infer_dto_for_test, model_status_dto_for_test, post_save_reload_error_for_test,
-        read_startup_progress, reap_daemon_child_for_test, registered_model_catalog_in_for_test,
-        registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
-        reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
-        stop_outcome_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
+        model_infer_dto_for_test, model_status_dto_for_test, model_unregister_dto_for_test,
+        post_save_reload_error_for_test, read_startup_progress, reap_daemon_child_for_test,
+        registered_model_catalog_in_for_test, registration_contract_for_test,
+        registration_failure_detail, replace_daemon_child_for_test, reserve_daemon_for_test,
+        reserve_for_test, startup_budget_for_bytes_for_test, stop_outcome_for_test,
+        switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -945,6 +946,69 @@ fn model_infer_dto_serializes_the_exact_frontend_ok_contract() {
             "text": "Observed answer.",
             "finishReason": "stop",
             "usage": { "inputTokens": 1, "sampledOutputTokens": 2, "emittedOutputTokens": 2 }
+        })
+    );
+}
+
+#[test]
+fn model_unregister_dto_carries_the_removed_record_and_every_refusal_recovery() {
+    let removed = model_unregister_dto_for_test(ObservatoryState::Available(
+        pam_protocol::ModelUnregisterResult {
+            model: "vendor/name".to_owned(),
+            size_bytes: 4096,
+            digest: "sha256:".to_owned() + &"ab".repeat(32),
+        },
+    ));
+
+    assert_eq!(
+        serde_json::to_value(removed).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "model": "vendor/name",
+            "sizeBytes": 4096
+        })
+    );
+
+    // A policy denial is blocked and keeps its grant recovery.
+    let blocked = model_unregister_dto_for_test(ObservatoryState::Blocked {
+        code: FailureCode::Forbidden,
+        detail: "Policy denies model.unregister.".to_owned(),
+        recovery: Some("Grant model.unregister for the GUI caller.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(blocked).unwrap(),
+        serde_json::json!({
+            "status": "blocked",
+            "failure": {
+                "kind": "blocked",
+                "code": "forbidden",
+                "detail": "Policy denies model.unregister.",
+                "recovery": "Grant model.unregister for the GUI caller."
+            }
+        })
+    );
+
+    // The daemon's own loaded-model refusal is unavailable, and its exact
+    // recovery command survives to the frontend.
+    let loaded = model_unregister_dto_for_test(ObservatoryState::Unavailable {
+        code: None,
+        detail: "the requested model is loaded in this daemon and cannot be unregistered"
+            .to_owned(),
+        recovery: Some(
+            "restart PAM without this model using `pam daemon`, then unregister vendor/name"
+                .to_owned(),
+        ),
+    });
+    assert_eq!(
+        serde_json::to_value(loaded).unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": null,
+                "detail": "the requested model is loaded in this daemon and cannot be unregistered",
+                "recovery": "restart PAM without this model using `pam daemon`, then unregister vendor/name"
+            }
         })
     );
 }

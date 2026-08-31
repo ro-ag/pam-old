@@ -68,9 +68,10 @@ pub use desktop::{
     ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelImportDto, ModelImportStageDto,
     ModelImportStatusDto, ModelImportStatusKindDto, ModelInferDto, ModelInspectDto,
     ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto, ModelPresetsDto, ModelRoleDto,
-    ModelStatusDto, ModelSummaryDto, ModelUsageDto, OperationId, OutcomeDto, OutcomeSectionDto,
-    ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto, RunDto, SnapshotDataDto,
-    SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto, TimelineKindDto,
+    ModelStatusDto, ModelSummaryDto, ModelUnregisterDto, ModelUsageDto, OperationId, OutcomeDto,
+    OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto,
+    RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto,
+    TimelineKindDto,
 };
 
 // Re-exported so the desktop shell can accept the debug-redacted credential

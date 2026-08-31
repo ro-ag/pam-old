@@ -685,6 +685,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
                   onOpenModelChat={openModelChat}
                   onStartWithModel={startWithModel}
                   onModelImported={() => { showToast("Model registered"); reloadModelStatus(); }}
+                  onModelUnregistered={(modelId) => { showToast(`Unregistered ${modelId}`); reloadModelStatus(); }}
                 />
               )}
               {state.activeView === "access" && (

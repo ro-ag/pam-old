@@ -1,4 +1,4 @@
-import { Brain, CaretDown, CaretRight, Check, Power } from "@phosphor-icons/react";
+import { Brain, CaretDown, CaretRight, Check, Power, Trash } from "@phosphor-icons/react";
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { withDaemonOperation } from "../bridge";
@@ -912,6 +912,8 @@ export interface ModelPanelProps {
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
   onStartWithModel: (modelId: string) => void;
   onModelImported: () => void;
+  /** A registration left the registry: the catalog needs re-reading. */
+  onModelUnregistered: (modelId: string) => void;
   /** Bumped by ⌘R; forwarded to the setup form's mount-time loaders. */
   refreshTick?: number;
 }
@@ -926,6 +928,7 @@ export function ModelPanel({
   onOpenModelChat,
   onStartWithModel,
   onModelImported,
+  onModelUnregistered,
   refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
@@ -1017,6 +1020,34 @@ export function ModelPanel({
     }
   };
 
+  // Unregistering is destructive to durable state, so it is confirmed in the
+  // row itself: one row at a time holds the confirmation, and a refusal stays
+  // next to the model it refused.
+  const [confirmingUnregister, setConfirmingUnregister] = useState<string | null>(null);
+  const [unregisterBusy, setUnregisterBusy] = useState<string | null>(null);
+  const [unregisterError, setUnregisterError] = useState<{ modelId: string; detail: string } | null>(null);
+
+  const unregisterModel = async (modelId: string) => {
+    setConfirmingUnregister(null);
+    setUnregisterBusy(modelId);
+    setUnregisterError(null);
+    try {
+      const response = await bridge.modelUnregister(withDaemonOperation(), modelId);
+      if (response.status === "ok") {
+        onModelUnregistered(response.model);
+      } else {
+        setUnregisterError({
+          modelId,
+          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+        });
+      }
+    } catch (error) {
+      setUnregisterError({ modelId, detail: presentError(error) });
+    } finally {
+      setUnregisterBusy(null);
+    }
+  };
+
   const pill = loading
     ? { label: "loading", tone: "elevated" }
     : offline || !modelStatus || modelStatus.status !== "ok"
@@ -1027,21 +1058,58 @@ export function ModelPanel({
         ? { label: "on deck", tone: "observed" }
         : { label: "none", tone: "not-reported" };
 
+  // One catalog row, and the home of every per-model action. Actions live in
+  // their own container so later ones (verify, sweep, delete weights) sit
+  // beside these without reshaping the row.
   const restartRow = (model: { modelId: string; sizeBytes: number }) => (
     <article key={model.modelId}>
       <span className="access-icon"><Brain size={21} /></span>
       <div>
         <strong title={model.modelId}>{model.modelId}</strong>
         <p>{formatModelSize(model.sizeBytes)} on disk</p>
+        {unregisterError?.modelId === model.modelId && (
+          <p className="model-verify is-fail" role="alert">{unregisterError.detail}</p>
+        )}
       </div>
-      <button
-        type="button"
-        className="button button--secondary button--small"
-        disabled={modelBusy}
-        onClick={() => onStartWithModel(model.modelId)}
-      >
-        <Power size={17} /> {restartLabel}
-      </button>
+      <div className="model-row-actions">
+        <button
+          type="button"
+          className="button button--secondary button--small"
+          disabled={modelBusy}
+          onClick={() => onStartWithModel(model.modelId)}
+        >
+          <Power size={17} /> {restartLabel}
+        </button>
+        {confirmingUnregister === model.modelId ? (
+          <span className="connector-confirm">
+            Remove {model.modelId} from PAM&apos;s registry? The GGUF file stays on disk.
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              disabled={unregisterBusy === model.modelId}
+              onClick={() => void unregisterModel(model.modelId)}
+            >
+              Unregister
+            </button>
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={() => setConfirmingUnregister(null)}
+            >
+              Keep
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            disabled={unregisterBusy === model.modelId}
+            onClick={() => { setUnregisterError(null); setConfirmingUnregister(model.modelId); }}
+          >
+            <Trash size={17} /> Unregister
+          </button>
+        )}
+      </div>
     </article>
   );
 

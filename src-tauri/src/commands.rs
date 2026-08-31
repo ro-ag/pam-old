@@ -11,8 +11,8 @@ use pam_gui::{
     FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
     ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelImportStatusDto, ModelInferDto,
     ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
-    OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto, SkillLibraryDto,
-    SkillLibraryRequest, SnapshotDto,
+    ModelUnregisterDto, OperationId, ProjectHandle, SkillAuditDto, SkillInventoryDto,
+    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -214,6 +214,18 @@ pub(crate) struct ModelInferRequest {
     messages: Vec<ModelMessageDto>,
     #[serde(default)]
     max_output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelUnregisterRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    model: String,
 }
 
 // The license notice text is user-supplied consent material: this request
@@ -645,6 +657,24 @@ pub(crate) async fn model_import(
                 license_notice_text: request.license_notice_text,
                 allow_small: request.allow_small,
             },
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_unregister(
+    state: State<'_, DesktopState>,
+    request: ModelUnregisterRequest,
+) -> Result<ModelUnregisterDto, DesktopErrorDto> {
+    state
+        .core
+        .model_unregister(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
         )
         .await
 }

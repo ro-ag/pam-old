@@ -563,7 +563,7 @@ fn v3_cannot_treat_the_flow_only_target_field_as_ignorable_authority() {
         decode_request(&bytes),
         Err(CodecError::UnsupportedProtocolVersion {
             actual: 3,
-            supported: 8
+            supported: 9
         })
     ));
 }
@@ -863,7 +863,7 @@ fn durable_v4_server_results_are_decodable_before_current_reenveloping() {
         decode_server_message(&bytes),
         Err(CodecError::UnsupportedProtocolVersion {
             actual: 4,
-            supported: 8,
+            supported: 9,
         })
     ));
     assert_eq!(decode_server_message_envelope(&bytes).unwrap(), expected);
@@ -1380,9 +1380,8 @@ fn legacy_status_request_matches_the_exact_v7_golden_fixture() {
 }
 
 #[test]
-fn status_request_matches_the_current_v8_golden_fixture() {
-    assert_eq!(PROTOCOL_VERSION, 8);
-    let bytes = encode(&status_request()).unwrap();
+fn legacy_status_request_matches_the_exact_v8_golden_fixture() {
+    let bytes = encode(&status_request_for_version(8)).unwrap();
 
     assert_eq!(
         encode_hex(&bytes),
@@ -1391,7 +1390,18 @@ fn status_request_matches_the_current_v8_golden_fixture() {
 }
 
 #[test]
-fn v2_through_v7_requests_are_correlatable_but_rejected_by_the_current_decoder() {
+fn status_request_matches_the_current_v9_golden_fixture() {
+    assert_eq!(PROTOCOL_VERSION, 9);
+    let bytes = encode(&status_request()).unwrap();
+
+    assert_eq!(
+        encode_hex(&bytes),
+        include_str!("../fixtures/status_request_v9.msgpack.hex").trim()
+    );
+}
+
+#[test]
+fn v2_through_v8_requests_are_correlatable_but_rejected_by_the_current_decoder() {
     for (actual, fixture) in [
         (2, include_str!("../fixtures/status_request_v2.msgpack.hex")),
         (3, include_str!("../fixtures/status_request_v3.msgpack.hex")),
@@ -1399,6 +1409,7 @@ fn v2_through_v7_requests_are_correlatable_but_rejected_by_the_current_decoder()
         (5, include_str!("../fixtures/status_request_v5.msgpack.hex")),
         (6, include_str!("../fixtures/status_request_v6.msgpack.hex")),
         (7, include_str!("../fixtures/status_request_v7.msgpack.hex")),
+        (8, include_str!("../fixtures/status_request_v8.msgpack.hex")),
     ] {
         let bytes = decode_hex(fixture);
         let envelope = decode_request_envelope(&bytes).unwrap();
@@ -1413,7 +1424,7 @@ fn v2_through_v7_requests_are_correlatable_but_rejected_by_the_current_decoder()
             decode_request(&bytes),
             Err(CodecError::UnsupportedProtocolVersion {
                 actual: rejected,
-                supported: 8
+                supported: 9
             }) if rejected == actual
         ));
     }

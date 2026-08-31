@@ -26,6 +26,7 @@
     "allow-model-status",
     "allow-model-infer",
     "allow-model-import",
+    "allow-model-unregister",
     "allow-model-import-status",
     "allow-model-inspect",
     "allow-model-license-discover",

@@ -7,8 +7,8 @@ use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
     FailureCode, GrantRevokeResult, ModelGenerationResult, ModelMessage, ModelRegisterResult,
-    ModelRegistration, ModelStatusResult, ProtocolContractError, RequestEnvelope, ResultBody,
-    ResultPayload,
+    ModelRegistration, ModelStatusResult, ModelUnregisterResult, ProtocolContractError,
+    RequestEnvelope, ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -26,6 +26,7 @@ const CONNECTOR_TEST_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
 const MODEL_REGISTER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const GRANT_REVOKE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL_REGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.register capability in Access, or approve the pending registration.";
+const MODEL_UNREGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.";
 const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in PAM policy, or approve the pending connector request.";
 const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in PAM policy, or approve the pending connector request.";
 
@@ -345,6 +346,40 @@ pub(crate) async fn run_model_register(
     .await)
 }
 
+/// Removes one model's registration through the daemon that owns the store.
+///
+/// The weights are never touched: this drops the registry row only.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a model identity the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_model_unregister(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    model: String,
+) -> Result<ObservatoryState<ModelUnregisterResult>, ProtocolContractError> {
+    let request = RequestEnvelope::model_unregister(
+        unique_request_id("gui-model-unregister"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-unregister"),
+        model,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "model-unregister",
+        MODEL_REGISTER_EXCHANGE_TIMEOUT,
+        model_unregister_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelUnregister(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
 /// Revokes every daemon-scope grant the GUI caller holds for one capability,
 /// through the daemon that owns the store.
 ///
@@ -477,6 +512,14 @@ fn infer_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 /// [`infer_failure_state`], with registration recovery text.
 fn model_register_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, MODEL_REGISTER_BLOCKED_RECOVERY)
+}
+
+/// `model.unregister` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with removal recovery text. A refusal the daemon
+/// itself explains — unregistering the model it currently holds — arrives as
+/// unavailable and keeps the daemon's own recovery line.
+fn model_unregister_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_UNREGISTER_BLOCKED_RECOVERY)
 }
 
 /// `connector.configure` requires an explicit grant: classified exactly like

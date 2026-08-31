@@ -624,6 +624,12 @@ export type ModelImportDto =
   | { status: "ok" }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+// Removing a registration acknowledges exactly the row that left. The GGUF on
+// disk is never deleted: unregistering is a registry operation only.
+export type ModelUnregisterDto =
+  | { status: "ok"; model: string; sizeBytes: number }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface ModelImportStatusDto {
   status: "idle" | "running" | "complete" | "failed";
   model: string | null;
@@ -805,6 +811,7 @@ export interface PamBridge {
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
+  modelUnregister(fence: CommandFence, model: string): Promise<ModelUnregisterDto>;
   modelImportStatus(fence: CommandFence): Promise<ModelImportStatusDto>;
   modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
   modelLicenseDiscover(fence: CommandFence, query: string): Promise<ModelLicenseDiscoveryDto>;
