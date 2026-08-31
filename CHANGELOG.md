@@ -4,6 +4,65 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-08-31
+
+### Added
+
+- Flows can be run from PAM itself. Pick a definition, run it against the
+  project PAM is open on, and watch its transitions arrive live; cancel one
+  in flight, read the outcome with its evidence handles, and browse a
+  bounded history of past runs, each labelled with the project it ran
+  against. Running a flow previously existed only in the CLI.
+- The app is organized around six views — Overview, Models, Flows, Skills,
+  Access and Activity — with Settings in the footer. Models is the single
+  home for the local model: what is registered, what is loaded, the load
+  meter, Verify and Chat, the curated download picker, and manual GGUF
+  import.
+- Loading a model shows real progress. The meter reads the daemon's own
+  resident set size as the weights map in, instead of spinning without a
+  denominator.
+- The Overview activity heatmap covers a full year, with a month axis
+  across the top and weekday labels beside it, so a quiet stretch can be
+  placed in time instead of just seen.
+- Access presents the daemon-scope capability grants and the observed
+  boundary as global surfaces, and the model budget is derived from this
+  Mac's real memory rather than assumed.
+
+### Changed
+
+- PAM's durable writes from the app now travel through the daemon whenever
+  one is running, so the app is no longer a second writer to the store the
+  daemon owns. Registering a model still works with the daemon stopped,
+  which is what a first run needs. Protocol version 8.
+- The layout targets a 2K desktop: the flow catalog and step inspector hold
+  fixed widths instead of growing with the window, and full-width lists
+  pair up two-across on wide screens.
+
+### Fixed
+
+- A daemon started with a large model could announce itself ready and then
+  never answer anything, holding a core at 100% until it was killed, and
+  ignoring Ctrl-C while it did. Its endpoint was accepting connections for
+  the minutes the model took to load without ever reading them, and the
+  abandoned health probes that piled up left it spinning instead of
+  serving. The endpoint is now opened only once the daemon can serve.
+- PAM can stop a daemon that has stopped answering, instead of leaving you
+  to find and kill it yourself.
+- The Overview model tile and the Activity caller identifiers are readable
+  rather than truncated.
+- Revoking a daemon-scope grant re-reads the observed boundary, so the
+  Access view stops showing authority that was just withdrawn.
+- Installing a skill from git no longer hangs for the full lifetime of a
+  stray git process after its deadline has already passed.
+- Two PAM windows racing the same database migration wait for each other
+  instead of failing with a busy database.
+- Loose content in Settings sits on the panel's own gutter.
+
+### Removed
+
+- The interactive design prototype. The shipped six-view app and its layout
+  contract are the reference now; the tree stays in git history.
+
 ## [0.8.3] - 2026-08-26
 
 ### Fixed
