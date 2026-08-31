@@ -845,6 +845,27 @@ impl Store {
         receive(response_rx).await
     }
 
+    /// Removes one model's registration and returns the record that was removed.
+    ///
+    /// This deletes the registry row only. The weights stay on disk: PAM
+    /// verifies a GGUF in place and usually never owned the file, so deleting
+    /// bytes is a separate, explicit operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ModelNotFound`] when no such model is registered,
+    /// and an error when the stored record is corrupt or durable state is
+    /// unavailable.
+    pub async fn delete_model(&self, key: ModelKey) -> Result<RegisteredModel, StoreError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(Command::Model(ModelCommand::Delete {
+            key,
+            response: response_tx,
+        }))
+        .await?;
+        receive(response_rx).await
+    }
+
     /// Lists every registered model in stable identity order.
     ///
     /// # Errors
@@ -1852,6 +1873,10 @@ enum ModelCommand {
     List {
         response: Response<Vec<RegisteredModel>>,
     },
+    Delete {
+        key: ModelKey,
+        response: Response<RegisteredModel>,
+    },
 }
 
 enum InventoryCommand {
@@ -2419,6 +2444,9 @@ fn run_model_command(connection: &mut Connection, command: ModelCommand) {
         ModelCommand::List { response } => {
             respond(response, list_models(connection));
         }
+        ModelCommand::Delete { key, response } => {
+            respond(response, delete_model(connection, &key));
+        }
     }
 }
 
@@ -2528,6 +2556,32 @@ fn get_model(connection: &Connection, key: &ModelKey) -> Result<RegisteredModel,
         .optional()?
         .ok_or_else(|| StoreError::ModelNotFound(key.id()))
         .and_then(decode_model)
+}
+
+fn delete_model(
+    connection: &mut Connection,
+    key: &ModelKey,
+) -> Result<RegisteredModel, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // The removed record is read inside the same transaction the delete runs
+    // in, so the acknowledgement always describes exactly the row that left.
+    let existing = transaction
+        .query_row(
+            "SELECT
+                 vendor, name, path, digest, size_bytes, gguf_version,
+                 gguf_tensor_count, gguf_metadata_kv_count,
+                 license_id, license_url, license_digest,
+                 source_kind, source_identity, registered_at_ms
+             FROM models WHERE model_id = ?1",
+            params![key.id()],
+            model_row,
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::ModelNotFound(key.id()))
+        .and_then(decode_model)?;
+    transaction.execute("DELETE FROM models WHERE model_id = ?1", params![key.id()])?;
+    transaction.commit()?;
+    Ok(existing)
 }
 
 fn list_models(connection: &Connection) -> Result<Vec<RegisteredModel>, StoreError> {

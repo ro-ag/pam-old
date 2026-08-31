@@ -14,10 +14,10 @@ use super::{
     MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_TOKENS,
     MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES, ModelFinishReason,
     ModelGenerationResult, ModelMessage, ModelRegistration, ModelRole, ModelStatusResult,
-    ModelSummary, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
-    ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary, ProtocolContractError,
-    ReplayResult, RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload,
-    SourceAvailability, StatusResult,
+    ModelSummary, ModelUnregisterResult, ModelUsage, NetworkDiagnosticsResult, OperationTruth,
+    PROTOCOL_VERSION, PacState, ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary,
+    ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload, ResultBody,
+    ResultEnvelope, ResultPayload, SourceAvailability, StatusResult,
 };
 
 const PROJECT_ROOT: &str = "/canonical/project";
@@ -1347,6 +1347,85 @@ fn model_register_rejects_registrations_the_registry_could_not_hold() {
 
         assert_eq!(error, ProtocolContractError::InvalidModelRegistration);
     }
+}
+
+#[test]
+fn model_unregister_is_authenticated_and_policy_named() {
+    let request = RequestEnvelope::model_unregister(
+        RequestId::from("model-unregister-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unregister-key"),
+        "qwen/qwen3-4b",
+    )
+    .unwrap();
+
+    assert_eq!(request.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(request.capability, Capability::ModelUnregister);
+    assert_eq!(request.capability.policy_name(), "model.unregister");
+    assert_eq!(
+        request.payload,
+        RequestPayload::ModelUnregister {
+            model: "qwen/qwen3-4b".to_owned()
+        }
+    );
+    assert!(request.authentication.is_none());
+    assert!(request.validate_model_request().is_ok());
+}
+
+#[test]
+fn model_unregister_rejects_identities_the_registry_could_never_hold() {
+    for model in [
+        "not-a-vendor-name",
+        "qwen/",
+        "/qwen3-4b",
+        "qwen/../escape",
+        "qwen/a/b",
+        "",
+    ] {
+        let error = RequestEnvelope::model_unregister(
+            RequestId::from("model-unregister-1"),
+            CallerId::from("gui-1"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("model-unregister-key"),
+            model,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ProtocolContractError::InvalidModelIdentity);
+    }
+}
+
+#[test]
+fn model_unregister_round_trips_its_request_and_its_acknowledgement() {
+    let request = RequestEnvelope::model_unregister(
+        RequestId::from("model-unregister-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unregister-key"),
+        "qwen/qwen3-4b",
+    )
+    .unwrap();
+    let encoded = crate::encode(&request).unwrap();
+
+    assert_eq!(crate::decode_request(&encoded).unwrap(), request);
+
+    let result = crate::ServerMessage::Result(ResultEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: RequestId::from("model-unregister-1"),
+        project_id: ProjectId::daemon_scope(),
+        body: ResultBody::Success {
+            truth: OperationTruth::Changed,
+            payload: ResultPayload::ModelUnregister(ModelUnregisterResult {
+                model: "qwen/qwen3-4b".to_owned(),
+                size_bytes: 4096,
+                digest: ContentDigest::from_sha256([1; 32]).as_str().to_owned(),
+            }),
+        },
+    });
+    let encoded = crate::encode(&result).unwrap();
+
+    assert_eq!(crate::decode_server_message(&encoded).unwrap(), result);
 }
 
 #[test]

@@ -26,13 +26,14 @@ pub use contract::{
     MAX_GRANT_CAPABILITY_BYTES, MAX_MODEL_LICENSE_ID_BYTES, MAX_MODEL_PATH_BYTES,
     MAX_MODEL_URL_BYTES, MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES,
     ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRegisterResult, ModelRegistration,
-    ModelRole, ModelStatusResult, ModelSummary, ModelUsage, NetworkDiagnosticsResult,
-    OperationTruth, PacState, ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary,
-    ProjectUsageSummary, ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload,
-    ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability, StatusResult,
+    ModelRole, ModelStatusResult, ModelSummary, ModelUnregisterResult, ModelUsage,
+    NetworkDiagnosticsResult, OperationTruth, PacState, ProjectCurrentResult, ProjectRequestState,
+    ProjectRequestSummary, ProjectUsageSummary, ProtocolContractError, ReplayResult,
+    RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload, ServerMessage,
+    SourceAvailability, StatusResult,
 };
 
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const MAX_EVIDENCE_CHUNK_SIZE: usize = 256 * 1024;
 pub const MAX_MODEL_MESSAGES: usize = 32;

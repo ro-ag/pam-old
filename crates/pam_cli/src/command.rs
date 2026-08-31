@@ -415,6 +415,30 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
+    /// Remove a model's registration; the weights stay on disk.
+    Unregister {
+        /// Stable model identity.
+        #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
+        model: ModelKey,
+        /// Confirm removing this registration. The GGUF file is never deleted.
+        #[arg(long)]
+        yes: bool,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
+    /// List the registered model catalog.
+    List {
+        /// Emit the catalog as JSON instead of the human summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report the daemon's model surface: registered count, loaded model, load failure.
+    Status {
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -708,6 +732,17 @@ pub(crate) enum Mode {
         accept_license: bool,
         approval_id: Option<ApprovalId>,
     },
+    ModelUnregister {
+        model: ModelKey,
+        yes: bool,
+        approval_id: Option<ApprovalId>,
+    },
+    ModelList {
+        json: bool,
+    },
+    ModelStatus {
+        approval_id: Option<ApprovalId>,
+    },
     ModelGenerate {
         model: ModelKey,
         prompt: String,
@@ -793,6 +828,9 @@ impl fmt::Debug for ModelCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Import { .. } => formatter.write_str("Import"),
+            Self::Unregister { .. } => formatter.write_str("Unregister"),
+            Self::List { .. } => formatter.write_str("List"),
+            Self::Status { .. } => formatter.write_str("Status"),
             Self::Generate {
                 model,
                 prompt,
@@ -860,6 +898,9 @@ impl fmt::Debug for Mode {
             Self::CallerRegister { .. } => formatter.write_str("CallerRegister"),
             Self::CallerRevoke { .. } => formatter.write_str("CallerRevoke"),
             Self::ModelImport { .. } => formatter.write_str("ModelImport"),
+            Self::ModelUnregister { .. } => formatter.write_str("ModelUnregister"),
+            Self::ModelList { .. } => formatter.write_str("ModelList"),
+            Self::ModelStatus { .. } => formatter.write_str("ModelStatus"),
             Self::AccessGrant { .. } => formatter.write_str("AccessGrant"),
             Self::AccessRevoke { .. } => formatter.write_str("AccessRevoke"),
             Self::ApprovalApprove { .. } => formatter.write_str("ApprovalApprove"),
@@ -949,6 +990,24 @@ impl Cli {
                 timeout,
                 approval_id,
             },
+            Some(Command::Model {
+                command:
+                    ModelCommand::Unregister {
+                        model,
+                        yes,
+                        approval_id,
+                    },
+            }) => Mode::ModelUnregister {
+                model,
+                yes,
+                approval_id,
+            },
+            Some(Command::Model {
+                command: ModelCommand::List { json },
+            }) => Mode::ModelList { json },
+            Some(Command::Model {
+                command: ModelCommand::Status { approval_id },
+            }) => Mode::ModelStatus { approval_id },
             Some(Command::Access {
                 command:
                     AccessCommand::Grant {

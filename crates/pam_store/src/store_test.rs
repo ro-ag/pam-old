@@ -5415,6 +5415,44 @@ async fn model_registry_lists_every_registered_model_in_identity_order() {
 }
 
 #[tokio::test]
+async fn deleting_a_model_removes_only_that_registration_and_leaves_the_file() {
+    let (directory, path) = database_path("model-delete");
+    let store = Store::open(&path).unwrap();
+    let weights = directory.join("user-owned.gguf");
+    fs::write(&weights, b"gguf").unwrap();
+    let qwen = registered_model(&weights);
+    let acme = RegisteredModel {
+        key: ModelKey::new("acme", "a-model").unwrap(),
+        digest: ContentDigest::from_sha256([4; 32]),
+        ..registered_model(&directory.join("other.gguf"))
+    };
+    store.put_model(qwen.clone()).await.unwrap();
+    store.put_model(acme.clone()).await.unwrap();
+
+    // The delete acknowledges exactly the record it removed.
+    assert_eq!(store.delete_model(qwen.key.clone()).await.unwrap(), qwen);
+
+    // The row is gone, the sibling registration is untouched, and the list
+    // reflects the deletion.
+    assert!(matches!(
+        store.model(qwen.key.clone()).await,
+        Err(StoreError::ModelNotFound(model_id)) if model_id == qwen.key.id()
+    ));
+    assert_eq!(store.list_models().await.unwrap(), vec![acme]);
+
+    // Unregistering is a registry operation: the weights stay on disk.
+    assert!(weights.exists());
+
+    // A second delete of the same identity is a plain not-found.
+    assert!(matches!(
+        store.delete_model(qwen.key.clone()).await,
+        Err(StoreError::ModelNotFound(model_id)) if model_id == qwen.key.id()
+    ));
+
+    close(store, &directory).await;
+}
+
+#[tokio::test]
 async fn model_registry_persists_metadata_only_and_rejects_conflicts() {
     let (directory, path) = database_path("model-registry");
     let store = Store::open(&path).unwrap();

@@ -186,6 +186,13 @@ async fn run_async() -> i32 {
             )
             .await
         }
+        Mode::ModelUnregister {
+            model,
+            yes,
+            approval_id,
+        } => app::model_unregister(model, yes, approval_id).await,
+        Mode::ModelList { json } => app::model_list(json).await,
+        Mode::ModelStatus { approval_id } => app::model_status(approval_id).await,
         Mode::ModelGenerate {
             model,
             prompt,

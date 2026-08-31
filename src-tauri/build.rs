@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "model_status",
     "model_infer",
     "model_import",
+    "model_unregister",
     "model_import_status",
     "model_inspect",
     "model_license_discover",

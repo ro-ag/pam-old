@@ -717,6 +717,43 @@ impl RequestEnvelope {
         })
     }
 
+    /// Creates an authenticated, policy-gated model unregistration request.
+    ///
+    /// Attach the caller credential with [`Self::authenticated`] before sending
+    /// the request. The daemon owns the durable model registry, so removing a
+    /// registration is a routed request rather than a direct store write.
+    /// Unregistering removes the registry row only: the weights on disk are
+    /// never touched, because PAM verifies a GGUF in place and usually never
+    /// owned the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a model identity that is not a bounded
+    /// `vendor/name` pair.
+    pub fn model_unregister(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        model: impl Into<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        let model = model.into();
+        validate_model_id(&model)?;
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelUnregister,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelUnregister { model },
+        })
+    }
+
     /// Creates an authenticated request that revokes every active grant this
     /// envelope's caller holds for one capability in this envelope's project.
     ///
@@ -772,6 +809,7 @@ impl RequestEnvelope {
             RequestPayload::ModelRegister { registration } => {
                 validate_model_registration(registration)
             }
+            RequestPayload::ModelUnregister { model } => validate_model_id(model),
             _ => Ok(()),
         }
     }
@@ -1053,6 +1091,7 @@ pub enum Capability {
     ModelInfer,
     ModelStatus,
     ModelRegister,
+    ModelUnregister,
     GrantRevoke,
     FlowRun,
     ConnectorList,
@@ -1083,6 +1122,7 @@ impl Capability {
             Self::ModelInfer => "model.infer",
             Self::ModelStatus => "model.status",
             Self::ModelRegister => "model.register",
+            Self::ModelUnregister => "model.unregister",
             Self::GrantRevoke => "grant.revoke",
             Self::FlowRun => "flow.run",
             Self::ConnectorList => "connector.list",
@@ -1284,6 +1324,9 @@ pub enum RequestPayload {
     ModelRegister {
         registration: ModelRegistration,
     },
+    ModelUnregister {
+        model: String,
+    },
     GrantRevoke {
         capability: String,
     },
@@ -1460,6 +1503,7 @@ pub enum ResultPayload {
     ModelGeneration(ModelGenerationResult),
     ModelStatus(ModelStatusResult),
     ModelRegister(ModelRegisterResult),
+    ModelUnregister(ModelUnregisterResult),
     GrantRevoke(GrantRevokeResult),
     FlowRun(pam_flow::FlowRunResult),
     ConnectorList(ConnectorListResult),
@@ -1477,6 +1521,21 @@ pub struct ModelRegisterResult {
     /// Stable `vendor/name` identity now present in the registry.
     pub model: String,
     pub registered_at_ms: u64,
+}
+
+/// Acknowledgement of one durable model removal from the registry.
+///
+/// The acknowledgement describes the row that was removed, so a caller can
+/// report exactly what left the registry. Unregistering never touches the
+/// weights on disk: the GGUF stays where its owner put it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelUnregisterResult {
+    /// Stable `vendor/name` identity no longer present in the registry.
+    pub model: String,
+    /// Size of the artifact the removed row described.
+    pub size_bytes: u64,
+    /// Canonical `sha256:<hex>` digest the removed row carried.
+    pub digest: String,
 }
 
 /// Acknowledgement of one capability revocation for the requesting caller.

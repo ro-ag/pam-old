@@ -647,6 +647,66 @@ fn direct_model_runtime_and_import_require_explicit_bounded_inputs() {
 }
 
 #[test]
+fn model_registry_commands_parse_into_their_exact_modes() {
+    let model = pam_model::ModelKey::new("byteshape", "qwen3.6-q4ks").unwrap();
+
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "list"])
+            .unwrap()
+            .mode(),
+        Mode::ModelList { json: false }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "list", "--json"])
+            .unwrap()
+            .mode(),
+        Mode::ModelList { json: true }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "status"])
+            .unwrap()
+            .mode(),
+        Mode::ModelStatus { approval_id: None }
+    );
+    // Unregistering is destructive, so consent is explicit and parsed, never
+    // inferred: the flag is carried into the mode for the command to enforce.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "unregister", "byteshape/qwen3.6-q4ks"])
+            .unwrap()
+            .mode(),
+        Mode::ModelUnregister {
+            model: model.clone(),
+            yes: false,
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from([
+            "pam",
+            "model",
+            "unregister",
+            "byteshape/qwen3.6-q4ks",
+            "--yes",
+        ])
+        .unwrap()
+        .mode(),
+        Mode::ModelUnregister {
+            model,
+            yes: true,
+            approval_id: None,
+        }
+    );
+
+    for arguments in [
+        vec!["pam", "model", "unregister"],
+        vec!["pam", "model", "unregister", "bad/model/extra"],
+        vec!["pam", "model", "list", "--unknown"],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+}
+
+#[test]
 fn daemon_backed_commands_accept_explicit_approval_receipts() {
     let approval_id = ApprovalId::from("approval-1");
 

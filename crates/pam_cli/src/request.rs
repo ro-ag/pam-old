@@ -126,6 +126,31 @@ impl RequestContext {
         .map(|request| self.authenticate(request))
     }
 
+    pub(crate) fn model_status(&self) -> RequestEnvelope {
+        let (request_id, idempotency_key) = operation_ids("model-status");
+        self.authenticate(RequestEnvelope::model_status(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+        ))
+    }
+
+    pub(crate) fn model_unregister(
+        &self,
+        model: String,
+    ) -> Result<RequestEnvelope, ProtocolContractError> {
+        let (request_id, idempotency_key) = operation_ids("model-unregister");
+        RequestEnvelope::model_unregister(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+            model,
+        )
+        .map(|request| self.authenticate(request))
+    }
+
     pub(crate) fn wait(&self, target_request_id: RequestId, after: u64) -> RequestEnvelope {
         let (request_id, idempotency_key) = operation_ids("wait");
         self.authenticate(RequestEnvelope::wait_for_result(

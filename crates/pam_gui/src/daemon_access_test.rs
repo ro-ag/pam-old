@@ -102,6 +102,7 @@ async fn granting_a_daemon_capability_authorizes_it_and_revoking_returns_it_to_d
         vec![
             ("model.infer", false),
             ("model.register", false),
+            ("model.unregister", false),
             ("network.diagnostics", false),
             ("connector.configure", false),
             ("connector.test", false),

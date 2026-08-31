@@ -4,8 +4,9 @@ use pam_protocol::{
     ApprovalDecisionDisposition, ApprovalDecisionResult, BriefItem, BriefProvenance, BriefResult,
     CancellationDisposition, CancellationResult, ConfigurationPresence, DaemonLifecycleResult,
     Event, EventEnvelope, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, Failure,
-    FailureCode, ModelFinishReason, ModelGenerationResult, ModelUsage, NetworkDiagnosticsResult,
-    OperationTruth, PROTOCOL_VERSION, PacState, ResultBody, ResultPayload, SourceAvailability,
+    FailureCode, ModelFinishReason, ModelGenerationResult, ModelUnregisterResult, ModelUsage,
+    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ResultBody,
+    ResultPayload, SourceAvailability,
 };
 
 use super::render::{
@@ -43,6 +44,52 @@ fn approval_decision_renders_only_bounded_identity_and_disposition() {
         "approval_id=approval-1 disposition=approved truth=changed\n"
     );
     assert!(presentation.stderr.is_empty());
+}
+
+#[test]
+fn model_unregistration_renders_the_record_that_left_the_registry() {
+    let presentation = present_result(&ResultBody::Success {
+        truth: OperationTruth::Changed,
+        payload: ResultPayload::ModelUnregister(ModelUnregisterResult {
+            model: "byteshape/qwen3.6-q4ks".to_owned(),
+            size_bytes: 16_492_334_496,
+            digest: ContentDigest::from_sha256([1; 32]).as_str().to_owned(),
+        }),
+    });
+
+    assert_eq!(
+        presentation.stdout,
+        format!(
+            "model=byteshape/qwen3.6-q4ks size_bytes=16492334496 digest={} truth=changed\n",
+            ContentDigest::from_sha256([1; 32])
+        )
+    );
+    assert!(presentation.stderr.is_empty());
+}
+
+#[test]
+fn a_refused_unregistration_reports_its_recovery_command_on_stderr() {
+    let presentation = present_result(&ResultBody::Failure(Failure {
+        code: FailureCode::LeaseConflict,
+        message: "the requested model is loaded in this daemon and cannot be unregistered"
+            .to_owned(),
+        recovery: Some(
+            "restart PAM without this model using `pam daemon`, then unregister vendor/loaded"
+                .to_owned(),
+        ),
+        approval: None,
+    }));
+
+    assert!(presentation.stdout.is_empty());
+    assert!(presentation.stderr.contains("Failure: lease_conflict"));
+    assert!(
+        presentation.stderr.contains(
+            "Recovery: restart PAM without this model using `pam daemon`, then unregister vendor/loaded"
+        ),
+        "the refusal must carry its recovery command: {}",
+        presentation.stderr
+    );
+    assert_eq!(presentation.exit_code, EXIT_OPERATION_FAILED);
 }
 
 #[test]
