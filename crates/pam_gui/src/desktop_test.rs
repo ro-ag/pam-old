@@ -32,12 +32,13 @@ use super::{
         failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
         flow_workspace_at_for_test, gui_registration_current_for_test,
         manage_skill_library_without_io_for_test, mark_model_loading_for_test,
-        model_infer_dto_for_test, model_status_dto_for_test, model_unregister_dto_for_test,
+        model_delete_weights_dto_for_test, model_infer_dto_for_test, model_status_dto_for_test,
+        model_sweep_dto_for_test, model_unregister_dto_for_test, model_verify_dto_for_test,
         post_save_reload_error_for_test, read_startup_progress, reap_daemon_child_for_test,
-        registered_model_catalog_in_for_test, registration_contract_for_test,
-        registration_failure_detail, replace_daemon_child_for_test, reserve_daemon_for_test,
-        reserve_for_test, startup_budget_for_bytes_for_test, stop_outcome_for_test,
-        switch_authority_for_test, wait_for_daemon_serving_for_test,
+        registered_model_catalog_in_for_test, registered_model_path_in_for_test,
+        registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
+        reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
+        stop_outcome_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     observatory::ObservatoryState,
@@ -709,6 +710,201 @@ async fn registered_model_catalog_reads_the_durable_store_directly() {
         }]
     );
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[tokio::test]
+async fn only_a_registered_models_own_path_widens_the_reveal_allowlist() {
+    let directory =
+        std::env::temp_dir().join(format!("pam-gui-model-reveal-{}", uuid::Uuid::new_v4()));
+    let state_path = directory.join("state.sqlite3");
+    std::fs::create_dir_all(&directory).unwrap();
+    let weights = directory.join("seeded.gguf");
+    let store = pam_store::Store::open(&state_path).unwrap();
+    store
+        .put_model(pam_model::RegisteredModel {
+            key: pam_model::ModelKey::new("qwen", "seeded").unwrap(),
+            path: weights.clone(),
+            digest: ContentDigest::from_sha256([7; 32]),
+            size_bytes: 64,
+            gguf: pam_model::GgufMetadata {
+                version: 3,
+                tensor_count: 17,
+                metadata_kv_count: 29,
+                architecture: None,
+                model_name: None,
+                license: None,
+            },
+            license: pam_model::LicenseSnapshot::new(
+                "Apache-2.0",
+                "https://example.test/license",
+                ContentDigest::from_sha256([8; 32]),
+            )
+            .unwrap(),
+            source: pam_model::ModelSource::Local,
+            registered_at_ms: 5,
+        })
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    // Reveal is how PAM answers "I will not delete your file": the registered
+    // path is allowed, and nothing beside it is.
+    assert!(registered_model_path_in_for_test(state_path.clone(), &weights).await);
+    assert!(!registered_model_path_in_for_test(state_path, &directory.join("other.gguf")).await);
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn model_verify_dto_names_each_models_health_and_carries_every_refusal_recovery() {
+    let verified = model_verify_dto_for_test(ObservatoryState::Available(
+        pam_protocol::ModelVerifyResult {
+            models: vec![
+                pam_protocol::ModelVerification {
+                    model: "vendor/healthy".to_owned(),
+                    path: "/models/vendor/healthy.gguf".to_owned(),
+                    size_bytes: 4096,
+                    health: "ok".to_owned(),
+                    detail: None,
+                    source: "https".to_owned(),
+                    weights_deletable: true,
+                },
+                pam_protocol::ModelVerification {
+                    model: "vendor/imported".to_owned(),
+                    path: "/elsewhere/imported.gguf".to_owned(),
+                    size_bytes: 8192,
+                    health: "digest_mismatch".to_owned(),
+                    detail: Some("model SHA-256 did not match the expected digest".to_owned()),
+                    source: "local".to_owned(),
+                    weights_deletable: false,
+                },
+            ],
+        },
+    ));
+
+    assert_eq!(
+        serde_json::to_value(verified).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "models": [
+                {
+                    "model": "vendor/healthy",
+                    "path": "/models/vendor/healthy.gguf",
+                    "sizeBytes": 4096,
+                    "health": "ok",
+                    "detail": null,
+                    "source": "https",
+                    "weightsDeletable": true
+                },
+                {
+                    "model": "vendor/imported",
+                    "path": "/elsewhere/imported.gguf",
+                    "sizeBytes": 8192,
+                    "health": "digest_mismatch",
+                    "detail": "model SHA-256 did not match the expected digest",
+                    "source": "local",
+                    "weightsDeletable": false
+                }
+            ]
+        })
+    );
+
+    let blocked = model_verify_dto_for_test(ObservatoryState::Blocked {
+        code: FailureCode::Forbidden,
+        detail: "Policy denies model.verify.".to_owned(),
+        recovery: Some("Grant model.verify for the GUI caller.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(blocked).unwrap()["failure"],
+        serde_json::json!({
+            "kind": "blocked",
+            "code": "forbidden",
+            "detail": "Policy denies model.verify.",
+            "recovery": "Grant model.verify for the GUI caller."
+        })
+    );
+}
+
+#[test]
+fn model_sweep_dto_reports_both_directions_with_sizes_and_the_directory_total() {
+    let swept = model_sweep_dto_for_test(ObservatoryState::Available(
+        pam_protocol::ModelSweepResult {
+            models_dir: "/models".to_owned(),
+            dangling: vec![pam_protocol::DanglingRegistrationSummary {
+                model: "vendor/gone".to_owned(),
+                path: "/models/vendor/gone.gguf".to_owned(),
+                size_bytes: 4096,
+            }],
+            orphans: vec![pam_protocol::OrphanWeightsSummary {
+                path: "/models/vendor/stray.gguf".to_owned(),
+                size_bytes: 128,
+            }],
+            total_bytes: 8192,
+        },
+    ));
+
+    assert_eq!(
+        serde_json::to_value(swept).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "modelsDir": "/models",
+            "dangling": [{
+                "model": "vendor/gone",
+                "path": "/models/vendor/gone.gguf",
+                "sizeBytes": 4096
+            }],
+            "orphans": [{
+                "path": "/models/vendor/stray.gguf",
+                "sizeBytes": 128
+            }],
+            "totalBytes": 8192
+        })
+    );
+}
+
+#[test]
+fn a_refused_weights_deletion_keeps_the_daemons_own_explanation_and_recovery() {
+    let deleted = model_delete_weights_dto_for_test(ObservatoryState::Available(
+        pam_protocol::ModelDeleteWeightsResult {
+            model: "vendor/name".to_owned(),
+            path: "/models/vendor/name.gguf".to_owned(),
+            bytes_reclaimed: 4096,
+        },
+    ));
+    assert_eq!(
+        serde_json::to_value(deleted).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "model": "vendor/name",
+            "path": "/models/vendor/name.gguf",
+            "bytesReclaimed": 4096
+        })
+    );
+
+    // PAM refusing to delete a file it never downloaded is not a policy
+    // denial: it arrives as unavailable and its exact words survive intact.
+    let refused = model_delete_weights_dto_for_test(ObservatoryState::Unavailable {
+        code: None,
+        detail:
+            "PAM did not download this model, so it will not delete the file at /elsewhere/name.gguf"
+                .to_owned(),
+        recovery: Some(
+            "Run `pam model unregister vendor/name --yes` to drop the registry entry, then delete /elsewhere/name.gguf yourself."
+                .to_owned(),
+        ),
+    });
+    assert_eq!(
+        serde_json::to_value(refused).unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": null,
+                "detail": "PAM did not download this model, so it will not delete the file at /elsewhere/name.gguf",
+                "recovery": "Run `pam model unregister vendor/name --yes` to drop the registry entry, then delete /elsewhere/name.gguf yourself."
+            }
+        })
+    );
 }
 
 #[tokio::test]

@@ -8,16 +8,18 @@ use super::{
     ApprovalDecision, ApprovalDecisionDisposition, ApprovalDecisionResult, BriefItem,
     BriefProvenance, BriefResult, CallerListResult, CallerSummary, CancellationDisposition,
     CancellationResult, Capability, ConfigurationPresence, ConnectorCredentialAction,
-    ConnectorListResult, ConnectorSecret, ConnectorSummary, DaemonLifecycleResult, Event,
-    EventEnvelope, EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention,
-    ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FLOW_PROJECT_ROOT_BYTES,
-    MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_TOKENS,
-    MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRegistration, ModelRole, ModelStatusResult,
-    ModelSummary, ModelUnregisterResult, ModelUsage, NetworkDiagnosticsResult, OperationTruth,
-    PROTOCOL_VERSION, PacState, ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary,
-    ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload, ResultBody,
-    ResultEnvelope, ResultPayload, SourceAvailability, StatusResult,
+    ConnectorListResult, ConnectorSecret, ConnectorSummary, DaemonLifecycleResult,
+    DanglingRegistrationSummary, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
+    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE,
+    MAX_FLOW_PROJECT_ROOT_BYTES, MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES,
+    MAX_MODEL_OUTPUT_TOKENS, MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES,
+    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelMessage,
+    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult,
+    ModelUnregisterResult, ModelUsage, ModelVerification, ModelVerifyResult,
+    NetworkDiagnosticsResult, OperationTruth, OrphanWeightsSummary, PROTOCOL_VERSION, PacState,
+    ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary, ProtocolContractError,
+    ReplayResult, RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload,
+    SourceAvailability, StatusResult,
 };
 
 const PROJECT_ROOT: &str = "/canonical/project";
@@ -1426,6 +1428,138 @@ fn model_unregister_round_trips_its_request_and_its_acknowledgement() {
     let encoded = crate::encode(&result).unwrap();
 
     assert_eq!(crate::decode_server_message(&encoded).unwrap(), result);
+}
+
+#[test]
+fn the_registry_health_capabilities_carry_their_own_policy_names_and_payloads() {
+    let one = RequestEnvelope::model_verify(
+        RequestId::from("model-verify-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-verify-key"),
+        Some("qwen/qwen3-4b".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(one.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(one.capability, Capability::ModelVerify);
+    assert_eq!(one.capability.policy_name(), "model.verify");
+    assert!(one.validate_model_request().is_ok());
+
+    // Naming no model verifies the whole registered catalog.
+    let all = RequestEnvelope::model_verify(
+        RequestId::from("model-verify-2"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-verify-all-key"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(all.payload, RequestPayload::ModelVerify { model: None });
+    assert!(all.validate_model_request().is_ok());
+
+    let sweep = RequestEnvelope::model_sweep(
+        RequestId::from("model-sweep-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-sweep-key"),
+    );
+    assert_eq!(sweep.capability, Capability::ModelSweep);
+    assert_eq!(sweep.capability.policy_name(), "model.sweep");
+    assert_eq!(sweep.payload, RequestPayload::ModelSweep);
+
+    let delete = RequestEnvelope::model_delete_weights(
+        RequestId::from("model-delete-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-delete-key"),
+        "qwen/qwen3-4b",
+    )
+    .unwrap();
+    assert_eq!(delete.capability, Capability::ModelDeleteWeights);
+    assert_eq!(delete.capability.policy_name(), "model.delete-weights");
+    assert_eq!(
+        delete.payload,
+        RequestPayload::ModelDeleteWeights {
+            model: "qwen/qwen3-4b".to_owned()
+        }
+    );
+    // Every one of them is built unauthenticated and gets its credential later.
+    assert!(one.authentication.is_none());
+    assert!(delete.authentication.is_none());
+
+    // An identity the registry could never hold is rejected before the wire.
+    for model in ["not-a-vendor-name", "qwen/", "qwen/../escape", "qwen/a/b"] {
+        assert_eq!(
+            RequestEnvelope::model_verify(
+                RequestId::from("model-verify-1"),
+                CallerId::from("gui-1"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("model-verify-key"),
+                Some(model.to_owned()),
+            )
+            .unwrap_err(),
+            ProtocolContractError::InvalidModelIdentity
+        );
+        assert_eq!(
+            RequestEnvelope::model_delete_weights(
+                RequestId::from("model-delete-1"),
+                CallerId::from("gui-1"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("model-delete-key"),
+                model,
+            )
+            .unwrap_err(),
+            ProtocolContractError::InvalidModelIdentity
+        );
+    }
+}
+
+#[test]
+fn the_registry_health_results_round_trip_over_the_wire() {
+    for payload in [
+        ResultPayload::ModelVerify(ModelVerifyResult {
+            models: vec![ModelVerification {
+                model: "qwen/qwen3-4b".to_owned(),
+                path: "/models/qwen/qwen3-4b.gguf".to_owned(),
+                size_bytes: 4096,
+                health: "digest_mismatch".to_owned(),
+                detail: Some("model SHA-256 did not match the expected digest".to_owned()),
+                source: "https".to_owned(),
+                weights_deletable: true,
+            }],
+        }),
+        ResultPayload::ModelSweep(ModelSweepResult {
+            models_dir: "/models".to_owned(),
+            dangling: vec![DanglingRegistrationSummary {
+                model: "qwen/gone".to_owned(),
+                path: "/models/qwen/gone.gguf".to_owned(),
+                size_bytes: 4096,
+            }],
+            orphans: vec![OrphanWeightsSummary {
+                path: "/models/qwen/stray.gguf".to_owned(),
+                size_bytes: 128,
+            }],
+            total_bytes: 8192,
+        }),
+        ResultPayload::ModelDeleteWeights(ModelDeleteWeightsResult {
+            model: "qwen/qwen3-4b".to_owned(),
+            path: "/models/qwen/qwen3-4b.gguf".to_owned(),
+            bytes_reclaimed: 4096,
+        }),
+    ] {
+        let result = crate::ServerMessage::Result(ResultEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: RequestId::from("model-health-1"),
+            project_id: ProjectId::daemon_scope(),
+            body: ResultBody::Success {
+                truth: OperationTruth::Verified,
+                payload,
+            },
+        });
+        let encoded = crate::encode(&result).unwrap();
+
+        assert_eq!(crate::decode_server_message(&encoded).unwrap(), result);
+    }
 }
 
 #[test]

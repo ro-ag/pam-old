@@ -11,7 +11,11 @@ use pam_core::{
     ApprovalId, CallerCredential, CallerId, ContentDigest, EvidenceHandle, GrantId, IdempotencyKey,
     ProjectId, RequestId,
 };
-use pam_model::{ModelKey, RuntimeError, RuntimeFinishReason, RuntimeResponse, RuntimeUsage};
+use pam_model::{
+    DanglingRegistration, GgufMetadata, LicenseSnapshot, ModelError, ModelKey, ModelSource,
+    ModelsDirectorySweep, OrphanWeights, RegisteredModel, RuntimeError, RuntimeFinishReason,
+    RuntimeResponse, RuntimeUsage, WeightsRefusal,
+};
 use pam_platform::{ClientTransport, LocalEndpoint};
 use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, MAX_RESOURCE_NAME_BYTES, ResourceName,
@@ -33,11 +37,14 @@ use pam_store::{
 use tokio::sync::oneshot;
 
 use super::lifecycle::{
-    BriefProvider, DaemonConfig, MODEL_UNREGISTER_LOADED_MESSAGE, Ownership, approval_recovery,
-    cancellation_presentation, clamp_activity_limit, degrade_after_model_load_failure,
-    grant_recovery, model_runtime_result, model_status_result, model_unregister_loaded_refusal,
+    BriefProvider, DaemonConfig, MODEL_DELETE_WEIGHTS_LOADED_MESSAGE,
+    MODEL_UNREGISTER_LOADED_MESSAGE, Ownership, approval_recovery, cancellation_presentation,
+    clamp_activity_limit, degrade_after_model_load_failure, grant_recovery,
+    model_delete_weights_loaded_refusal, model_runtime_result, model_status_result,
+    model_sweep_result, model_unregister_loaded_refusal, model_verification, model_verify_truth,
     policy_resource, prepare_endpoint, protocol_activity_event, protocol_caller_summary,
     protocol_project_current, request_audit_event_id, request_preflight, serve_until_with_delay,
+    weights_refusal_failure,
 };
 use crate::DaemonError;
 use crate::logging::{DaemonLog, LogLevel};
@@ -295,6 +302,284 @@ fn model_unregister_names_the_exact_model_in_its_policy_resource_and_grant() {
     assert_eq!(
         grant_recovery(&request, &Ok(resource)),
         "pam access grant model.unregister --daemon --resource model:vendor/model"
+    );
+}
+
+/// A registration record for the pure helpers: no file has to exist, because
+/// every helper under test takes the revalidation outcome as an argument.
+fn registered(vendor: &str, name: &str, source: ModelSource) -> RegisteredModel {
+    RegisteredModel {
+        key: ModelKey::new(vendor, name).unwrap(),
+        path: PathBuf::from(format!("/models/{vendor}/{name}.gguf")),
+        digest: ContentDigest::from_sha256([3; 32]),
+        size_bytes: 4096,
+        gguf: GgufMetadata {
+            version: 3,
+            tensor_count: 17,
+            metadata_kv_count: 29,
+            architecture: None,
+            model_name: None,
+            license: None,
+        },
+        license: LicenseSnapshot::new(
+            "Apache-2.0",
+            "https://example.test/license",
+            ContentDigest::from_sha256([8; 32]),
+        )
+        .unwrap(),
+        source,
+        registered_at_ms: 5,
+    }
+}
+
+#[test]
+fn a_verification_names_the_check_that_failed_and_never_a_bare_boolean() {
+    let downloaded = registered(
+        "vendor",
+        "downloaded",
+        ModelSource::https("https://models.example/model.gguf").unwrap(),
+    );
+
+    let healthy = model_verification(&downloaded, &Ok(()), true);
+    assert_eq!(healthy.model, "vendor/downloaded");
+    assert_eq!(healthy.path, "/models/vendor/downloaded.gguf");
+    assert_eq!(healthy.size_bytes, 4096);
+    assert_eq!(healthy.health, "ok");
+    assert_eq!(healthy.detail, None);
+    assert_eq!(healthy.source, "https");
+    assert!(healthy.weights_deletable);
+
+    // Each failure keeps its own label and its own sentence.
+    for (outcome, health) in [
+        (
+            Err(ModelError::Io(std::io::Error::from(
+                std::io::ErrorKind::NotFound,
+            ))),
+            "path_missing",
+        ),
+        (
+            Err(ModelError::SizeMismatch {
+                expected: 4096,
+                actual: 4095,
+            }),
+            "size_mismatch",
+        ),
+        (Err(ModelError::DigestMismatch), "digest_mismatch"),
+        (Err(ModelError::InvalidGguf), "metadata_mismatch"),
+        (Err(ModelError::UnsafePath), "unsafe_path"),
+    ] {
+        let reported = model_verification(&downloaded, &outcome, false);
+        assert_eq!(reported.health, health);
+        assert_eq!(
+            reported.detail.as_deref(),
+            Some(outcome.unwrap_err().to_string().as_str())
+        );
+        assert!(!reported.weights_deletable);
+    }
+
+    // Provenance travels with the row, so the GUI never re-derives the gate.
+    let imported = model_verification(
+        &registered("vendor", "imported", ModelSource::Local),
+        &Ok(()),
+        false,
+    );
+    assert_eq!(imported.source, "local");
+    assert!(!imported.weights_deletable);
+}
+
+#[test]
+fn only_a_pass_over_a_non_empty_catalog_is_verified() {
+    let downloaded = registered(
+        "vendor",
+        "model",
+        ModelSource::https("https://models.example/model.gguf").unwrap(),
+    );
+    let ok = model_verification(&downloaded, &Ok(()), true);
+    let failed = model_verification(&downloaded, &Err(ModelError::DigestMismatch), true);
+
+    // Re-reading every artifact and finding them intact is the one thing PAM
+    // can honestly call verified.
+    assert_eq!(
+        model_verify_truth(&[ok.clone(), ok.clone()]),
+        OperationTruth::Verified
+    );
+    // One rotted artifact leaves the registry knowingly wrong.
+    assert_eq!(
+        model_verify_truth(&[ok, failed]),
+        OperationTruth::Unresolved
+    );
+    // Verifying an empty catalog verified nothing: it is a plain read.
+    assert_eq!(model_verify_truth(&[]), OperationTruth::Observed);
+}
+
+#[test]
+fn the_sweep_report_carries_both_directions_with_their_sizes_and_the_total() {
+    let reported = model_sweep_result(ModelsDirectorySweep {
+        models_dir: PathBuf::from("/models"),
+        dangling: vec![DanglingRegistration {
+            key: ModelKey::new("vendor", "gone").unwrap(),
+            path: PathBuf::from("/models/vendor/gone.gguf"),
+            size_bytes: 4096,
+        }],
+        orphans: vec![OrphanWeights {
+            path: PathBuf::from("/models/vendor/stray.gguf"),
+            size_bytes: 128,
+        }],
+        total_bytes: 8192,
+    });
+
+    assert_eq!(reported.models_dir, "/models");
+    assert_eq!(reported.dangling[0].model, "vendor/gone");
+    assert_eq!(reported.dangling[0].path, "/models/vendor/gone.gguf");
+    assert_eq!(reported.dangling[0].size_bytes, 4096);
+    assert_eq!(reported.orphans[0].path, "/models/vendor/stray.gguf");
+    assert_eq!(reported.orphans[0].size_bytes, 128);
+    assert_eq!(reported.total_bytes, 8192);
+}
+
+#[test]
+fn refusing_a_weights_deletion_says_why_and_what_the_user_can_do_instead() {
+    let path = PathBuf::from("/elsewhere/model.gguf");
+    let models_dir = PathBuf::from("/models");
+
+    // The provenance refusal is the one that protects a user's own file.
+    let (code, message, recovery) = weights_refusal_failure(
+        WeightsRefusal::NotDownloadedByPam,
+        "vendor/model",
+        &path,
+        &models_dir,
+    );
+    assert_eq!(code, FailureCode::InvalidRequest);
+    assert_eq!(
+        message,
+        "PAM did not download this model, so it will not delete the file at /elsewhere/model.gguf"
+    );
+    assert_eq!(
+        recovery,
+        "Run `pam model unregister vendor/model --yes` to drop the registry entry, then delete /elsewhere/model.gguf yourself."
+    );
+
+    let (_, message, recovery) = weights_refusal_failure(
+        WeightsRefusal::OutsideModelsDirectory,
+        "vendor/model",
+        &path,
+        &models_dir,
+    );
+    assert_eq!(
+        message,
+        "this model's weights are no longer inside PAM's models directory at /elsewhere/model.gguf"
+    );
+    assert!(
+        recovery.contains("Move the file back under /models"),
+        "{recovery}"
+    );
+
+    let (_, message, recovery) =
+        weights_refusal_failure(WeightsRefusal::Unsafe, "vendor/model", &path, &models_dir);
+    assert_eq!(
+        message,
+        "this model's path is not a regular file PAM can remove at /elsewhere/model.gguf"
+    );
+    assert!(recovery.contains("pam model sweep"), "{recovery}");
+}
+
+#[test]
+fn deleting_the_loaded_models_weights_is_refused_with_its_exact_recovery_command() {
+    let request = RequestEnvelope::model_delete_weights(
+        RequestId::from("model-delete-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-delete-key"),
+        "vendor/loaded",
+    )
+    .unwrap();
+    let loaded = ModelKey::new("vendor", "loaded").unwrap();
+    let other = ModelKey::new("vendor", "other").unwrap();
+
+    let refusal =
+        model_delete_weights_loaded_refusal(&request, "vendor/loaded", &loaded, Some(&loaded))
+            .expect("deleting the loaded model's weights must be refused");
+    let ResultBody::Failure(failure) = refusal.body else {
+        panic!("the refusal must be a failure");
+    };
+    assert_eq!(failure.code, FailureCode::LeaseConflict);
+    assert_eq!(failure.message, MODEL_DELETE_WEIGHTS_LOADED_MESSAGE);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some(
+            "restart PAM without this model using `pam daemon`, then delete the weights for vendor/loaded"
+        )
+    );
+
+    // Any other model is untouched by the mapping, loaded or not.
+    assert!(
+        model_delete_weights_loaded_refusal(&request, "vendor/other", &other, Some(&loaded))
+            .is_none()
+    );
+    assert!(model_delete_weights_loaded_refusal(&request, "vendor/other", &other, None).is_none());
+}
+
+#[test]
+fn registry_health_capabilities_name_their_policy_resource_and_grant() {
+    let one = RequestEnvelope::model_verify(
+        RequestId::from("model-verify-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-verify-key"),
+        Some("vendor/model".to_owned()),
+    )
+    .unwrap();
+    let resource = policy_resource(&one).unwrap();
+    assert_eq!(resource.as_str(), "model:vendor/model");
+    assert_eq!(
+        grant_recovery(&one, &Ok(resource)),
+        "pam access grant model.verify --daemon --resource model:vendor/model"
+    );
+
+    // Catalog-wide verification names a resource that stays runnable in the
+    // recovery command it is quoted into.
+    let all = RequestEnvelope::model_verify(
+        RequestId::from("model-verify-2"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-verify-all-key"),
+        None,
+    )
+    .unwrap();
+    let resource = policy_resource(&all).unwrap();
+    assert_eq!(resource.as_str(), "model:all");
+    assert_eq!(
+        grant_recovery(&all, &Ok(resource)),
+        "pam access grant model.verify --daemon --resource model:all"
+    );
+
+    // The sweep's authority is the directory, not any one model.
+    let sweep = RequestEnvelope::model_sweep(
+        RequestId::from("model-sweep-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-sweep-key"),
+    );
+    let resource = policy_resource(&sweep).unwrap();
+    assert_eq!(resource.as_str(), "models:directory");
+    assert_eq!(
+        grant_recovery(&sweep, &Ok(resource)),
+        "pam access grant model.sweep --daemon --resource models:directory"
+    );
+
+    let delete = RequestEnvelope::model_delete_weights(
+        RequestId::from("model-delete-2"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-delete-2-key"),
+        "vendor/model",
+    )
+    .unwrap();
+    let resource = policy_resource(&delete).unwrap();
+    assert_eq!(resource.as_str(), "model:vendor/model");
+    assert_eq!(
+        grant_recovery(&delete, &Ok(resource)),
+        "pam access grant model.delete-weights --daemon --resource model:vendor/model"
     );
 }
 

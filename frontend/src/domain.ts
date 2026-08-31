@@ -630,6 +630,58 @@ export type ModelUnregisterDto =
   | { status: "ok"; model: string; sizeBytes: number }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+/// One registered model's health against its registration record. `health` is
+// never a bare boolean: it names the check that stopped matching, so a row can
+// say moved, truncated or drifted rather than just bad.
+export interface ModelHealthDto {
+  model: string;
+  path: string;
+  sizeBytes: number;
+  health: "ok" | "path_missing" | "size_mismatch" | "digest_mismatch" | "metadata_mismatch" | "unsafe_path" | "unreadable";
+  detail: string | null;
+  /** `local` for a GGUF PAM verified in place, `https` for one it downloaded. */
+  source: string;
+  /**
+   * True only when PAM downloaded this artifact and it still sits inside the
+   * models directory in effect right now. The daemon decides this; the view
+   * never re-derives the rule.
+   */
+  weightsDeletable: boolean;
+}
+
+export type ModelVerifyDto =
+  | { status: "ok"; models: ModelHealthDto[] }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+export interface DanglingModelDto {
+  model: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface OrphanWeightsDto {
+  path: string;
+  sizeBytes: number;
+}
+
+// The sweep reports and never acts: a dangling row is cleared by unregistering
+// it, and an orphaned file PAM downloaded goes through Delete weights.
+export type ModelSweepDto =
+  | {
+      status: "ok";
+      modelsDir: string;
+      dangling: DanglingModelDto[];
+      orphans: OrphanWeightsDto[];
+      totalBytes: number;
+    }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+// Deleting weights removes the file and unregisters the model in one
+// operation, so the acknowledgement names both the path and the bytes freed.
+export type ModelDeleteWeightsDto =
+  | { status: "ok"; model: string; path: string; bytesReclaimed: number }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
 export interface ModelImportStatusDto {
   status: "idle" | "running" | "complete" | "failed";
   model: string | null;
@@ -836,6 +888,10 @@ export interface PamBridge {
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
   modelUnregister(fence: CommandFence, model: string): Promise<ModelUnregisterDto>;
+  /** Registry health: re-reads registered weights. Not the loaded-model check. */
+  modelVerify(fence: CommandFence, model?: string): Promise<ModelVerifyDto>;
+  modelSweep(fence: CommandFence): Promise<ModelSweepDto>;
+  modelDeleteWeights(fence: CommandFence, model: string): Promise<ModelDeleteWeightsDto>;
   modelImportStatus(fence: CommandFence): Promise<ModelImportStatusDto>;
   modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
   modelLicenseDiscover(fence: CommandFence, query: string): Promise<ModelLicenseDiscoveryDto>;

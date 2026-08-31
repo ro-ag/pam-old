@@ -481,6 +481,40 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
+    /// Re-read the registered weights and report what still matches the registry.
+    Verify {
+        /// One model to verify; omit to verify the whole registered catalog.
+        #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
+        model: Option<ModelKey>,
+        /// Emit the report as JSON instead of the human summary.
+        #[arg(long)]
+        json: bool,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
+    /// Reconcile the registry against the models directory, in both directions.
+    Sweep {
+        /// Emit the report as JSON instead of the human summary.
+        #[arg(long)]
+        json: bool,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
+    /// Delete a PAM-downloaded model's weights and unregister it.
+    DeleteWeights {
+        /// Stable model identity.
+        #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
+        model: ModelKey,
+        /// Confirm deleting the file on disk. PAM refuses any model it did not
+        /// download into its own models directory.
+        #[arg(long)]
+        yes: bool,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
     /// List the registered model catalog.
     List {
         /// Emit the catalog as JSON instead of the human summary.
@@ -791,6 +825,20 @@ pub(crate) enum Mode {
         yes: bool,
         approval_id: Option<ApprovalId>,
     },
+    ModelVerify {
+        model: Option<ModelKey>,
+        json: bool,
+        approval_id: Option<ApprovalId>,
+    },
+    ModelSweep {
+        json: bool,
+        approval_id: Option<ApprovalId>,
+    },
+    ModelDeleteWeights {
+        model: ModelKey,
+        yes: bool,
+        approval_id: Option<ApprovalId>,
+    },
     ModelList {
         json: bool,
     },
@@ -892,6 +940,9 @@ impl fmt::Debug for ModelCommand {
         match self {
             Self::Import { .. } => formatter.write_str("Import"),
             Self::Unregister { .. } => formatter.write_str("Unregister"),
+            Self::Verify { .. } => formatter.write_str("Verify"),
+            Self::Sweep { .. } => formatter.write_str("Sweep"),
+            Self::DeleteWeights { .. } => formatter.write_str("DeleteWeights"),
             Self::List { .. } => formatter.write_str("List"),
             Self::Status { .. } => formatter.write_str("Status"),
             Self::Generate {
@@ -962,6 +1013,9 @@ impl fmt::Debug for Mode {
             Self::CallerRevoke { .. } => formatter.write_str("CallerRevoke"),
             Self::ModelImport { .. } => formatter.write_str("ModelImport"),
             Self::ModelUnregister { .. } => formatter.write_str("ModelUnregister"),
+            Self::ModelVerify { .. } => formatter.write_str("ModelVerify"),
+            Self::ModelSweep { .. } => formatter.write_str("ModelSweep"),
+            Self::ModelDeleteWeights { .. } => formatter.write_str("ModelDeleteWeights"),
             Self::ModelList { .. } => formatter.write_str("ModelList"),
             Self::ModelStatus { .. } => formatter.write_str("ModelStatus"),
             Self::AccessGrant { .. } => formatter.write_str("AccessGrant"),
@@ -1063,6 +1117,33 @@ impl Cli {
                         approval_id,
                     },
             }) => Mode::ModelUnregister {
+                model,
+                yes,
+                approval_id,
+            },
+            Some(Command::Model {
+                command:
+                    ModelCommand::Verify {
+                        model,
+                        json,
+                        approval_id,
+                    },
+            }) => Mode::ModelVerify {
+                model,
+                json,
+                approval_id,
+            },
+            Some(Command::Model {
+                command: ModelCommand::Sweep { json, approval_id },
+            }) => Mode::ModelSweep { json, approval_id },
+            Some(Command::Model {
+                command:
+                    ModelCommand::DeleteWeights {
+                        model,
+                        yes,
+                        approval_id,
+                    },
+            }) => Mode::ModelDeleteWeights {
                 model,
                 yes,
                 approval_id,

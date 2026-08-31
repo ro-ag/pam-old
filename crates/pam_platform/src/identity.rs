@@ -8,7 +8,7 @@ use std::{
     process::Command,
 };
 
-use directories::ProjectDirs;
+use directories::{BaseDirs, ProjectDirs};
 use pam_core::{CallerId, ProjectId};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -214,6 +214,29 @@ pub fn user_data_dir() -> Result<PathBuf, IdentityError> {
                 IdentityErrorKind::UserDataUnavailable,
                 None,
                 "the operating system did not provide a user data directory",
+            )
+        })
+}
+
+/// Returns the current user's home directory.
+///
+/// PAM's default model root is `<home>/llm`, so every component that has to
+/// resolve the effective models directory — the GUI's Settings, and the
+/// daemon's registry health capabilities — needs the same home probe. Sharing
+/// one probe keeps them from disagreeing about where weights live.
+///
+/// # Errors
+///
+/// Returns an error when the operating system does not expose a home
+/// directory for the current process.
+pub fn user_home_dir() -> Result<PathBuf, IdentityError> {
+    BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .ok_or_else(|| {
+            IdentityError::new(
+                IdentityErrorKind::UserDataUnavailable,
+                None,
+                "the operating system did not provide a user home directory",
             )
         })
 }

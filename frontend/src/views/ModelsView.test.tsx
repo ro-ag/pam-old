@@ -27,6 +27,7 @@ async function modelProps(scenario: FixtureScenario = "solved") {
     onStartWithModel: vi.fn(),
     onModelImported: vi.fn(),
     onModelUnregistered: vi.fn(),
+    onModelWeightsDeleted: vi.fn(),
   };
 }
 
@@ -195,6 +196,142 @@ describe("model runtime panel", () => {
       "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.",
     );
     expect(props.onModelUnregistered).not.toHaveBeenCalled();
+  });
+
+
+  it("checks one row's weights against the registry and renders what it found", async () => {
+    const props = await modelProps("model-on-deck");
+    const verify = vi.spyOn(props.bridge, "modelVerify");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Check weights" }));
+
+    // The check names one model: it re-reads that artifact, not the catalog.
+    await waitFor(() =>
+      expect(verify).toHaveBeenCalledWith(
+        expect.objectContaining({ projectHandle: "daemon" }),
+        "qwen/qwen3-14b-instruct-q4",
+      ),
+    );
+    expect(await within(row).findByText("Weights match the registry")).toBeInTheDocument();
+  });
+
+  it("names the exact check that failed rather than reporting a bare failure", async () => {
+    const props = await modelProps("model-health-rotted");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const rows = within(panel).getAllByRole("article");
+    const imported = rows.find((row) => within(row).queryByTitle("qwen/qwen3-4b-instruct-q4"));
+    await userEvent.click(within(imported!).getByRole("button", { name: "Check weights" }));
+
+    const reported = await within(imported!).findByRole("alert");
+    expect(reported).toHaveTextContent("Weights missing — nothing at the registered path");
+    expect(reported).toHaveTextContent("model storage is unavailable");
+  });
+
+  it("offers Delete weights only for a model PAM downloaded, and Reveal in Finder for the rest", async () => {
+    const props = await modelProps("model-on-deck");
+    const reveal = vi.spyOn(props.bridge, "revealPath");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const rows = within(panel).getAllByRole("article");
+    const downloaded = rows.find((row) => within(row).queryByTitle("qwen/qwen3-14b-instruct-q4"))!;
+    const imported = rows.find((row) => within(row).queryByTitle("qwen/qwen3-4b-instruct-q4"))!;
+
+    // Nothing is offered before the check that proves the provenance.
+    expect(within(downloaded).queryByRole("button", { name: /Delete weights/ })).toBeNull();
+
+    await userEvent.click(within(downloaded).getByRole("button", { name: "Check weights" }));
+    expect(
+      await within(downloaded).findByRole("button", { name: /Delete weights/ }),
+    ).toBeInTheDocument();
+    expect(within(downloaded).queryByRole("button", { name: /Reveal in Finder/ })).toBeNull();
+
+    // A GGUF PAM only ever verified in place is never PAM's to delete: the
+    // honest offer is to show the owner where their file is.
+    await userEvent.click(within(imported).getByRole("button", { name: "Check weights" }));
+    expect(within(imported).queryByRole("button", { name: /Delete weights/ })).toBeNull();
+    await userEvent.click(await within(imported).findByRole("button", { name: /Reveal in Finder/ }));
+    await waitFor(() =>
+      expect(reveal).toHaveBeenCalledWith(
+        expect.objectContaining({ projectHandle: "daemon" }),
+        "/Users/example/Downloads/qwen3-4b-instruct-q4.gguf",
+      ),
+    );
+  });
+
+  it("confirms a weights deletion and reports the bytes it reclaimed", async () => {
+    const props = await modelProps("model-on-deck");
+    const remove = vi.spyOn(props.bridge, "modelDeleteWeights");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel)
+      .getAllByRole("article")
+      .find((candidate) => within(candidate).queryByTitle("qwen/qwen3-14b-instruct-q4"))!;
+    await userEvent.click(within(row).getByRole("button", { name: "Check weights" }));
+    await userEvent.click(await within(row).findByRole("button", { name: /Delete weights/ }));
+
+    // The confirmation says exactly what leaves: the bytes, the path, and the
+    // registration that goes with them.
+    expect(
+      within(row).getByText(/Delete 19\.5 GB of weights at .*qwen3-14b-instruct-q4\.gguf and unregister/),
+    ).toBeInTheDocument();
+    expect(remove).not.toHaveBeenCalled();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Delete weights" }));
+    await waitFor(() =>
+      expect(props.onModelWeightsDeleted).toHaveBeenCalledWith(
+        "qwen/qwen3-14b-instruct-q4",
+        19_500_000_000,
+      ),
+    );
+  });
+
+  it("keeps a refused weights check beside its row with the recovery line", async () => {
+    const props = await modelProps("model-verify-blocked");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Check weights" }));
+
+    const refusal = await within(row).findByRole("alert");
+    expect(refusal).toHaveTextContent("Project policy has not granted model.verify to this caller yet.");
+    expect(refusal).toHaveTextContent(
+      "Grant the GUI caller the model.verify capability in Access, or approve the pending check.",
+    );
+  });
+
+  it("sweeps the models directory in both directions with sizes and an honest total", async () => {
+    const props = await modelProps("model-health-rotted");
+    render(<ModelsView {...props} />);
+
+    const sweep = await screen.findByRole("region", { name: "Weights on disk" });
+
+    expect(within(sweep).getByText(/\/Users\/example\/llm · 23\.6 GB in this directory/)).toBeInTheDocument();
+    // A registry row whose file is gone, and a file no row points at.
+    expect(
+      within(sweep).getByText(/Registered at .*qwen3-4b-instruct-q4\.gguf, but nothing is there · 2\.8 GB recorded/),
+    ).toBeInTheDocument();
+    expect(within(sweep).getByTitle("/Users/example/llm/qwen/orphaned-q4.gguf")).toBeInTheDocument();
+    expect(
+      within(sweep).getByText("No registry entry points at this file · 4.1 GB"),
+    ).toBeInTheDocument();
+  });
+
+  it("says so plainly when the registry and the models directory agree", async () => {
+    const props = await modelProps("model-on-deck");
+    render(<ModelsView {...props} />);
+
+    const sweep = await screen.findByRole("region", { name: "Weights on disk" });
+    expect(
+      within(sweep).getByText(/Every registered model points at a file that is there/),
+    ).toBeInTheDocument();
   });
 
   it("imports a model entirely from the panel when none is registered", async () => {

@@ -1,4 +1,9 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
+
+use serde::Deserialize;
 
 use crate::{ModelError, ModelKey, model::valid_segment};
 
@@ -40,6 +45,37 @@ pub fn model_path_under(
     Ok(root.join(key.vendor()).join(filename))
 }
 
+/// PAM's default models root, `<home>/llm`, before any Settings override.
+#[must_use]
+pub fn default_models_dir(home: &Path) -> PathBuf {
+    home.join("llm")
+}
+
+/// The one persisted preference that can move the models root. Only the field
+/// this crate needs is read; the GUI owns writing the file.
+#[derive(Debug, Default, Deserialize)]
+struct PersistedModelsDir {
+    #[serde(default)]
+    models_dir: Option<String>,
+}
+
+/// The effective models download directory: the Settings-persisted override
+/// when one is set, otherwise [`default_models_dir`].
+///
+/// This lives here, beside the path rules it feeds, because it has two
+/// readers that must never disagree: the GUI, which shows and edits the
+/// directory, and the daemon, which sweeps it and gates weights deletion on
+/// containment in it. Infallible by design — a missing or corrupt preference
+/// file falls back to the default rather than failing an unrelated read.
+#[must_use]
+pub fn effective_models_dir(data_dir: &Path, home: &Path) -> PathBuf {
+    fs::read_to_string(data_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<PersistedModelsDir>(&text).ok())
+        .and_then(|persisted| persisted.models_dir)
+        .map_or_else(|| default_models_dir(home), PathBuf::from)
+}
+
 /// Returns `<home>/llm/<vendor>/<filename>` without creating it.
 ///
 /// # Errors
@@ -51,7 +87,7 @@ pub fn default_model_path(
     key: &ModelKey,
     filename: &str,
 ) -> Result<PathBuf, ModelError> {
-    model_path_under(&home.join("llm"), key, filename)
+    model_path_under(&default_models_dir(home), key, filename)
 }
 
 /// Validates an absolute, non-parent-traversing Unicode path. Shared by the

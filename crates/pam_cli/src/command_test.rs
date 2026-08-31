@@ -708,6 +708,78 @@ fn model_registry_commands_parse_into_their_exact_modes() {
 }
 
 #[test]
+fn model_health_commands_parse_into_their_exact_modes() {
+    let model = pam_model::ModelKey::new("byteshape", "qwen3.6-q4ks").unwrap();
+
+    // Verification takes one model or, with none named, the whole catalog.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "verify"])
+            .unwrap()
+            .mode(),
+        Mode::ModelVerify {
+            model: None,
+            json: false,
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "verify", "byteshape/qwen3.6-q4ks", "--json",])
+            .unwrap()
+            .mode(),
+        Mode::ModelVerify {
+            model: Some(model.clone()),
+            json: true,
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "sweep", "--json"])
+            .unwrap()
+            .mode(),
+        Mode::ModelSweep {
+            json: true,
+            approval_id: None,
+        }
+    );
+    // Deleting weights is destructive, so consent is parsed and carried, never
+    // inferred.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "delete-weights", "byteshape/qwen3.6-q4ks"])
+            .unwrap()
+            .mode(),
+        Mode::ModelDeleteWeights {
+            model: model.clone(),
+            yes: false,
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from([
+            "pam",
+            "model",
+            "delete-weights",
+            "byteshape/qwen3.6-q4ks",
+            "--yes",
+        ])
+        .unwrap()
+        .mode(),
+        Mode::ModelDeleteWeights {
+            model,
+            yes: true,
+            approval_id: None,
+        }
+    );
+
+    for arguments in [
+        vec!["pam", "model", "delete-weights"],
+        vec!["pam", "model", "verify", "bad/model/extra"],
+        vec!["pam", "model", "sweep", "--unknown"],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+}
+
+#[test]
 fn daemon_backed_commands_accept_explicit_approval_receipts() {
     let approval_id = ApprovalId::from("approval-1");
 

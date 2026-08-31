@@ -26,9 +26,9 @@ use pam_protocol::{
     CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
     ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
     DaemonStatsResult, FailureCode, FlowProjectRoot, LogSeverity, MAX_MODEL_OUTPUT_TOKENS,
-    ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole, ModelStatusResult,
-    ModelSummary, ModelUnregisterResult, ProjectRequestState, ProjectRequestSummary,
-    ProjectUsageSummary, ResetResult, ResetTier,
+    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
+    ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnregisterResult, ModelVerifyResult,
+    ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary, ResetResult, ResetTier,
 };
 use pam_store::Store;
 use serde::{Deserialize, Serialize};
@@ -70,7 +70,8 @@ use crate::{
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
-        run_connector_test, run_model_infer, run_model_unregister, run_reset,
+        run_connector_test, run_model_delete_weights, run_model_infer, run_model_sweep,
+        run_model_unregister, run_model_verify, run_reset,
     },
     settings,
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
@@ -885,6 +886,105 @@ pub enum ModelUnregisterDto {
     Ok { model: String, size_bytes: u64 },
     Blocked { failure: FailureDto },
     Unavailable { failure: FailureDto },
+}
+
+/// One registered model's health against its registration record.
+///
+/// `health` is never a bare boolean: it names the exact check that stopped
+/// matching, so a row can say "moved", "truncated" or "drifted" rather than
+/// just "bad".
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelHealthDto {
+    pub model: String,
+    pub path: String,
+    pub size_bytes: u64,
+    /// `ok`, or `path_missing` / `size_mismatch` / `digest_mismatch` /
+    /// `metadata_mismatch` / `unsafe_path` / `unreadable`.
+    pub health: String,
+    /// The failure's own sentence, absent when the model verified.
+    pub detail: Option<String>,
+    /// `local` for a GGUF PAM verified in place, `https` for one it
+    /// downloaded.
+    pub source: String,
+    /// True only when PAM downloaded this artifact and it still sits inside
+    /// the models directory in effect right now — the daemon's own gate, so
+    /// the view never re-derives it.
+    pub weights_deletable: bool,
+}
+
+/// One verification pass over the registered catalog.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelVerifyDto {
+    Ok { models: Vec<ModelHealthDto> },
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+/// A registry row whose recorded path no longer resolves.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DanglingModelDto {
+    pub model: String,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+/// A `.gguf` under the models directory that no registry row names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanWeightsDto {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+/// One reconciliation of the registry against the models directory. Reporting
+/// only: a sweep removes nothing.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelSweepDto {
+    Ok {
+        models_dir: String,
+        dangling: Vec<DanglingModelDto>,
+        orphans: Vec<OrphanWeightsDto>,
+        total_bytes: u64,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+/// Acknowledgement of one weights deletion, which also unregisters the model.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelDeleteWeightsDto {
+    Ok {
+        model: String,
+        path: String,
+        bytes_reclaimed: u64,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2260,6 +2360,94 @@ impl DesktopCore {
         Ok(data)
     }
 
+    /// Re-reads the registered weights and reports what still matches the
+    /// registry.
+    ///
+    /// This is the registry's health, not the loaded model's: it is the
+    /// standalone form of the check the runtime runs before it maps a model,
+    /// so a moved, truncated or drifted artifact is discoverable without
+    /// starting PAM on it. Distinct from the panel's model check, which asks
+    /// the loaded model to answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused, or
+    /// when the model identity violates the protocol contract before any
+    /// daemon exchange.
+    pub async fn model_verify(
+        &self,
+        fence: CommandFence,
+        model: Option<String>,
+    ) -> DesktopResult<ModelVerifyDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_verify(caller, credential, model)
+                .await
+                .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+            Err(state) => state,
+        };
+        let data = model_verify_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Reconciles the registry against the models directory, in both
+    /// directions, and reports what the directory costs.
+    ///
+    /// Reporting is separate from acting: nothing is removed here. A dangling
+    /// row is cleared with [`Self::model_unregister`], and an orphaned file
+    /// PAM downloaded goes through [`Self::model_delete_weights`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_sweep(&self, fence: CommandFence) -> DesktopResult<ModelSweepDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_sweep(caller, credential).await,
+            Err(state) => state,
+        };
+        let data = model_sweep_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Deletes one PAM-downloaded model's weights and unregisters it.
+    ///
+    /// Unregistering and deleting weights stay two operations, and only this
+    /// one removes bytes. The daemon owns the provenance gate: a GGUF PAM only
+    /// ever verified in place belongs to its owner and is refused with an
+    /// explanation, never silently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused, or
+    /// when the model identity violates the protocol contract before any
+    /// daemon exchange.
+    pub async fn model_delete_weights(
+        &self,
+        fence: CommandFence,
+        model: String,
+    ) -> DesktopResult<ModelDeleteWeightsDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed =
+            match observatory_credential().await {
+                Ok((caller, credential)) => run_model_delete_weights(caller, credential, model)
+                    .await
+                    .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+                Err(state) => state,
+            };
+        let data = model_delete_weights_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
     /// Polls the current guided import status. There is no event bus in this
     /// codebase, so the GUI polls this instead of receiving progress —
     /// exactly like [`Self::model_download_status`].
@@ -2678,25 +2866,32 @@ impl DesktopCore {
             .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))
     }
 
-    /// Validates that `path` is exactly one of today's Settings locations.
-    /// The actual "open in Finder" side effect is Tauri-specific and lives in
-    /// the desktop shell; this only guards against revealing an arbitrary
-    /// filesystem path chosen by the frontend.
+    /// Validates that `path` is exactly one of today's Settings locations, or
+    /// exactly one registered model's own weights file. The actual "open in
+    /// Finder" side effect is Tauri-specific and lives in the desktop shell;
+    /// this only guards against revealing an arbitrary filesystem path chosen
+    /// by the frontend.
+    ///
+    /// Registered weights are on the list because PAM refuses to delete a GGUF
+    /// it never downloaded: showing the owner where their own file is, is the
+    /// only thing the app can honestly offer instead.
     ///
     /// # Errors
     ///
     /// Returns a bounded error when the fence is not the exact daemon
-    /// authority, its operation UUID was replayed, or `path` does not match
-    /// the models, data, flows, or logs directory.
+    /// authority, its operation UUID was replayed, or `path` is neither the
+    /// models, data, flows, or logs directory nor a registered model's path.
     pub async fn reveal_path(&self, fence: CommandFence, path: String) -> DesktopResult<()> {
         let _command = self.command_gate.lock().await;
         self.begin_daemon(&fence).await?;
         let snapshot = settings_snapshot()?;
-        if settings::is_known_location(&snapshot, Path::new(&path)) {
+        if settings::is_known_location(&snapshot, Path::new(&path))
+            || registered_model_path(&path).await
+        {
             Ok(())
         } else {
             Err(DesktopErrorDto::invalid_input(
-                "This path is not a PAM Settings location.",
+                "This path is not a PAM Settings location or a registered model.",
             ))
         }
     }
@@ -4637,6 +4832,26 @@ async fn registered_model_catalog() -> Option<Vec<ModelSummaryDto>> {
     registered_model_catalog_in(state_path).await
 }
 
+/// True when `path` is exactly the recorded path of one registered model.
+///
+/// The allowlist is durable state PAM already trusts, read straight from the
+/// registry, so the frontend can never widen it by naming a path itself.
+async fn registered_model_path(path: &str) -> bool {
+    let Ok(state_path) = user_data_dir().map(|dir| dir.join("state.sqlite3")) else {
+        return false;
+    };
+    registered_model_path_in(state_path, Path::new(path)).await
+}
+
+async fn registered_model_path_in(state_path: PathBuf, path: &Path) -> bool {
+    let Ok(store) = Store::open(state_path) else {
+        return false;
+    };
+    let catalog = store.list_models().await;
+    let _ = store.shutdown().await;
+    catalog.is_ok_and(|catalog| catalog.iter().any(|model| model.path == path))
+}
+
 async fn registered_model_catalog_in(state_path: PathBuf) -> Option<Vec<ModelSummaryDto>> {
     let store = Store::open(state_path).ok()?;
     let catalog = store.list_models().await.ok()?;
@@ -4668,6 +4883,106 @@ fn model_unregister_dto(state: ObservatoryState<ModelUnregisterResult>) -> Model
             detail,
             recovery,
         } => ModelUnregisterDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn model_verify_dto(state: ObservatoryState<ModelVerifyResult>) -> ModelVerifyDto {
+    match state {
+        ObservatoryState::Available(result) => ModelVerifyDto::Ok {
+            models: result
+                .models
+                .into_iter()
+                .map(|model| ModelHealthDto {
+                    model: bounded_detail(model.model),
+                    path: bounded_detail(model.path),
+                    size_bytes: model.size_bytes,
+                    health: bounded_detail(model.health),
+                    detail: model.detail.map(bounded_detail),
+                    source: bounded_detail(model.source),
+                    weights_deletable: model.weights_deletable,
+                })
+                .collect(),
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelVerifyDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelVerifyDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn model_sweep_dto(state: ObservatoryState<ModelSweepResult>) -> ModelSweepDto {
+    match state {
+        ObservatoryState::Available(result) => ModelSweepDto::Ok {
+            models_dir: bounded_detail(result.models_dir),
+            dangling: result
+                .dangling
+                .into_iter()
+                .map(|row| DanglingModelDto {
+                    model: bounded_detail(row.model),
+                    path: bounded_detail(row.path),
+                    size_bytes: row.size_bytes,
+                })
+                .collect(),
+            orphans: result
+                .orphans
+                .into_iter()
+                .map(|orphan| OrphanWeightsDto {
+                    path: bounded_detail(orphan.path),
+                    size_bytes: orphan.size_bytes,
+                })
+                .collect(),
+            total_bytes: result.total_bytes,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelSweepDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelSweepDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn model_delete_weights_dto(
+    state: ObservatoryState<ModelDeleteWeightsResult>,
+) -> ModelDeleteWeightsDto {
+    match state {
+        ObservatoryState::Available(result) => ModelDeleteWeightsDto::Ok {
+            model: bounded_detail(result.model),
+            path: bounded_detail(result.path),
+            bytes_reclaimed: result.bytes_reclaimed,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelDeleteWeightsDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelDeleteWeightsDto::Unavailable {
             failure: unavailable_failure(code, detail, recovery),
         },
     }
@@ -5439,6 +5754,11 @@ pub(crate) fn model_status_dto_for_test(
 }
 
 #[cfg(test)]
+pub(crate) async fn registered_model_path_in_for_test(state_path: PathBuf, path: &Path) -> bool {
+    registered_model_path_in(state_path, path).await
+}
+
+#[cfg(test)]
 pub(crate) async fn registered_model_catalog_in_for_test(
     state_path: PathBuf,
 ) -> Option<Vec<ModelSummaryDto>> {
@@ -5491,6 +5811,25 @@ pub(crate) fn model_infer_dto_for_test(
     state: ObservatoryState<ModelGenerationResult>,
 ) -> ModelInferDto {
     model_infer_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_verify_dto_for_test(
+    state: ObservatoryState<ModelVerifyResult>,
+) -> ModelVerifyDto {
+    model_verify_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_sweep_dto_for_test(state: ObservatoryState<ModelSweepResult>) -> ModelSweepDto {
+    model_sweep_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_delete_weights_dto_for_test(
+    state: ObservatoryState<ModelDeleteWeightsResult>,
+) -> ModelDeleteWeightsDto {
+    model_delete_weights_dto(state)
 }
 
 #[cfg(test)]

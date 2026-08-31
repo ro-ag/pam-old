@@ -1428,7 +1428,7 @@ fn open_parent(path: &Path, create: bool) -> Result<(Dir, PathBuf), ModelError> 
     Ok((open_absolute_directory(parent, create)?, name))
 }
 
-fn open_absolute_directory(path: &Path, create: bool) -> Result<Dir, ModelError> {
+pub(crate) fn open_absolute_directory(path: &Path, create: bool) -> Result<Dir, ModelError> {
     let mut root = PathBuf::new();
     let mut names = Vec::new();
     let mut rooted = false;
@@ -1464,7 +1464,11 @@ fn open_absolute_directory(path: &Path, create: bool) -> Result<Dir, ModelError>
     Ok(directory)
 }
 
-fn open_child_directory(parent: &Dir, name: &Path, create: bool) -> Result<Dir, ModelError> {
+pub(crate) fn open_child_directory(
+    parent: &Dir,
+    name: &Path,
+    create: bool,
+) -> Result<Dir, ModelError> {
     match parent.open_dir_nofollow(name) {
         Ok(directory) => verify_directory(directory),
         Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {

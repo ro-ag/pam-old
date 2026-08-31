@@ -605,6 +605,31 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             escape_text(&result.digest),
             truth_label(truth)
         ),
+        ResultPayload::ModelVerify(result) => format!(
+            "models={} failed={} truth={}\n",
+            result.models.len(),
+            result
+                .models
+                .iter()
+                .filter(|model| model.health != "ok")
+                .count(),
+            truth_label(truth)
+        ),
+        ResultPayload::ModelSweep(result) => format!(
+            "models_dir={} dangling={} orphans={} total_bytes={} truth={}\n",
+            escape_text(&result.models_dir),
+            result.dangling.len(),
+            result.orphans.len(),
+            result.total_bytes,
+            truth_label(truth)
+        ),
+        ResultPayload::ModelDeleteWeights(result) => format!(
+            "model={} path={} bytes_reclaimed={} truth={}\n",
+            escape_text(&result.model),
+            escape_text(&result.path),
+            result.bytes_reclaimed,
+            truth_label(truth)
+        ),
         ResultPayload::GrantRevoke(result) => format!(
             "capability={} revoked={} truth={}\n",
             escape_text(&result.capability),

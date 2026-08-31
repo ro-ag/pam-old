@@ -44,7 +44,11 @@ import type {
   ModelPresetsDto,
   ModelStatusDto,
   ModelSummaryDto,
+  ModelDeleteWeightsDto,
+  ModelHealthDto,
+  ModelSweepDto,
   ModelUnregisterDto,
+  ModelVerifyDto,
   PamBridge,
   ProjectSummaryDto,
   ResetDto,
@@ -306,6 +310,8 @@ export const fixtureScenarios = [
   "model-loading",
   "model-download-fail",
   "model-unregister-blocked",
+  "model-health-rotted",
+  "model-verify-blocked",
   "connector-unconfigured",
   "connector-blocked",
   "reset-blocked",
@@ -316,6 +322,15 @@ export type FixtureScenario = typeof fixtureScenarios[number];
 export function fixtureScenario(value: string | null | undefined): FixtureScenario {
   return fixtureScenarios.find((scenario) => scenario === value) ?? "solved";
 }
+
+const FIXTURE_MODELS_DIR = "/Users/example/llm";
+// Provenance decides which row may offer Delete weights: the 14B was
+// downloaded by PAM into its models directory, the 4B was imported in place
+// from somewhere the user owns and is never PAM's to delete.
+const fixtureModelPaths: Record<string, { path: string; source: string }> = {
+  "qwen/qwen3-14b-instruct-q4": { path: `${FIXTURE_MODELS_DIR}/qwen/qwen3-14b-instruct-q4.gguf`, source: "https" },
+  "qwen/qwen3-4b-instruct-q4": { path: "/Users/example/Downloads/qwen3-4b-instruct-q4.gguf", source: "local" },
+};
 
 const loadedModel: ModelSummaryDto = { modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 19_500_000_000 };
 const registeredModels: ModelSummaryDto[] = [
@@ -857,6 +872,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
     { capability: "model.register", name: "Model registration", summary: "Models registers an imported or downloaded GGUF in the daemon's registry.", granted: true },
     { capability: "model.unregister", name: "Model removal", summary: "Models removes a registered model from the daemon's registry; the weights stay on disk.", granted: scenario !== "model-unregister-blocked" },
+    { capability: "model.verify", name: "Model verification", summary: "Models re-reads registered weights and reports what no longer matches the registry.", granted: scenario !== "model-verify-blocked" },
+    { capability: "model.sweep", name: "Model directory sweep", summary: "Models reconciles the registry against the models directory and reports what it costs.", granted: scenario !== "model-verify-blocked" },
+    { capability: "model.delete-weights", name: "Model weights deletion", summary: "Models deletes a GGUF PAM downloaded into its own models directory and unregisters it.", granted: true },
     { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
     { capability: "connector.configure", name: "Connector configuration", summary: "Access saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
     { capability: "connector.test", name: "Connector self-test", summary: "Access runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
@@ -1089,6 +1107,101 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       }
       modelCatalog = modelCatalog.filter((entry) => entry.modelId !== model);
       return { status: "ok", model: removed.modelId, sizeBytes: removed.sizeBytes };
+    },
+    async modelVerify(_fence, model): Promise<ModelVerifyDto> {
+      if (scenario === "model-verify-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "forbidden",
+            detail: "Project policy has not granted model.verify to this caller yet.",
+            recovery: "Grant the GUI caller the model.verify capability in Access, or approve the pending check.",
+          },
+        };
+      }
+      const rows = modelCatalog
+        .filter((entry) => model === undefined || entry.modelId === model)
+        .map((entry): ModelHealthDto => {
+          const provenance = fixtureModelPaths[entry.modelId] ?? { path: `${FIXTURE_MODELS_DIR}/${entry.modelId}.gguf`, source: "https" };
+          // One scenario shows a registry that has rotted: the imported model's
+          // file moved out from under it.
+          const rotted = scenario === "model-health-rotted" && entry.modelId === "qwen/qwen3-4b-instruct-q4";
+          return {
+            model: entry.modelId,
+            path: provenance.path,
+            sizeBytes: entry.sizeBytes,
+            health: rotted ? "path_missing" : "ok",
+            detail: rotted ? "model storage is unavailable" : null,
+            source: provenance.source,
+            weightsDeletable: provenance.source === "https" && !rotted,
+          };
+        });
+      return { status: "ok", models: rows };
+    },
+    async modelSweep(_fence): Promise<ModelSweepDto> {
+      if (scenario === "model-verify-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "forbidden",
+            detail: "Project policy has not granted model.sweep to this caller yet.",
+            recovery: "Grant the GUI caller the model.sweep capability in Access, or approve the pending sweep.",
+          },
+        };
+      }
+      return {
+        status: "ok",
+        modelsDir: FIXTURE_MODELS_DIR,
+        dangling: scenario === "model-health-rotted"
+          ? [{
+              model: "qwen/qwen3-4b-instruct-q4",
+              path: fixtureModelPaths["qwen/qwen3-4b-instruct-q4"].path,
+              sizeBytes: 2_800_000_000,
+            }]
+          : [],
+        orphans: scenario === "model-health-rotted"
+          ? [{ path: `${FIXTURE_MODELS_DIR}/qwen/orphaned-q4.gguf`, sizeBytes: 4_100_000_000 }]
+          : [],
+        totalBytes: 23_600_000_000,
+      };
+    },
+    async modelDeleteWeights(_fence, model): Promise<ModelDeleteWeightsDto> {
+      const provenance = fixtureModelPaths[model];
+      // PAM refuses any artifact it did not download, in the daemon's own
+      // words, and says what the user can do instead.
+      if (!provenance || provenance.source !== "https") {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: null,
+            detail: `PAM did not download this model, so it will not delete the file at ${provenance?.path ?? model}`,
+            recovery: `Run \`pam model unregister ${model} --yes\` to drop the registry entry, then delete ${provenance?.path ?? "the file"} yourself.`,
+          },
+        };
+      }
+      if (daemonRunning && modelLoaded?.modelId === model) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: null,
+            detail: "the requested model is loaded in this daemon and its weights cannot be deleted",
+            recovery: `restart PAM without this model using \`pam daemon\`, then delete the weights for ${model}`,
+          },
+        };
+      }
+      const removed = modelCatalog.find((entry) => entry.modelId === model);
+      if (!removed) {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "not_found", detail: `model ${model} is not registered`, recovery: null },
+        };
+      }
+      modelCatalog = modelCatalog.filter((entry) => entry.modelId !== model);
+      return { status: "ok", model, path: provenance.path, bytesReclaimed: removed.sizeBytes };
     },
     async modelImport(_fence, params): Promise<ModelImportDto> {
       if (!daemonRunning) {
