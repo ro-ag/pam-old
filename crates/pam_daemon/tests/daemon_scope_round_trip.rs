@@ -21,7 +21,16 @@ const TEST_CREDENTIAL: &str = "daemon-scope-caller-credential";
 /// Connector exchanges touch the native keychain; the security server's
 /// first-access code-signature evaluation of a fresh debug binary can take
 /// several seconds, so keychain-backed exchanges get a generous deadline.
-const KEYCHAIN_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a test waits for one exchange to come back.
+///
+/// This is the client's patience, not an assertion: every exchange in this file
+/// asserts the *result* it gets, never that the exchange timed out. It has to be
+/// generous for two reasons — a shared CI runner can stall a real IPC round trip
+/// with `SQLite` behind it, and reading the native trust store is a security-server
+/// round trip measured as high as 6s on a developer machine. The rest of the
+/// suite already uses 10-15s for the same job; this file used to scatter bare
+/// two-second deadlines and flaked on both counts.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn test_runtime(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -112,7 +121,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             IdempotencyKey::from("scope-activity-key"),
             0,
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -133,7 +142,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             IdempotencyKey::from("scope-logs-key"),
             0,
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -161,7 +170,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             IdempotencyKey::from("scope-stats-key"),
             0,
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -181,7 +190,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             scope.clone(),
             IdempotencyKey::from("scope-callers-key"),
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -201,7 +210,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             scope.clone(),
             IdempotencyKey::from("scope-model-key"),
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -221,7 +230,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             scope.clone(),
             IdempotencyKey::from("scope-connectors-key"),
         )),
-        KEYCHAIN_EXCHANGE_TIMEOUT,
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -244,7 +253,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             IdempotencyKey::from("scope-activity-after-key"),
             0,
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -272,7 +281,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             scope,
             IdempotencyKey::from("scope-project-current-key"),
         )),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -341,7 +350,7 @@ async fn daemon_scope_grant_authorizes_connector_configure() {
     let configured = request_exchange(
         &endpoint,
         &configure("scope-configure", ProjectId::daemon_scope()),
-        KEYCHAIN_EXCHANGE_TIMEOUT,
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -359,7 +368,7 @@ async fn daemon_scope_grant_authorizes_connector_configure() {
     let denied = request_exchange(
         &endpoint,
         &configure("project-configure", ProjectId::from("project-elsewhere")),
-        KEYCHAIN_EXCHANGE_TIMEOUT,
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -417,7 +426,7 @@ async fn daemon_scope_grant_authorizes_the_access_boundary_read() {
         )),
         // Reading the native trust store is a security-server round trip, not a
         // durable read like the other daemon-scope probes in this file.
-        KEYCHAIN_EXCHANGE_TIMEOUT,
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -512,7 +521,7 @@ async fn model_register_needs_its_grant_and_then_writes_the_registry() {
     let denied = request_exchange(
         &endpoint,
         &register_request("scope-register-denied", "ungranted-operator"),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -526,7 +535,7 @@ async fn model_register_needs_its_grant_and_then_writes_the_registry() {
     let registered = request_exchange(
         &endpoint,
         &register_request("scope-register", "scope-operator"),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -544,7 +553,7 @@ async fn model_register_needs_its_grant_and_then_writes_the_registry() {
     let again = request_exchange(
         &endpoint,
         &register_request("scope-register-again", "scope-operator"),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -607,7 +616,7 @@ async fn grant_revoke_drops_only_the_requesting_callers_own_grants() {
             )
             .unwrap(),
         ),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();

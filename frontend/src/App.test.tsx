@@ -243,7 +243,7 @@ describe("daemon observatory", () => {
     expect(await screen.findByText("Model access")).toBeInTheDocument();
     // Daemon authority, and a fresh operation per call so the replay guard holds.
     expect(read).toHaveBeenCalledWith(expect.objectContaining({ projectHandle: "daemon", generation: "daemon" }));
-    expect(screen.getByText("Access policy")).toBeInTheDocument();
+    expect(await screen.findByText("Access policy")).toBeInTheDocument();
     expect(screen.getByText("Certificates")).toBeInTheDocument();
     expect(screen.getByText("Network configuration")).toBeInTheDocument();
     expect(screen.getByText(/Operating-system certificate verifier enabled/)).toBeInTheDocument();
@@ -272,7 +272,9 @@ describe("daemon observatory", () => {
     render(<App bridge={fixtureBridge("access-blocked")} initialView="access" />);
 
     expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
-    expect(screen.getByText("Access policy")).toBeInTheDocument();
+    // The observed boundary loads after the heading, so this has to be awaited:
+    // a synchronous read races the panel's own fetch on a loaded runner.
+    expect(await screen.findByText("Access policy")).toBeInTheDocument();
     expect(screen.getByText("policy-gated")).toBeInTheDocument();
     expect(screen.getByText(/Network diagnostics are blocked by policy for this PAM window/)).toBeInTheDocument();
     expect(screen.queryByText("Certificates")).not.toBeInTheDocument();
