@@ -4,6 +4,86 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-01
+
+### Added
+
+- Models can be loaded and unloaded in a running daemon. Changing models no
+  longer means restarting: `pam model load` admits a registered model and
+  `pam model unload` drops it while Pam keeps serving. Loading over a loaded
+  model swaps it, draining and joining the old worker - which unmaps the
+  weights - before the replacement is built, so an inference in flight ends
+  cancelled rather than reading a half-swapped service. In the Models view
+  the restart dance is gone: rows carry Load, the loaded model carries
+  Unload.
+- The model the daemon starts with is remembered. A default model is
+  persisted beside the models directory and pinned per row in the Models
+  view; an explicit `--model` still wins, and a default naming a model that
+  is no longer registered says so plainly instead of failing the start.
+- Registered models can be removed. `model.unregister` deletes the registry
+  row and writes a changed-truth audit line, with `pam model unregister` on
+  the CLI and an Unregister row action in the Models view. The GGUF file on
+  disk is never touched: unregistering and deleting bytes are different
+  effects, and both surfaces say so.
+- Registered weights can be checked without booting the daemon on them.
+  `pam model verify` re-reads what the registry claims and names the
+  specific failure - missing, resized, or digest drift - and the Models view
+  reports it per row as Check weights.
+- `pam model sweep` reports drift in both directions: registry rows whose
+  file is gone, and GGUF files with no row pointing at them, with sizes and
+  an honest models-directory total. In-flight downloads are not mistaken for
+  orphans.
+- Weights deletion is gated on provenance. `pam model delete-weights` serves
+  only files Pam downloaded and still owns; a model imported in place is a
+  user file Pam never owned, so it is refused with an explanation and
+  offered Reveal in Finder instead. Deleting weights unregisters in the same
+  operation.
+- A model can be downloaded from a pasted HTTPS URL, not just the curated
+  list. The pasted path is gated before anything is fetched: HTTPS only, no
+  credentials in the URL, hosts resolving to loopback, link-local or private
+  addresses refused, redirects confined to the pasted host, and the digest
+  as the real gate - bytes that do not match are never registered.
+- Reset is tiered rather than one button. `reset.access` clears grants and
+  approvals, `reset.identity` revokes callers and purges their keychain
+  entries, `reset.history` clears audit, evidence and flow runs, and
+  `reset.registry` unregisters every model without touching weights. Each
+  has a dry run that reports counts and bytes and changes nothing, and the
+  grant for a preview cannot be spent on the wipe.
+- `pam reset all` performs a factory reset: daemon stopped, `--yes`
+  required, the audit event emitted before the wipe, and a receipt written
+  outside the directory being emptied naming everything removed. Settings
+  gains a danger zone that renders each tier's dry-run counts before its
+  confirm arms, with a typed confirmation for the factory tier.
+- The CLI can finally see the model registry: `pam model list` and
+  `pam model status`, closing the gap where the GUI had ten model commands
+  and the CLI had two.
+
+### Changed
+
+- The sidebar daemon control names the action instead of the state. It reads
+  Start Pam or Stop Pam, with the state on its own line beside it, and
+  stopping asks first - saying plainly that it unloads the model and drops
+  queued work. Restart no longer appears and disappears as the daemon comes
+  and goes.
+- The application, its macOS bundle and its release artifacts are lowercase
+  `pam`, and the interface calls the product Pam. **The published disk image
+  is now `pam_<version>_darwin_arm64.dmg`**, so any script pointing at the
+  old asset name needs updating.
+- The macOS per-user data directory is `dev.pam.pam`. Pam is pre-1.0 and
+  ships no migration for it: state under the previous directory is not
+  carried over.
+- The disk image opens as a designed window - artwork behind the icons, the
+  app and Applications placed deliberately, and the Pam mark on the mounted
+  volume.
+- The protocol is version 9. Version 8 clients are answered with an explicit
+  unsupported-version failure.
+
+### Fixed
+
+- Refusals that told you to restart Pam now name the operation that actually
+  fixes them: unregister and delete-weights point at `pam model unload`, and
+  inference against no loaded model points at `pam model load`.
+
 ## [0.9.0] - 2026-08-31
 
 ### Added
