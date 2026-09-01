@@ -1,6 +1,6 @@
 # Managed-environment interview and observation template
 
-Copy this template to the approved encrypted research location outside the PAM
+Copy this template to the approved encrypted research location outside the Pam
 repository. Never commit a completed template. Use a pseudonymous session code,
 write paraphrases rather than raw quotations, and omit sensitive content.
 
@@ -149,9 +149,9 @@ Notes on missing coverage:
 
 ## Product decision questions
 
-1. Under what conditions, if any, would you accept a per-user local PAM daemon?
+1. Under what conditions, if any, would you accept a per-user local Pam daemon?
    Consider installation, resource use, updates, visibility, and control.
-2. What audit material may PAM retain, at what detail, where, and for how long?
+2. What audit material may Pam retain, at what detail, where, and for how long?
    What must be redacted, exported, or deletable?
 3. Does company policy permit local model weights and inference? What approvals,
    storage rules, data boundaries, or hardware limits apply?

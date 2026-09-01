@@ -1,9 +1,9 @@
-# PAM desktop layout contract
+# Pam desktop layout contract
 
-Status: descriptive of the shipped desktop app. PAM is a macOS desktop-only
+Status: descriptive of the shipped desktop app. Pam is a macOS desktop-only
 Tauri 2 application; the supported window is a 2K-class desktop display or
 larger, and no small-screen or mobile layout is part of the product surface.
-PAM ships two independent theme families, each with light and dark variants.
+Pam ships two independent theme families, each with light and dark variants.
 Ventisquero provides Mist light and Bedrock dark, with Ice actions and
 restrained copper events. Viña del Mar provides Dawn light and Night dark,
 with violet actions and restrained coral events. Inter carries interface text;
@@ -26,7 +26,7 @@ families.
 - Shell geometry authority: the measured values in this document, implemented
   by `frontend/src/styles.css` and `frontend/src/layout.ts`.
 
-PAM owns identity, visible product concepts, narrative hierarchy, and the
+Pam owns identity, visible product concepts, narrative hierarchy, and the
 shell geometry below. Typed daemon responses own every displayed fact.
 
 ## Views and navigation
@@ -75,7 +75,7 @@ The desktop root fills the native viewport and uses three columns:
 248px and clamps to `180px..min(420px, 45vw)`. Its collapsed state is a 68px
 icon rail; collapsing reduces the sidebar column to 68px while the separator
 column stays. Sidebar width and collapsed state persist under the
-PAM-specific `pam-sidebar-width` and `pam-sidebar-collapsed` storage keys;
+Pam-specific `pam-sidebar-width` and `pam-sidebar-collapsed` storage keys;
 invalid or stale widths are clamped on read, and storage failure never breaks
 the live layout.
 
@@ -113,12 +113,12 @@ variant and persists the same way.
 
 ## Sidebar, toolbar, and canvas anatomy
 
-The sidebar order is PAM identity (mark, name, and app version), primary
+The sidebar order is Pam identity (mark, name, and app version), primary
 navigation, then the footer with daemon control/restart, utility buttons, and
 the Settings gear. There is no project switcher. Active state, labels, and
 counts must not depend on hover. Long labels truncate in the shell but expose
 their full accessible name. The daemon control reflects the probed daemon
-lifecycle and can pause/resume PAM.
+lifecycle and can pause/resume Pam.
 
 The toolbar is the canvas's 52px top row; its icon controls are 34px square.
 The left group holds the sidebar toggle and the breadcrumb; the right group
@@ -238,7 +238,7 @@ live facts. Production UI obeys these rules:
 - Access keeps four skill facts separate. **Observed** means the bounded
   project inventory detected an artifact; it does not enable or claim
   ownership. **Enabled** is the returned exact entry/version/agent selection
-  for the active project. **Managed** means PAM recorded ownership only after
+  for the active project. **Managed** means Pam recorded ownership only after
   verified publication. **Drift** is unknown until an explicit read-only
   inspection and then renders only the returned closed state (`clean`,
   `missing`, `modified`, or a typed conflict). The UI never derives one fact

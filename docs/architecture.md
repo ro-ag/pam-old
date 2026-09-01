@@ -2,7 +2,7 @@
 
 ## Shape
 
-PAM is distributed as one application artifact. Subcommands select a mode, but
+Pam is distributed as one application artifact. Subcommands select a mode, but
 all modes share the same versioned domain types and policy engine.
 
 ```mermaid
@@ -55,7 +55,7 @@ Caller identity and project identity are separate.
   capability, idempotency key, deadline, and payload.
 
 Caller labels remain non-secret routing identities. A separate high-entropy
-credential authenticates every request; PAM stores only its SHA-256 verifier and
+credential authenticates every request; Pam stores only its SHA-256 verifier and
 uses a constant-time comparison. Registration and revocation are local-user
 administrative operations against the protected per-user state database, not
 network-reachable protocol capabilities. Revocation is immediate for subsequent
@@ -147,7 +147,7 @@ Retention is explicit and bounded. Expired audit rows are deleted at their
 inclusive retention timestamp. Evidence pruning requires a project, either the
 `session` or `project` retention class, an inclusive creation-time cutoff, and a
 batch limit; `persistent` evidence is deliberately excluded. The current
-`session` label has no implicit process-lifetime identity, so PAM does not claim
+`session` label has no implicit process-lifetime identity, so Pam does not claim
 automatic session expiry. Evidence handle deletion commits before physical CAS
 cleanup. Blob cleanup then rechecks for references under SQLite writer
 exclusion, never follows symlinks, and reports bytes it could not safely remove
@@ -160,13 +160,13 @@ explicit unresolved state; it never converts an unknown amount into a numeric
 claim. This ordering prevents a database rollback from restoring a live handle
 after its blob was unlinked.
 
-PAM integrates with `ptrack` through its supported command or future protocol.
+Pam integrates with `ptrack` through its supported command or future protocol.
 It does not read or mutate `ptrack`'s database schema directly.
 
 ## Canonical skill library
 
-PAM keeps exact skill bytes in an isolated, digest-addressed library below the
-resolved p-track home's PAM namespace. The manifest records canonical entry
+Pam keeps exact skill bytes in an isolated, digest-addressed library below the
+resolved p-track home's Pam namespace. The manifest records canonical entry
 IDs, immutable versions, metadata-only installation provenance, and exact
 project/agent enablement keys. Managed-copy ownership is additionally bound to
 a non-sensitive identity of the validated canonical agent root, without storing
@@ -175,11 +175,11 @@ separate observation: finding an artifact does not enable it, and enabling a
 version does not claim that a destination was published or remains clean.
 
 Replacement materialization is failure-atomic and no-clobber rather than a
-continuous-pathname crash transaction. PAM atomically moves the live target to
+continuous-pathname crash transaction. Pam atomically moves the live target to
 a private sibling quarantine, verifies the held bytes, and publishes the new
 file without replacement. If the process stops between those operations, the
 exact prior bytes remain under `.pam-quarantine-*/previous-destination` for
-explicit recovery; PAM never trades that recovery copy for silently overwriting
+explicit recovery; Pam never trades that recovery copy for silently overwriting
 a non-cooperating writer.
 
 The Desktop Access surface uses one strict, schema-versioned
@@ -242,14 +242,14 @@ the flow itself was previously approved.
    Cross-project reads require a separate grant.
 3. **Capability boundary:** connectors expose typed operations rather than raw
    secrets or a universal shell.
-4. **Approval boundary:** PAM displays the exact effect, target, and evidence
+4. **Approval boundary:** Pam displays the exact effect, target, and evidence
    before a sensitive action.
 5. **Network boundary:** connectors honor operating-system trust, corporate CAs,
    proxies, explicit destinations, and project egress policy.
 6. **Model boundary:** untrusted prompts and tool output cannot authorize
    capabilities. Model output is data until validated by the engine.
 
-Model inference uses the existing authenticated PAM IPC protocol and its
+Model inference uses the existing authenticated Pam IPC protocol and its
 caller/project policy boundary. The daemon embeds llama.cpp in-process through
 the Rust adapter; it does not open an HTTP listener, emulate an OpenAI API, or
 export a bearer credential. Prompt and generated text are bounded, ephemeral,

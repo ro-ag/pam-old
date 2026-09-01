@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod data_dir;
 mod endpoint;
 mod error;
 mod identity;
@@ -7,6 +8,8 @@ mod network;
 mod secrets;
 mod transport;
 
+#[cfg(test)]
+mod data_dir_test;
 #[cfg(test)]
 mod endpoint_test;
 #[cfg(test)]
@@ -18,6 +21,7 @@ mod secrets_test;
 #[cfg(test)]
 mod transport_test;
 
+pub use data_dir::{DataDirMigration, migrate_user_data_dir};
 pub use endpoint::{
     DaemonRuntimeState, LAUNCH_GRANT_ENV, LAUNCH_GRANT_FILE, LocalEndpoint, consume_launch_grant,
     issue_launch_grant, probe_daemon_runtime,

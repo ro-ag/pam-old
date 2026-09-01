@@ -207,7 +207,7 @@ fn desktop_detail_is_bounded_on_a_utf8_boundary() {
 
 #[test]
 fn gui_registration_uses_only_the_bundled_helper_and_fixed_bounded_contract() {
-    let executable = std::path::Path::new("/Applications/PAM.app/Contents/MacOS/pam");
+    let executable = std::path::Path::new("/Applications/pam.app/Contents/MacOS/pam");
     let root = std::path::Path::new("/projects/pam");
 
     let (program, args, current_dir, kill_on_drop, timeout) =

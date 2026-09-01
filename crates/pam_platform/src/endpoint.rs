@@ -1,7 +1,5 @@
 use std::{env, path::PathBuf};
 
-use directories::ProjectDirs;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalEndpoint {
     address: String,
@@ -82,7 +80,7 @@ fn runtime_dir() -> PathBuf {
 }
 
 pub(super) fn private_runtime_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "PAM", "PAM")
+    crate::data_dir::project_dirs()
         .map(|project_dirs| project_dirs.data_local_dir().join("runtime"))
 }
 

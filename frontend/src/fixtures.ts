@@ -395,7 +395,7 @@ const modelPresets: ModelPresetDto[] = (
 // Settings v1 is global, so these locations never depend on the scenario's
 // active project.
 const FIXTURE_DEFAULT_MODELS_DIR = "/Users/fixture/llm";
-const FIXTURE_DATA_DIR = "/Users/fixture/Library/Application Support/dev.PAM.PAM";
+const FIXTURE_DATA_DIR = "/Users/fixture/Library/Application Support/dev.pam.pam";
 const FIXTURE_FLOWS_DIR = `${FIXTURE_DATA_DIR}/.pam/flows`;
 const FIXTURE_LOGS_DIR = `${FIXTURE_DATA_DIR}/logs`;
 const FIXTURE_LOGS_SIZE_BYTES = 842_318;

@@ -17,7 +17,7 @@ and their agents need a durable local control layer between a short-lived model
 context and a fragmented, permission-heavy toolchain. Public reports show
 recurring context loss after compaction, sandbox friction around filesystem and
 credential access, and diagnostic evidence that is either too large or too
-thin. PAM can reduce both risk and token spend by preserving an ordered project
+thin. Pam can reduce both risk and token spend by preserving an ordered project
 record, brokering narrow capabilities, compacting evidence locally, and stating
 outcomes precisely. The GUI should therefore behave like a calm operations
 desk, not a model playground: current project, daemon/model health, active flow,
@@ -35,7 +35,7 @@ behind small interfaces.
 | 3 | CI and build logs are too noisy for economical model input, yet summaries can omit the line that proves the failure. | High | Frequent | High | Deterministic log compaction first, exact evidence handles, optional local semantic compression second. |
 | 4 | Work is split across Git, CI, SonarQube, Jira, Confluence, certificates, and local commands. | High | Daily | High | Per-project queue, connectors behind one protocol, named flows, unified outcome report. |
 | 5 | Automation reports activity instead of outcomes, leaving users unsure what was fixed or verified. | High | Frequent | Medium-high | Durable state machine and explicit solved/changed/verified/unresolved/blocked fields. |
-| 6 | Local models are difficult to acquire, size, run, and share safely on developer hardware. | Medium-high | Occasional setup, continuous use | High | Model catalog/import, memory estimate, direct `llama.cpp` adapter, user-owned paths, and authenticated PAM protocol access. |
+| 6 | Local models are difficult to acquire, size, run, and share safely on developer hardware. | Medium-high | Occasional setup, continuous use | High | Model catalog/import, memory estimate, direct `llama.cpp` adapter, user-owned paths, and authenticated Pam protocol access. |
 | 7 | Context switching creates mental fatigue and makes repeated operational sequences error-prone. | Medium-high | Daily | Medium-high | GUI flow builder, event timeline, resumable runs, reusable policies and evidence packs. |
 
 ## Managed-environment public observations
@@ -75,7 +75,7 @@ the [living study report](managed-environment-interviews/synthesis.md).
   after compaction: [issue 25792](https://github.com/openai/codex/issues/25792).
 
 These are public issue reports rather than controlled research, but the pattern
-is consistent across products. PAM should persist a small verified project
+is consistent across products. Pam should persist a small verified project
 record outside any one model context.
 
 ### Sandbox and authority
@@ -89,7 +89,7 @@ record outside any one model context.
 - Codex users report that sandbox boundaries can block required local resources:
   [issue 15625](https://github.com/openai/codex/issues/15625).
 
-The product inference is that PAM should bridge capabilities, not weaken the
+The product inference is that Pam should bridge capabilities, not weaken the
 sandbox: a caller proves identity, asks for a named capability, and receives a
 scoped result rather than the credential itself.
 
@@ -103,7 +103,7 @@ scoped result rather than the credential itself.
 - Atlassian summarizes the productivity cost of frequent context switching:
   [Context switching](https://www.atlassian.com/work-management/project-management/context-switching).
 
-PAM must solve the tension between too much and too little evidence. It should
+Pam must solve the tension between too much and too little evidence. It should
 remove ANSI escapes, repeated lines, progress animation, and known boilerplate;
 retain boundaries, error neighborhoods, exit status, and checksums; and make the
 original source available by handle.
@@ -114,10 +114,10 @@ original source available by handle.
   native GPU UI framework used by Zed. Its current manifest reports version
   0.2.2 and cross-platform feature support. It offers the closest fit to the
   requested Zed-like native stack, but its public API is younger than the
-  editor, so PAM should pin versions and isolate the UI crate.
+  editor, so Pam should pin versions and isolate the UI crate.
 - [zeromq 0.6](https://docs.rs/crate/zeromq/latest) is a Tokio-based native Rust
   implementation with Router/Dealer and Unix IPC support. It avoids a system
-  `libzmq` dependency, but does not claim complete ZeroMQ compatibility; PAM
+  `libzmq` dependency, but does not claim complete ZeroMQ compatibility; Pam
   needs protocol tests and a transport fallback.
 - [rusqlite](https://docs.rs/crate/rusqlite/latest) provides a compact embedded
   state store and can bundle SQLite, reducing platform drift.
@@ -132,14 +132,14 @@ original source available by handle.
 - [LLMLingua](https://github.com/microsoft/LLMLingua) uses a small causal LM's
   perplexity for coarse-to-fine prompt compression. LLMLingua-2 instead uses a
   distilled BERT-level token classifier; its paper reports 3x-6x faster
-  compression and evaluates 2x-5x ratios. PAM keeps deterministic source-span
+  compression and evaluates 2x-5x ratios. Pam keeps deterministic source-span
   reduction first and treats LLMLingua-2's 713 MB mBERT MeetingBank model as
   the only initial semantic-compressor candidate. It may load on demand as a
   staged, unload-before-Qwen experiment; the 20 GB ceiling governs the active
   Qwen phase, not installed or nonresident tools. Code/log retention and Rust
   integration remain unproven.
 - [Qwen3.6-35B-A3B](https://github.com/QwenLM/Qwen3.6) supplied the exact
-  Q4_K_S calibration profile used to establish the 20 GB memory method. PAM's
+  Q4_K_S calibration profile used to establish the 20 GB memory method. Pam's
   production profile is instead Qwen3-Coder-30B-A3B-Instruct Q4_K_S at 8,192
   context, selected through exact-digest memory and focused coding/data quality
   evidence. Every other artifact still requires its own digest-bound benchmark.
@@ -181,7 +181,7 @@ not population-level evidence. Recruitment has not started: the field-research
 record contains zero participants, zero interviews, and zero live observations.
 Future multi-user validation should interview five to eight developers in
 managed environments and observe one real CI diagnosis and one approval-heavy
-task before PAM makes participant-derived or population claims. That work
+task before Pam makes participant-derived or population claims. That work
 should validate willingness to run a daemon, acceptable audit retention,
 company policy around local models, and whether the primary control surface
 should emphasize queues, flows, or access policy. Until then, the

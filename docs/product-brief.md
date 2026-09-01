@@ -1,4 +1,4 @@
-# PAM product brief
+# Pam product brief
 
 Status: product foundation
 
@@ -8,13 +8,13 @@ Secondary constraints: Linux and Windows
 
 ## Main goal
 
-Build PAM as the trusted local companion that gives developers and AI agents
+Build Pam as the trusted local companion that gives developers and AI agents
 durable project continuity, compact evidence, safe access to corporate tools,
 and verified automated flows.
 
 Success means an agent can enter an unfamiliar or heavily sandboxed corporate
-workspace, ask PAM for a concise project brief, run an approved operation, and
-receive a durable answer that clearly separates what PAM observed, what it
+workspace, ask Pam for a concise project brief, run an approved operation, and
+receive a durable answer that clearly separates what Pam observed, what it
 solved, what it changed, how it verified the result, and what still needs a
 human.
 
@@ -57,13 +57,13 @@ hosted control plane.
   while allowing safe parallel collection where the flow declares it.
 - **Authority is explicit and temporary.** Caller identity, project identity,
   capability, and approval are different concepts.
-- **Compression is reversible.** PAM preserves the source evidence behind every
+- **Compression is reversible.** Pam preserves the source evidence behind every
   compact answer.
 - **Human control stays visible.** The GUI makes daemon state, access grants,
   certificates, queues, flows, and model use understandable.
 - **Local is the default, not a slogan.** No model weights are bundled and no
   remote service is required for the core loop.
-- **Personality serves clarity.** PAM is calm, direct, protective, and honest;
+- **Personality serves clarity.** Pam is calm, direct, protective, and honest;
   it is never flirtatious at the cost of operational trust.
 
 ## First delivery: macOS developer preview
@@ -99,7 +99,7 @@ pam flow run "after merge checks"
 ```
 
 A run returns a small final report and durable evidence handles. During the run,
-PAM emits meaningful events such as waiting, approval required, evidence found,
+Pam emits meaningful events such as waiting, approval required, evidence found,
 fix applied, verification passed, or unresolved. Raw command chatter is not the
 product feedback channel.
 

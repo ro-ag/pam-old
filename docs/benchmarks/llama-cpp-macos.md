@@ -5,11 +5,11 @@ Date: 2026-08-18
 ## Decision
 
 Use `llama-cpp-4` 0.6.0 with `default-features = false` and only the `metal`
-feature for PAM's first embedded runtime adapter. Keep the binding behind a
+feature for Pam's first embedded runtime adapter. Keep the binding behind a
 model-neutral contract and do not expose its types outside the adapter.
 
 This is a conditional binding selection. The 20 GB Q4 profile measured below
-sets M1 Pro with 32 GB memory as PAM's minimum supported Mac, but its timings
+sets M1 Pro with 32 GB memory as Pam's minimum supported Mac, but its timings
 are M4 Max measurements and must not be presented as M1 performance. The
 adapter must:
 
@@ -31,7 +31,7 @@ the target-machine profile fails.
 
 The isolated workspace at `spikes/llama-cpp-4` accepts an explicit local GGUF
 path, never downloads weights, and emits versioned JSON on stdout. It is not a
-member of PAM's production workspace.
+member of Pam's production workspace.
 
 ```sh
 cargo build --release --locked \
@@ -209,8 +209,8 @@ run_q4_quality 'Answer with only the next number: 2, 6, 12, 20, 30, ?' 128
 run_q4_quality \
   'Answer with only the next number: 2, 6, 12, 20, 30, ? /no_think' \
   64
-run_q4_quality 'Return exactly PAM.' 128
-run_q4_quality 'Return exactly PAM. /no_think' 64
+run_q4_quality 'Return exactly Pam.' 128
+run_q4_quality 'Return exactly Pam. /no_think' 64
 ```
 
 ## Gate results
@@ -227,7 +227,7 @@ run_q4_quality 'Return exactly PAM. /no_think' 64
 | Concurrent requests | Deliberately serialized | The model can be shared, but contexts are mutable and a second 32 GB request is not an acceptable default. Use a bounded one-worker queue first. |
 | Grammar output | API present, runtime proof deferred | Grammar samplers exist, but invalid construction/native failure requires validation and containment in the adapter. |
 | Unload/reload | API-level pass, RSS proof deferred | Model/context use RAII drops. In-process repeated-cycle RSS needs the production adapter, not a process smoke test. |
-| License inventory | Conditional | Cargo metadata reports wrapper/sys as MIT OR Apache-2.0 and llama.cpp is MIT; PAM must add the missing upstream notice to distributed artifacts. |
+| License inventory | Conditional | Cargo metadata reports wrapper/sys as MIT OR Apache-2.0 and llama.cpp is MIT; Pam must add the missing upstream notice to distributed artifacts. |
 
 ## Known binding hazards
 
@@ -326,13 +326,13 @@ model output as untrusted and validate any required structure.
 The production proof then registered the exact digest and license notice,
 started `pam daemon --model qwen/qwen3-coder-30b-a3b-instruct-q4-k-s`, received
 a default-deny response for the first inference, granted only its exact effect
-hash, and successfully retried the same request through PAM's authenticated
+hash, and successfully retried the same request through Pam's authenticated
 local IPC. No HTTP listener, sidecar model server, or subprocess runtime was
 used.
 
 ## Scope boundary
 
 This evidence completes the binding decision and the constrained Q4 profile on
-the available Mac. PAM's minimum supported Mac is M1 Pro with 32 GB memory;
+the available Mac. Pam's minimum supported Mac is M1 Pro with 32 GB memory;
 startup must still use the exact digest-bound admission check on the live host.
 M1 Pro speed remains unmeasured, so only the M4 Max timings above may be quoted.

@@ -8,7 +8,7 @@ use std::{
     process::Command,
 };
 
-use directories::{BaseDirs, ProjectDirs};
+use directories::BaseDirs;
 use pam_core::{CallerId, ProjectId};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -207,7 +207,7 @@ pub fn caller_id(kind: CallerKind) -> Result<CallerId, IdentityError> {
 /// Returns an error when the operating system does not expose a user data
 /// directory for the current process.
 pub fn user_data_dir() -> Result<PathBuf, IdentityError> {
-    ProjectDirs::from("dev", "PAM", "PAM")
+    crate::data_dir::project_dirs()
         .map(|project_dirs| project_dirs.data_dir().to_path_buf())
         .ok_or_else(|| {
             IdentityError::new(

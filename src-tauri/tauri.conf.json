@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PAM",
+  "productName": "pam",
   "version": "0.9.0",
   "identifier": "com.github.ro-ag.pam",
   "build": {
@@ -19,7 +19,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PAM Project Workspace",
+        "title": "Pam Project Workspace",
         "width": 1440,
         "height": 900,
         "minWidth": 320,
@@ -43,9 +43,9 @@
     "active": true,
     "category": "DeveloperTool",
     "publisher": "ro-ag",
-    "copyright": "Copyright © 2026 PAM contributors",
+    "copyright": "Copyright © 2026 Pam contributors",
     "shortDescription": "A trusted local project companion",
-    "longDescription": "PAM keeps project continuity, evidence, access diagnostics, and verified flows close at hand.",
+    "longDescription": "Pam keeps project continuity, evidence, access diagnostics, and verified flows close at hand.",
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]
   }
 }

@@ -1,8 +1,8 @@
-# PAM local daemon threat model
+# Pam local daemon threat model
 
 ## Overview
 
-PAM is a local-first companion for developers and coding agents. Its current
+Pam is a local-first companion for developers and coding agents. Its current
 runtime is one Rust application with CLI, foreground-daemon, and GUI-shell
 modes. The implemented daemon authenticates callers, enforces project-scoped
 capability policy, schedules durable work in SQLite, retains exact evidence in
@@ -17,7 +17,7 @@ Unix peer-credential checks are planned, not current security controls. The
 Tauri control center is an implemented presentation boundary over typed Rust
 commands; it does not receive caller credentials, raw project identifiers, or
 unrestricted filesystem authority. Model inference
-uses the existing authenticated PAM IPC protocol and an in-process
+uses the existing authenticated Pam IPC protocol and an in-process
 Rust/llama.cpp adapter; there is no HTTP model listener or bearer-token export.
 
 This model covers the whole repository, while concentrating on deployed runtime
@@ -57,7 +57,7 @@ is a presentation layer and is not a production security boundary.
 | Human local administrator | Runs caller/grant/approval commands; controls the OS account, native keyring prompts, project checkout, and retention/export destinations | Trusted administrator in the current design |
 | Registered CLI, coding agent, GUI, or local application | Sends authenticated protocol frames and attacker-influenced request IDs, project IDs, capabilities, resources, cursors, and payloads | Authenticated but not automatically authorized |
 | Unregistered local process or another OS user | Can attempt endpoint connections, malformed/oversized frames, endpoint occupation, replay, or denial of service | Untrusted; must gain no capability from reachability alone |
-| Unrestricted process running as the PAM OS user | Can invoke administrative CLI paths and may be able to read or alter per-user files subject to OS controls | Inside the current administrative boundary; not isolated by PAM |
+| Unrestricted process running as the Pam OS user | Can invoke administrative CLI paths and may be able to read or alter per-user files subject to OS controls | Inside the current administrative boundary; not isolated by Pam |
 | Project/workspace content | `.pam/project.toml`, Git metadata, paths, filenames, logs, evidence, and tool output | Untrusted data even when the checkout is operator-selected |
 | `ptrack` executable and JSON output | Program resolved from an explicit absolute override, the application directory, common per-user install directories, then `PATH`; project registration data and context JSON | Operator/developer-controlled dependency; returned content is untrusted |
 | OS keyring, filesystem, SQLite, certificate verifier, and proxy configuration | Security services, errors, environment variables, proxy URLs, PAC state, and trusted roots | Trusted platform boundary, but values and failure text may be sensitive or malformed |
@@ -65,7 +65,7 @@ is a presentation layer and is not a production security boundary.
 
 ### Trust boundaries
 
-1. **Operating-system account and native-secret boundary.** PAM assumes the OS
+1. **Operating-system account and native-secret boundary.** Pam assumes the OS
    kernel, login account, per-user data directories, and native credential store
    enforce their advertised isolation. Native keyring calls may block or prompt,
    so they are opened lazily on a blocking worker. Unavailable or headless
@@ -79,7 +79,7 @@ is a presentation layer and is not a production security boundary.
    are planned hardening.
 3. **Local-administrator boundary.** Caller registration/revocation,
    grant/revocation, and approval decisions currently open protected per-user
-   state directly. They treat unrestricted execution as the PAM OS user as
+   state directly. They treat unrestricted execution as the Pam OS user as
    administrative authority; they do not prove user presence or pass through
    daemon policy. Audit export and retention pruning do authenticate and apply
    project policy. Sandboxes that run untrusted agents must withhold the admin
@@ -101,7 +101,7 @@ is a presentation layer and is not a production security boundary.
    lock, while agent destinations use per-root locks and verify-or-restore
    materialization. These filesystems are not one transaction, so ownership is
    recorded only for a verified create or replace outcome.
-7. **Subprocess boundary.** PAM invokes fixed `ptrack` commands without a shell,
+7. **Subprocess boundary.** Pam invokes fixed `ptrack` commands without a shell,
    with a fixed working directory, timeouts, output caps, JSON parsing, and exact
    project-root validation. The binary found through `PATH` is still executable
    code trusted by the OS user.
@@ -116,7 +116,7 @@ is a presentation layer and is not a production security boundary.
    redaction limit their effect. Redaction is defense in depth, not a license to
    place arbitrary secrets in audit detail.
 10. **Model and planned flow/connector boundary.** Model requests cross the same
-    authenticated, project-scoped policy gate as other PAM protocol operations.
+    authenticated, project-scoped policy gate as other Pam protocol operations.
     The daemon loads only an exact registered digest that passes fresh
     fail-closed memory admission, serializes native execution, and treats output
     as untrusted data. Future flows and connectors must still validate that data
@@ -166,15 +166,15 @@ is a presentation layer and is not a production security boundary.
 
 ### Assumptions and explicit exclusions
 
-- Compromise of the OS kernel, PAM binary, native keyring implementation, build
+- Compromise of the OS kernel, Pam binary, native keyring implementation, build
   toolchain, or repository supply chain is outside the runtime boundary.
-- PAM does not defend its per-user database from an unrestricted malicious
+- Pam does not defend its per-user database from an unrestricted malicious
   process already running as the same OS user. This is especially important for
   coding-agent sandboxes: arbitrary same-user process execution currently
   reaches administrative commands unless the sandbox policy blocks them.
 - Project IDs are stable routing identifiers, not secrets, proof of repository
   ownership, or tenant authentication.
-- Data at rest is not application-level encrypted. PAM relies on OS account and
+- Data at rest is not application-level encrypted. Pam relies on OS account and
   disk protections, plus the native keyring for caller credentials.
 - Managed-enterprise CA, authenticated-proxy, PAC, keyring-prompt, and headless
   behavior has contract-test coverage only. No live managed environment result
@@ -211,7 +211,7 @@ and does not require a fresh native credential, OS user-presence proof, or
 transactional audit event. A same-user agent with unrestricted command execution
 can grant itself capabilities or approve an effect. This is acceptable only
 under the documented local-administrator assumption and must be hardened before
-PAM treats mutually untrusted same-user processes as separate administrators.
+Pam treats mutually untrusted same-user processes as separate administrators.
 Caller labels are also one durable identity per declared surface kind, not one
 identity per process, session, or integration instance; grants are therefore
 coarse across callers that intentionally share that kind and bearer credential.
@@ -376,7 +376,7 @@ Local and Git source values exist transiently in the native request needed to
 perform the explicit install, and fetched repositories may be sensitive while
 the private temporary workspace exists. Backup files intentionally preserve
 pre-replacement bytes and rely on per-user filesystem protection and deliberate
-operator cleanup; PAM does not promise secure erasure.
+operator cleanup; Pam does not promise secure erasure.
 
 ### Native trust, proxies, and diagnostics
 
@@ -392,7 +392,7 @@ The reqwest factory fixes rustls platform certificate verification, supported
 environment/system proxy discovery, and bounded connect/request timeouts. It
 does not expose an invalid-certificate switch. PAC scripts are not evaluated by
 the selected stack. A detector may report `detected-but-unsupported`; otherwise
-PAM reports inspection unavailable. The current diagnostics path performs no
+Pam reports inspection unavailable. The current diagnostics path performs no
 connector request, and tests do not establish live behavior behind a managed
 proxy or enterprise CA.
 
@@ -407,7 +407,7 @@ allowlists and egress policy remain planned.
 
 ### `ptrack`, untrusted content, compaction, and presentation
 
-PAM executes `ptrack projects --json` and `ptrack context --json` with fixed
+Pam executes `ptrack projects --json` and `ptrack context --json` with fixed
 arguments, no shell, the project root as working directory, a one-second command
 timeout, bounded output drains, strict JSON types, exact registered-root
 validation, and bounded result sections. Failures remain unavailable rather than
@@ -434,7 +434,7 @@ the user-selected parent directory remains trusted.
 
 ### Implemented model boundary and planned flows, connectors, and GUI
 
-The model runtime is embedded directly and reached only through the bounded PAM
+The model runtime is embedded directly and reached only through the bounded Pam
 protocol. It has no HTTP/SSE surface, does not disclose a transferable model
 credential, and does not persist prompts or outputs. Before shipping flows,
 connectors, or the full GUI, the design still requires typed connector
@@ -495,7 +495,7 @@ network APIs are not implemented.
 - Approval fingerprint substitution, reuse, double consumption, or a failure
   that commits an effect without its required audit decision.
 - Path traversal, symlink following, or namespace-swap behavior that reads or
-  deletes files outside PAM's evidence/output roots.
+  deletes files outside Pam's evidence/output roots.
 - Persisting a caller credential, proxy credential, private key, or comparable
   secret in SQLite, audit export, diagnostics, or terminal output.
 - Bypassing explicit deny, caller revocation, or inclusive expiry at dispatch.
@@ -508,7 +508,7 @@ network APIs are not implemented.
 - Audit truncation, pagination, or retention behavior that loses accountability
   but does not enable or conceal a sensitive effect.
 - A redaction bypass that exposes a non-credential secret only to another
-  process already able to read the same user's PAM data.
+  process already able to read the same user's Pam data.
 - Misreporting PAC/proxy support or managed-environment state without leaking an
   endpoint or causing unsafe outbound traffic.
 
