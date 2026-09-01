@@ -181,6 +181,8 @@ describe("Tauri bridge ABI", () => {
     await bridge.modelStatus(fence);
     await bridge.modelInfer(fence, "qwen/qwen3-14b-instruct-q4", messages, 512);
     await bridge.modelInfer(fence, "qwen/qwen3-14b-instruct-q4", messages);
+    await bridge.modelLoad(fence, "qwen/qwen3-14b-instruct-q4");
+    await bridge.modelUnload(fence);
     await bridge.modelImportStatus(fence);
     await bridge.modelLicenseDiscover(fence, "vendor/model");
 
@@ -188,6 +190,9 @@ describe("Tauri bridge ABI", () => {
       ["model_status", { request: fence }],
       ["model_infer", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4", messages, maxOutputTokens: 512 } }],
       ["model_infer", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4", messages } }],
+      ["model_load", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4" } }],
+      // Unloading names no model: it drops whatever the daemon holds.
+      ["model_unload", { request: fence }],
       ["model_import_status", { request: fence }],
       ["model_license_discover", { request: { ...fence, query: "vendor/model" } }],
     ]);
@@ -204,6 +209,8 @@ describe("Tauri bridge ABI", () => {
     await bridge.appSettings(fence);
     await bridge.settingsUpdate(fence, "/Volumes/external/models");
     await bridge.settingsUpdate(fence, null);
+    await bridge.settingsSetDefaultModel(fence, "qwen/qwen3-14b-instruct-q4");
+    await bridge.settingsSetDefaultModel(fence, null);
     await bridge.logsDelete(fence);
     await bridge.revealPath(fence, "/Users/example/llm");
 
@@ -211,6 +218,10 @@ describe("Tauri bridge ABI", () => {
       ["app_settings", { request: fence }],
       ["settings_update", { request: { ...fence, modelsDir: "/Volumes/external/models" } }],
       ["settings_update", { request: { ...fence, modelsDir: null } }],
+      // A separate command from settings_update, so "leave it alone" and
+      // "clear it" stay distinguishable for both preferences.
+      ["settings_set_default_model", { request: { ...fence, model: "qwen/qwen3-14b-instruct-q4" } }],
+      ["settings_set_default_model", { request: { ...fence, model: null } }],
       ["logs_delete", { request: fence }],
       ["reveal_path", { request: { ...fence, path: "/Users/example/llm" } }],
     ]);

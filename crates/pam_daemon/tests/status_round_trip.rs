@@ -338,6 +338,7 @@ async fn start_daemon(
             endpoint,
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path),
             brief_provider: None,
             connector_secret_backend: None,

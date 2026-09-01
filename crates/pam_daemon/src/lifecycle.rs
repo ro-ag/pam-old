@@ -58,8 +58,8 @@ use pam_model::{
     GgufMetadata, LicenseSnapshot, ModelError, ModelKey, ModelSource, ModelsDirectorySweep,
     RegisteredModel, RuntimeError, RuntimeFinishReason, RuntimeMessage, RuntimeMessageRole,
     RuntimeRequest, RuntimeResponse, WeightsRefusal, delete_registered_weights,
-    effective_models_dir, health_label, revalidate_registered_model, sweep_models_directory,
-    weights_deletion_allowed, weights_refusal_message,
+    effective_models_dir, health_label, persisted_default_model, revalidate_registered_model,
+    sweep_models_directory, weights_deletion_allowed, weights_refusal_message,
 };
 #[cfg(target_os = "macos")]
 use pam_model::{MacosLlamaCppRuntime, ModelRuntime};
@@ -81,10 +81,11 @@ use pam_protocol::{
     DaemonLogsResult, DaemonStatsResult, DanglingRegistrationSummary, Event, EventEnvelope,
     EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, ExpectedTargetKind,
     Failure, FailureCode, GrantRevokeResult, LogSeverity, ModelDeleteWeightsResult,
-    ModelFinishReason, ModelGenerationResult, ModelRegisterResult, ModelRegistration, ModelRole,
-    ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnregisterResult, ModelUsage,
-    ModelVerification, ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth,
-    OrphanWeightsSummary, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
+    ModelFinishReason, ModelGenerationResult, ModelLoadResult, ModelRegisterResult,
+    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult,
+    ModelTransition, ModelUnloadResult, ModelUnregisterResult, ModelUsage, ModelVerification,
+    ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth, OrphanWeightsSummary,
+    PROTOCOL_VERSION, PacState, ProjectCurrentResult,
     ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
     RequestEnvelope, RequestPayload, ResetResult, ResetTier, ResultBody, ResultEnvelope,
@@ -121,7 +122,10 @@ use crate::flow::{
 };
 #[cfg(target_os = "macos")]
 use crate::macos_admission::MacosRuntimeHostAdmission;
-use crate::model_service::{ModelService, ModelServiceError, ModelWorker};
+use crate::model_cell::{LoadedModelService, ModelCell, ModelSurface, Retired, TransitionGuard};
+#[cfg(target_os = "macos")]
+use crate::model_service::ModelService;
+use crate::model_service::{ModelServiceError, ModelWorker};
 use crate::ptrack::PtrackBriefProvider;
 use crate::reset::{self, CredentialStore, ResetContext, ResetError, ResetPaths};
 
@@ -148,22 +152,6 @@ const MAX_BRIEF_SOURCE_BYTES: usize = 256;
 const MAX_BRIEF_DETAIL_BYTES: usize = 4 * 1024;
 const DEFAULT_MODEL_DEADLINE: Duration = Duration::from_mins(5);
 const MAX_MODEL_DEADLINE: Duration = Duration::from_mins(10);
-
-#[derive(Clone)]
-pub(super) struct LoadedModelService {
-    key: ModelKey,
-    size_bytes: u64,
-    service: ModelService,
-}
-
-/// This daemon's model surface for its whole lifetime: the loaded service
-/// when the requested model came up, and otherwise why it did not. Both are
-/// `None` when no model was requested at all.
-#[derive(Clone, Default)]
-pub(super) struct ModelSurface {
-    pub(super) loaded: Option<LoadedModelService>,
-    pub(super) load_failure: Option<String>,
-}
 
 enum Outbound {
     Routed {
@@ -218,12 +206,21 @@ impl fmt::Debug for ConnectorSecretOverride {
 }
 
 #[derive(Clone, Debug)]
+// The flags here are independent switches on one process, not a state
+// machine: `recover` clears a stale socket, `model_from_default` records where
+// the model identity came from, and the rest exist only under `cfg(test)`.
+#[allow(clippy::struct_excessive_bools)]
 pub struct DaemonConfig {
     pub endpoint: LocalEndpoint,
     pub recover: bool,
     /// Selects one registered model for the embedded runtime. No model is
     /// loaded and inference remains unavailable when this is absent.
     pub model: Option<ModelKey>,
+    /// True when `model` came from the persisted Settings default rather than
+    /// an explicit `--model`. A stale default degrades to serving without a
+    /// model and says so; an explicit `--model` naming nothing still fails
+    /// the start, because the operator asked for that exact model.
+    pub model_from_default: bool,
     /// Overrides the durable `SQLite` path, primarily for isolated tests.
     pub state_path: Option<PathBuf>,
     /// Supplies planning context for read-only brief requests.
@@ -257,6 +254,7 @@ impl Default for DaemonConfig {
             endpoint: LocalEndpoint::default_for_user(),
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: None,
             brief_provider: None,
             connector_secret_backend: None,
@@ -346,10 +344,21 @@ pub async fn run(recover: bool, model: Option<ModelKey>) -> Result<(), DaemonErr
                 })
         })
         .map(|provider| provider as Arc<dyn BriefProvider>);
+    // An explicit `--model` always wins; the persisted Settings default only
+    // fills the gap when the operator named nothing, so a start can still be
+    // told to load something else, or nothing at all.
+    let model_from_default = model.is_none();
+    let model = model.or_else(|| {
+        user_data_dir()
+            .ok()
+            .and_then(|dir| persisted_default_model(&dir))
+    });
+    let model_from_default = model_from_default && model.is_some();
     let config = DaemonConfig {
         endpoint,
         recover,
         model,
+        model_from_default,
         brief_provider,
         ..DaemonConfig::default()
     };
@@ -452,8 +461,22 @@ where
     // re-arms each dead peer's framed reader forever instead of serving. With
     // nothing bound those probes fail fast and honestly, and the ownership
     // lock taken above still keeps a second daemon out of the window.
-    let (model_surface, model_worker) =
-        load_model(&store, config.model.clone(), &log, model_load_delay).await?;
+    let (model_surface, model_worker) = load_model(
+        &store,
+        config.model.clone(),
+        config.model_from_default,
+        &log,
+        model_load_delay,
+    )
+    .await?;
+    let ready_model = model_surface
+        .loaded
+        .as_ref()
+        .map(|loaded| loaded.key.clone());
+    // From here the model surface is shared and mutable: `model.load` and
+    // `model.unload` change it while the daemon serves, and every handler
+    // takes its own snapshot rather than a copy frozen at startup.
+    let model_cell = ModelCell::new(model_surface, model_worker);
     let mut server = ServerTransport::bind(&config.endpoint).await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Outbound>(RESPONSE_CAPACITY);
     let (scheduler_tx, scheduler_rx) = mpsc::channel::<()>(SCHEDULER_CAPACITY);
@@ -468,12 +491,11 @@ where
     ));
     let mut subscriptions = HashMap::<RequestId, Vec<Subscription>>::new();
 
-    let ready_message = model_surface.loaded.as_ref().map_or_else(
+    let ready_message = ready_model.as_ref().map_or_else(
         || format!("PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION})."),
         |model| {
             format!(
-                "PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {}).",
-                model.key
+                "PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {model})."
             )
         },
     );
@@ -508,7 +530,7 @@ where
                 let request_outbound = outbound_tx.clone();
                 let request_scheduler = scheduler_tx.clone();
                 let request_brief_provider = Arc::clone(&brief_provider);
-                let request_model = model_surface.clone();
+                let request_model = model_cell.clone();
                 let request_flow_preflight_admission = Arc::clone(&flow_preflight_admission);
                 let request_connectors = connectors.clone();
                 let request_log = log.clone();
@@ -592,9 +614,7 @@ where
         scheduler.abort();
         let _ = scheduler.await;
     }
-    if let Some(worker) = model_worker {
-        worker.shutdown().await;
-    }
+    model_cell.shutdown().await;
     drop(outbound_tx);
     server.close().await?;
     store.shutdown().await?;
@@ -602,67 +622,88 @@ where
     result
 }
 
-/// Loads the model, holding the startup window open for tests.
+/// Loads the model this daemon starts with, holding the startup window open
+/// for tests.
+///
+/// `from_default` marks a key that came from the persisted Settings default
+/// rather than an explicit `--model`. A default is a preference, not an
+/// instruction: when it names a registration that is gone the daemon says so
+/// and keeps serving, where an explicit `--model` naming nothing still stops
+/// the start.
 async fn load_model(
     store: &Store,
     key: Option<ModelKey>,
+    from_default: bool,
     log: &DaemonLog,
     load_delay: Duration,
 ) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
     tokio::time::sleep(load_delay).await;
-    start_model_service(store, key, log).await
-}
-
-#[cfg(target_os = "macos")]
-async fn start_model_service(
-    store: &Store,
-    key: Option<ModelKey>,
-    log: &DaemonLog,
-) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
     let Some(key) = key else {
         return Ok((ModelSurface::default(), None));
     };
-    // Store failures are misconfiguration or integrity problems and stay
-    // fatal; only an actual runtime load failure degrades below.
-    let registered = store.model(key.clone()).await?;
+    let registered = match store.model(key).await {
+        Ok(registered) => registered,
+        Err(StoreError::ModelNotFound(model)) if from_default => {
+            return Ok(degrade_with_reason(
+                log,
+                missing_default_model_message(&model),
+            ));
+        }
+        // Any other store failure is misconfiguration or integrity damage and
+        // stays fatal; only a runtime load failure degrades below.
+        Err(error) => return Err(error.into()),
+    };
+    match map_registered_model(registered).await {
+        Ok((loaded, worker)) => Ok((
+            ModelSurface {
+                loaded: Some(loaded),
+                load_failure: None,
+                transition: None,
+            },
+            Some(worker),
+        )),
+        Err(error) => Ok(degrade_after_model_load_failure(log, &error)),
+    }
+}
+
+/// Maps one registered model into a live runtime and its single-flight
+/// service.
+///
+/// The one place weights become a running model, shared by the startup load
+/// and by `model.load` on a daemon that is already serving. A failure here is
+/// the runtime's own reason, which both callers report the same way.
+#[cfg(target_os = "macos")]
+async fn map_registered_model(
+    registered: RegisteredModel,
+) -> Result<(LoadedModelService, ModelWorker), RuntimeError> {
+    let key = registered.key.clone();
     let size_bytes = registered.size_bytes;
-    let runtime = match tokio::task::spawn_blocking(move || {
+    let runtime = tokio::task::spawn_blocking(move || {
         MacosLlamaCppRuntime::load(registered, Arc::new(MacosRuntimeHostAdmission))
     })
     .await
-    {
-        Ok(Ok(runtime)) => runtime,
-        Ok(Err(error)) => return Ok(degrade_after_model_load_failure(log, &error)),
-        Err(error) => return Err(DaemonError::Handler(error)),
-    };
+    .map_err(|_| RuntimeError::Unavailable)??;
     let runtime: Arc<dyn ModelRuntime> = Arc::new(runtime);
     let (service, worker) = ModelService::start(runtime);
     Ok((
-        ModelSurface {
-            loaded: Some(LoadedModelService {
-                key,
-                size_bytes,
-                service: service.clone(),
-            }),
-            load_failure: None,
+        LoadedModelService {
+            key,
+            size_bytes,
+            service,
         },
-        Some(worker),
+        worker,
     ))
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn start_model_service(
-    store: &Store,
-    key: Option<ModelKey>,
-    log: &DaemonLog,
-) -> Result<(ModelSurface, Option<ModelWorker>), DaemonError> {
-    let Some(key) = key else {
-        return Ok((ModelSurface::default(), None));
-    };
-    let _ = store.model(key).await?;
-    Ok(degrade_after_model_load_failure(
-        log,
-        &RuntimeError::InitializationFailed("embedded llama.cpp is available only on macOS"),
+// The signature mirrors the macOS mapper so both call sites await the same
+// shape; there is nothing to await when there is no runtime to build.
+#[allow(clippy::unused_async)]
+async fn map_registered_model(
+    _registered: RegisteredModel,
+) -> Result<(LoadedModelService, ModelWorker), RuntimeError> {
+    Err(RuntimeError::InitializationFailed(
+        "embedded llama.cpp is available only on macOS",
     ))
 }
 
@@ -677,13 +718,33 @@ pub(super) fn degrade_after_model_load_failure(
     log: &DaemonLog,
     error: &RuntimeError,
 ) -> (ModelSurface, Option<ModelWorker>) {
-    let message = format!("model load failed; the daemon will serve without a model: {error}");
+    degrade_with_reason(log, model_load_failure_message(error))
+}
+
+/// The exact sentence a failed load leaves on the model surface, whether it
+/// failed at startup or in a running daemon.
+pub(super) fn model_load_failure_message(error: &RuntimeError) -> String {
+    format!("model load failed; the daemon will serve without a model: {error}")
+}
+
+/// The sentence for a persisted default model that is no longer registered.
+///
+/// It says the plain thing rather than a store error: the pin is stale, and
+/// PAM is serving without a model because of it.
+pub(super) fn missing_default_model_message(model: &str) -> String {
+    format!(
+        "the default model {model} is no longer registered; the daemon will serve without a model"
+    )
+}
+
+fn degrade_with_reason(log: &DaemonLog, message: String) -> (ModelSurface, Option<ModelWorker>) {
     eprintln!("{message}");
     log.error(message.clone());
     (
         ModelSurface {
             loaded: None,
             load_failure: Some(message),
+            transition: None,
         },
         None,
     )
@@ -862,7 +923,7 @@ async fn handle_incoming(
     outbound: mpsc::Sender<Outbound>,
     scheduler: mpsc::Sender<()>,
     brief_provider: Arc<dyn BriefProvider>,
-    model: ModelSurface,
+    model: ModelCell,
     authentication_required: bool,
     policy_required: bool,
     flow_preflight_admission: Arc<Semaphore>,
@@ -1123,7 +1184,22 @@ async fn handle_incoming(
             handle_caller_list(&request, incoming, &store, &outbound).await
         }
         (Capability::ModelStatus, RequestPayload::ModelStatus) => {
-            handle_model_status(&request, incoming, &store, &outbound, &model).await
+            handle_model_status(&request, incoming, &store, &outbound, &model.surface()).await
+        }
+        (Capability::ModelLoad, RequestPayload::ModelLoad { model: requested }) => {
+            handle_model_load(
+                &request,
+                requested.clone(),
+                incoming,
+                &store,
+                &outbound,
+                &model,
+                &log,
+            )
+            .await
+        }
+        (Capability::ModelUnload, RequestPayload::ModelUnload) => {
+            handle_model_unload(&request, incoming, &store, &outbound, &model, &log).await
         }
         (Capability::ModelRegister, RequestPayload::ModelRegister { registration }) => {
             handle_model_register(&request, registration.clone(), incoming, &store, &outbound).await
@@ -1135,7 +1211,7 @@ async fn handle_incoming(
                 incoming,
                 &store,
                 &outbound,
-                model.loaded.as_ref(),
+                model.loaded_key().as_ref(),
             )
             .await
         }
@@ -1155,7 +1231,7 @@ async fn handle_incoming(
                 incoming,
                 &store,
                 &outbound,
-                model.loaded.as_ref(),
+                model.loaded_key().as_ref(),
             )
             .await
         }
@@ -1302,7 +1378,7 @@ async fn handle_incoming(
                 &store,
                 &outbound,
                 brief_provider.as_ref(),
-                model.loaded.as_ref(),
+                model.surface().loaded.as_ref(),
             )
             .await
         }
@@ -1334,6 +1410,8 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::ModelStatus
             | Capability::ModelInfer
             | Capability::ModelRegister
+            | Capability::ModelLoad
+            | Capability::ModelUnload
             | Capability::ModelUnregister
             | Capability::ModelVerify
             | Capability::ModelSweep
@@ -1535,6 +1613,8 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
                 Capability::ModelRegister,
                 RequestPayload::ModelRegister { .. }
             )
+            | (Capability::ModelLoad, RequestPayload::ModelLoad { .. })
+            | (Capability::ModelUnload, RequestPayload::ModelUnload)
             | (
                 Capability::ModelUnregister,
                 RequestPayload::ModelUnregister { .. }
@@ -1758,8 +1838,13 @@ pub(super) fn policy_resource(
         // conversation -- a chat message can never be pre-approved anyway.
         // `model.unregister` names the same authority: one exact model.
         RequestPayload::ModelInfer { model, .. }
+        | RequestPayload::ModelLoad { model }
         | RequestPayload::ModelUnregister { model }
         | RequestPayload::ModelDeleteWeights { model } => format!("model:{model}"),
+        // Unloading names no model: its authority is this daemon's one loaded
+        // slot, whatever is in it, so the grant cannot be pinned to a model
+        // that has already been swapped out from under it.
+        RequestPayload::ModelUnload => "models:loaded".to_owned(),
         // Verification names the model it was asked about, and the whole
         // catalog when it was asked about all of them, so an approval binds to
         // exactly the scope the caller requested. `model:all` stays shell-safe
@@ -1912,6 +1997,8 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::WaitForResult
         | Capability::GetResult
         | Capability::ModelInfer
+        | Capability::ModelLoad
+        | Capability::ModelUnload
         | Capability::ModelUnregister
         | Capability::ModelVerify
         | Capability::ModelSweep
@@ -2139,7 +2226,9 @@ async fn handle_model_infer(
             "the requested model is not loaded in this daemon",
         );
         if let ResultBody::Failure(body) = &mut failure.body {
-            body.recovery = Some(format!("restart PAM with `pam daemon --model {model}`"));
+            body.recovery = Some(format!(
+                "run `pam model load {model}` (or Load in the Models view); no restart is needed"
+            ));
         }
         send_routed(
             outbound,
@@ -2819,6 +2908,7 @@ async fn handle_model_status(
             model.loaded.as_ref().map(|it| (&it.key, it.size_bytes)),
             registered,
             model.load_failure.clone(),
+            model.transition.clone(),
         )
     }) {
         Ok(result) => ServerMessage::Result(success_result(
@@ -2945,6 +3035,264 @@ async fn handle_model_register(
     Ok(())
 }
 
+/// Message for a load or unload arriving while another one is running.
+pub(super) const MODEL_TRANSITION_BUSY_MESSAGE: &str =
+    "another model load or unload is already running in this daemon";
+
+/// Message for an unload with nothing to unload.
+pub(super) const MODEL_UNLOAD_NONE_MESSAGE: &str = "no model is loaded in this daemon";
+
+/// Refuses a second model change while one is in flight.
+///
+/// A load can take minutes, and the daemon has exactly one model slot, so the
+/// honest answer to a concurrent request is that it cannot have the slot yet —
+/// not a silent queue behind a wait nobody can see.
+pub(super) fn model_transition_busy(request: &RequestEnvelope) -> ResultEnvelope {
+    let mut failure = failure_result(request, FailureCode::Busy, MODEL_TRANSITION_BUSY_MESSAGE);
+    if let ResultBody::Failure(body) = &mut failure.body {
+        body.recovery = Some(
+            "wait for `pam model status` to stop reporting a transition, then retry".to_owned(),
+        );
+    }
+    failure
+}
+
+/// Brings one registered model into this running daemon, replacing whatever it
+/// was serving.
+///
+/// The swap is deliberately old-before-new: the outgoing runtime is drained
+/// and dropped before the incoming one is built, so a host sized for one model
+/// is never asked to hold two, and the memory the old model gave back is
+/// already free when the new one asks for its own. The cost is that an
+/// inference running at the moment of the swap is cancelled — a named ending,
+/// never a half-swapped answer.
+///
+/// A load that fails leaves exactly what a failed startup load leaves: no
+/// model, the runtime's own reason on the surface for `model.status` to
+/// report, and a daemon that keeps serving everything else.
+// Every gate refuses with its own envelope, and the swap is written once in
+// the order it must happen; splitting it would hide that order.
+#[allow(clippy::too_many_lines)]
+async fn handle_model_load(
+    request: &RequestEnvelope,
+    model: String,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    cell: &ModelCell,
+    log: &DaemonLog,
+) -> Result<(), DaemonError> {
+    let Some(key) = model
+        .split_once('/')
+        .and_then(|(vendor, name)| ModelKey::new(vendor, name).ok())
+    else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "model identity is not a valid registry identity",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let Some(guard) = cell.begin_transition() else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(model_transition_busy(request))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    // Already serving exactly this model: nothing changes, so this is an
+    // observation rather than a change, and no audit line claims otherwise.
+    if cell.loaded_key().as_ref() == Some(&key) {
+        let size_bytes = cell
+            .surface()
+            .loaded
+            .as_ref()
+            .map_or(0, |loaded| loaded.size_bytes);
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(success_result(
+                request,
+                OperationTruth::Observed,
+                ResultPayload::ModelLoad(ModelLoadResult {
+                    model,
+                    size_bytes,
+                    previous: None,
+                    already_loaded: true,
+                }),
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    }
+    // The registry is read before anything is unloaded: a typo must never cost
+    // the operator the model that was serving.
+    let record = match registered_record(request, key.clone(), store).await {
+        Ok(record) => record,
+        Err(failure) => {
+            send_routed(
+                outbound,
+                incoming,
+                vec![ServerMessage::Result(failure)],
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    let size_bytes = record.size_bytes;
+    let previous = retire_loaded_model(cell, &guard, log).await;
+    cell.begin_load(&guard, &key);
+    match map_registered_model(record).await {
+        Ok((loaded, worker)) => cell.finish_load(&guard, loaded, Some(worker)),
+        Err(error) => {
+            let message = model_load_failure_message(&error);
+            eprintln!("{message}");
+            log.error(message.clone());
+            cell.fail_load(&guard, message.clone());
+            let mut failure = failure_result(request, FailureCode::Internal, &message);
+            if let ResultBody::Failure(body) = &mut failure.body {
+                body.recovery = Some(format!(
+                    "run `pam model verify {model}` to see what changed under the registration, then load again"
+                ));
+            }
+            send_routed(
+                outbound,
+                incoming,
+                vec![ServerMessage::Result(failure)],
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+    }
+    append_change_audit(
+        store,
+        request,
+        "model.load",
+        "loaded",
+        &format!(
+            "model={model} size_bytes={size_bytes} previous={}",
+            previous.as_deref().unwrap_or("none")
+        ),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ModelLoad(ModelLoadResult {
+                model,
+                size_bytes,
+                previous,
+                already_loaded: false,
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Drops the model this daemon holds and returns its memory, leaving the
+/// daemon serving.
+///
+/// The registry is untouched: the row stays and the weights stay, so the same
+/// model loads again without re-importing anything. Inference afterwards
+/// answers the not-loaded failure it already answers before any model is
+/// loaded — there is one "no model" state, never two.
+async fn handle_model_unload(
+    request: &RequestEnvelope,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    cell: &ModelCell,
+    log: &DaemonLog,
+) -> Result<(), DaemonError> {
+    let Some(guard) = cell.begin_transition() else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(model_transition_busy(request))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let Some(retired) = cell.begin_unload(&guard) else {
+        let mut failure = failure_result(request, FailureCode::NotFound, MODEL_UNLOAD_NONE_MESSAGE);
+        if let ResultBody::Failure(body) = &mut failure.body {
+            body.recovery =
+                Some("load one with `pam model load <vendor/name>` before unloading".to_owned());
+        }
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure)],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let model = retired.key().id();
+    let size_bytes = retired.size_bytes();
+    retired.drain().await;
+    cell.finish_unload(&guard);
+    log.info(format!("model {model} unloaded; the daemon keeps serving"));
+    append_change_audit(
+        store,
+        request,
+        "model.unload",
+        "unloaded",
+        &format!("model={model} size_bytes={size_bytes}"),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ModelUnload(ModelUnloadResult { model, size_bytes }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Drains and drops whatever the cell holds, returning the identity that left.
+///
+/// The whole safety of a swap lives in the `await` here: it returns only once
+/// the outgoing worker task has joined, which is the moment the runtime's last
+/// owner is gone and its mapped weights are back. Nothing calls
+/// [`map_registered_model`] before this returns.
+async fn retire_loaded_model(
+    cell: &ModelCell,
+    guard: &TransitionGuard,
+    log: &DaemonLog,
+) -> Option<String> {
+    let retired: Retired = cell.begin_unload(guard)?;
+    let previous = retired.key().id();
+    retired.drain().await;
+    log.info(format!(
+        "model {previous} unloaded to make room for the incoming model"
+    ));
+    Some(previous)
+}
+
 /// Message for refusing to unregister the model this daemon currently holds.
 pub(super) const MODEL_UNREGISTER_LOADED_MESSAGE: &str =
     "the requested model is loaded in this daemon and cannot be unregistered";
@@ -2952,12 +3300,11 @@ pub(super) const MODEL_UNREGISTER_LOADED_MESSAGE: &str =
 /// The refusal for unregistering the model this daemon currently holds, or
 /// `None` when the request names any other model.
 ///
-/// A serving daemon maps its model at startup and has no way to release it, so
-/// dropping the registration under a live mapping would leave the runtime
-/// serving an artifact the registry no longer knows. The recovery names the
-/// only route available today: a restart without that model. Task #238 adds
-/// `model.unload`; when it lands this line points at that command instead of a
-/// restart.
+/// Dropping the registration under a live mapping would leave the runtime
+/// serving an artifact the registry no longer knows, so the refusal stands.
+/// The recovery is now a single command against the running daemon rather
+/// than a restart: `model.unload` releases the mapping, and the
+/// unregistration then goes through unchanged.
 pub(super) fn model_unregister_loaded_refusal(
     request: &RequestEnvelope,
     model: &str,
@@ -2974,7 +3321,7 @@ pub(super) fn model_unregister_loaded_refusal(
     );
     if let ResultBody::Failure(body) = &mut failure.body {
         body.recovery = Some(format!(
-            "restart PAM without this model using `pam daemon`, then unregister {model}"
+            "run `pam model unload` (or Unload in the Models view), then unregister {model}"
         ));
     }
     Some(failure)
@@ -2991,7 +3338,7 @@ async fn handle_model_unregister(
     incoming: IncomingRequest,
     store: &Store,
     outbound: &mpsc::Sender<Outbound>,
-    loaded: Option<&LoadedModelService>,
+    loaded: Option<&ModelKey>,
 ) -> Result<(), DaemonError> {
     let Some(key) = model
         .split_once('/')
@@ -3011,9 +3358,7 @@ async fn handle_model_unregister(
         return Ok(());
     };
     // Any other registered model unregisters normally while one is loaded.
-    if let Some(failure) =
-        model_unregister_loaded_refusal(request, &model, &key, loaded.map(|loaded| &loaded.key))
-    {
+    if let Some(failure) = model_unregister_loaded_refusal(request, &model, &key, loaded) {
         send_routed(
             outbound,
             incoming,
@@ -3383,7 +3728,7 @@ pub(super) fn model_delete_weights_loaded_refusal(
     );
     if let ResultBody::Failure(body) = &mut failure.body {
         body.recovery = Some(format!(
-            "restart PAM without this model using `pam daemon`, then delete the weights for {model}"
+            "run `pam model unload` (or Unload in the Models view), then delete the weights for {model}"
         ));
     }
     Some(failure)
@@ -3456,7 +3801,7 @@ async fn handle_model_delete_weights(
     incoming: IncomingRequest,
     store: &Store,
     outbound: &mpsc::Sender<Outbound>,
-    loaded: Option<&LoadedModelService>,
+    loaded: Option<&ModelKey>,
 ) -> Result<(), DaemonError> {
     // Every branch below either refuses with one envelope or falls through to
     // the removal, so the refusal path is written once.
@@ -3478,9 +3823,7 @@ async fn handle_model_delete_weights(
         .await;
         return Ok(());
     };
-    if let Some(failure) =
-        model_delete_weights_loaded_refusal(request, &model, &key, loaded.map(|loaded| &loaded.key))
-    {
+    if let Some(failure) = model_delete_weights_loaded_refusal(request, &model, &key, loaded) {
         send_routed(outbound, incoming, refused(failure), None).await;
         return Ok(());
     }
@@ -4186,6 +4529,7 @@ pub(super) fn model_status_result(
     loaded: Option<(&ModelKey, u64)>,
     registered: Vec<ModelSummary>,
     load_failure: Option<String>,
+    transition: Option<ModelTransition>,
 ) -> Result<ModelStatusResult, pam_protocol::ProtocolContractError> {
     let loaded = loaded
         .map(|(key, size_bytes)| ModelSummary::new(key.id(), size_bytes))
@@ -4202,6 +4546,7 @@ pub(super) fn model_status_result(
         registered,
         loaded,
         load_failure,
+        transition,
     })
 }
 
@@ -5221,6 +5566,8 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::ModelInfer { .. }
         | RequestPayload::ModelStatus
         | RequestPayload::ModelRegister { .. }
+        | RequestPayload::ModelLoad { .. }
+        | RequestPayload::ModelUnload
         | RequestPayload::ModelUnregister { .. }
         | RequestPayload::ModelVerify { .. }
         | RequestPayload::ModelSweep

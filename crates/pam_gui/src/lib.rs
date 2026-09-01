@@ -71,12 +71,12 @@ pub use desktop::{
     HostMemoryDto, ModelDeleteWeightsDto, ModelDownloadDto, ModelDownloadKindDto,
     ModelDownloadSourceParams, ModelDownloadStatusDto, ModelDownloadStatusKindDto, ModelHealthDto,
     ModelImportDto, ModelImportStageDto, ModelImportStatusDto, ModelImportStatusKindDto,
-    ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetDto,
-    ModelPresetsDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelSweepDto,
-    ModelUnregisterDto, ModelUsageDto, ModelVerifyDto, OperationId, OrphanWeightsDto, OutcomeDto,
-    OutcomeSectionDto, ProjectHandle, ProjectSummaryDto, ProjectUsageDto, RequestSummaryDto,
-    ResetDto, ResetItemDto, ResetResultDto, RunDto, SnapshotDataDto, SnapshotDto, SnapshotFence,
-    StartupPhaseDto, TimelineFactDto, TimelineKindDto,
+    ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto, ModelLoadDto, ModelMessageDto,
+    ModelPresetDto, ModelPresetsDto, ModelRoleDto, ModelStatusDto, ModelSummaryDto, ModelSweepDto,
+    ModelTransitionDto, ModelUnloadDto, ModelUnregisterDto, ModelUsageDto, ModelVerifyDto,
+    OperationId, OrphanWeightsDto, OutcomeDto, OutcomeSectionDto, ProjectHandle, ProjectSummaryDto,
+    ProjectUsageDto, RequestSummaryDto, ResetDto, ResetItemDto, ResetResultDto, RunDto,
+    SnapshotDataDto, SnapshotDto, SnapshotFence, StartupPhaseDto, TimelineFactDto, TimelineKindDto,
 };
 pub use pam_protocol::ResetTier;
 

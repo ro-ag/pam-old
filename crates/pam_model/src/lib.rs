@@ -51,7 +51,7 @@ pub use model::{
 };
 pub use path::{
     default_model_path, default_models_dir, effective_models_dir, model_path_under,
-    validate_absolute_unicode_path, validate_model_filename,
+    persisted_default_model, validate_absolute_unicode_path, validate_model_filename,
 };
 pub use runtime::{
     ArtifactCalibration, CancellationSignal, CancellationToken, ModelRuntime, RuntimeError,

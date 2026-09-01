@@ -39,10 +39,12 @@ import type {
   ModelInspectDto,
   ModelLicenseDiscoveryDto,
   ModelInferDto,
+  ModelLoadDto,
   ModelPresetsDto,
   ModelStatusDto,
   ModelDeleteWeightsDto,
   ModelSweepDto,
+  ModelUnloadDto,
   ModelUnregisterDto,
   ModelVerifyDto,
   ResetDto,
@@ -174,6 +176,13 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
         licenseNoticeText: params.licenseNoticeText,
         allowSmall: params.allowSmall,
       })),
+    modelLoad: (fence, model) =>
+      invokeCommand<ModelLoadDto>("model_load", request({
+        ...flatFence(fence),
+        model,
+      })),
+    modelUnload: (fence) =>
+      invokeCommand<ModelUnloadDto>("model_unload", request(flatFence(fence))),
     modelUnregister: (fence, model) =>
       invokeCommand<ModelUnregisterDto>("model_unregister", request({
         ...flatFence(fence),
@@ -222,6 +231,11 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       invokeCommand<AppSettingsDto>("settings_update", request({
         ...flatFence(fence),
         modelsDir,
+      })),
+    settingsSetDefaultModel: (fence, model) =>
+      invokeCommand<AppSettingsDto>("settings_set_default_model", request({
+        ...flatFence(fence),
+        model,
       })),
     logsDelete: (fence) =>
       invokeCommand<AppSettingsDto>("logs_delete", request(flatFence(fence))),

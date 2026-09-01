@@ -47,7 +47,9 @@ import type {
   ModelSummaryDto,
   ModelDeleteWeightsDto,
   ModelHealthDto,
+  ModelLoadDto,
   ModelSweepDto,
+  ModelUnloadDto,
   ModelUnregisterDto,
   ModelVerifyDto,
   PamBridge,
@@ -311,6 +313,7 @@ export const fixtureScenarios = [
   "model-loading",
   "model-download-fail",
   "model-unregister-blocked",
+  "model-load-blocked",
   "model-health-rotted",
   "model-verify-blocked",
   "connector-unconfigured",
@@ -883,6 +886,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     failure: ModelFailureDto | null;
   } | null = null;
   let modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
+  // The persisted pin a daemon start loads when the GUI names no model.
+  let defaultModel: string | null = null;
   let logsSizeBytes = FIXTURE_LOGS_SIZE_BYTES;
   // Reset state the fixture actually clears, so a dry run and the run that
   // follows it report the same counts exactly once.
@@ -946,6 +951,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   const appSettingsSnapshot = (): AppSettingsDto => ({
     modelsDir,
     modelsDirIsDefault: modelsDir === FIXTURE_DEFAULT_MODELS_DIR,
+    defaultModel,
     dataDir: FIXTURE_DATA_DIR,
     flowsDir: FIXTURE_FLOWS_DIR,
     logsDir: FIXTURE_LOGS_DIR,
@@ -962,6 +968,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
   const daemonCapabilities: DaemonCapabilityDto[] = [
     { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
     { capability: "model.register", name: "Model registration", summary: "Models registers an imported or downloaded GGUF in the daemon's registry.", granted: true },
+    { capability: "model.load", name: "Model loading", summary: "Models brings a registered model into the running daemon, replacing whatever it was serving.", granted: scenario !== "model-load-blocked" },
+    { capability: "model.unload", name: "Model unloading", summary: "Models drops the loaded model and frees its memory; PAM keeps serving.", granted: scenario !== "model-load-blocked" },
     { capability: "model.unregister", name: "Model removal", summary: "Models removes a registered model from the daemon's registry; the weights stay on disk.", granted: scenario !== "model-unregister-blocked" },
     { capability: "model.verify", name: "Model verification", summary: "Models re-reads registered weights and reports what no longer matches the registry.", granted: scenario !== "model-verify-blocked" },
     { capability: "model.sweep", name: "Model directory sweep", summary: "Models reconciles the registry against the models directory and reports what it costs.", granted: scenario !== "model-verify-blocked" },
@@ -1112,14 +1120,14 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       // A daemon mid-load answers nothing, so the desktop reports the phase
       // from the child it spawned.
       if (scenario === "model-loading") {
-        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: true });
+        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: true, transition: null });
       }
       // The registered catalog is durable store state: the desktop answers it
       // even while the daemon is paused, with nothing confirmable as loaded.
       if (!daemonRunning) {
-        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: false });
+        return clone({ status: "ok" as const, loaded: null, registered: modelCatalog, loadFailure: null, loading: false, transition: null });
       }
-      return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog, loadFailure: null, loading: false });
+      return clone({ status: "ok" as const, loaded: modelLoaded, registered: modelCatalog, loadFailure: null, loading: false, transition: null });
     },
     async modelInfer(_fence, model, messages: ChatMessageDto[]): Promise<ModelInferDto> {
       if (scenario === "model-infer-blocked") {
@@ -1159,6 +1167,71 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         },
       };
     },
+    async modelLoad(_fence, model): Promise<ModelLoadDto> {
+      if (scenario === "model-load-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "forbidden",
+            detail: "Project policy has not granted model.load to this caller yet.",
+            recovery: "Grant the GUI caller the model.load capability in Access, or approve the pending load.",
+          },
+        };
+      }
+      if (!daemonRunning) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "daemon_offline",
+            detail: "PAM is paused, so it cannot load a model.",
+            recovery: "Start PAM, then load the model.",
+          },
+        };
+      }
+      if (modelLoaded?.modelId === model) {
+        return { status: "ok", model, sizeBytes: modelLoaded.sizeBytes, previous: null, alreadyLoaded: true };
+      }
+      const wanted = modelCatalog.find((entry) => entry.modelId === model);
+      if (!wanted) {
+        return {
+          status: "unavailable",
+          failure: { kind: "unavailable", code: "not_found", detail: `model ${model} is not registered`, recovery: null },
+        };
+      }
+      // The daemon swaps old-before-new, so the fixture reports both halves.
+      const previous = modelLoaded?.modelId ?? null;
+      modelLoaded = wanted;
+      return { status: "ok", model, sizeBytes: wanted.sizeBytes, previous, alreadyLoaded: false };
+    },
+    async modelUnload(_fence): Promise<ModelUnloadDto> {
+      if (scenario === "model-load-blocked") {
+        return {
+          status: "blocked",
+          failure: {
+            kind: "blocked",
+            code: "forbidden",
+            detail: "Project policy has not granted model.unload to this caller yet.",
+            recovery: "Grant the GUI caller the model.unload capability in Access, or approve the pending unload.",
+          },
+        };
+      }
+      if (!daemonRunning || !modelLoaded) {
+        return {
+          status: "unavailable",
+          failure: {
+            kind: "unavailable",
+            code: "not_found",
+            detail: "no model is loaded in this daemon",
+            recovery: "load one with `pam model load <vendor/name>` before unloading",
+          },
+        };
+      }
+      const dropped = modelLoaded;
+      modelLoaded = null;
+      return { status: "ok", model: dropped.modelId, sizeBytes: dropped.sizeBytes };
+    },
     async modelUnregister(_fence, model): Promise<ModelUnregisterDto> {
       if (scenario === "model-unregister-blocked") {
         return {
@@ -1180,7 +1253,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
             kind: "unavailable",
             code: null,
             detail: "the requested model is loaded in this daemon and cannot be unregistered",
-            recovery: `restart PAM without this model using \`pam daemon\`, then unregister ${model}`,
+            recovery: `run \`pam model unload\` (or Unload in the Models view), then unregister ${model}`,
           },
         };
       }
@@ -1280,7 +1353,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
             kind: "unavailable",
             code: null,
             detail: "the requested model is loaded in this daemon and its weights cannot be deleted",
-            recovery: `restart PAM without this model using \`pam daemon\`, then delete the weights for ${model}`,
+            recovery: `run \`pam model unload\` (or Unload in the Models view), then delete the weights for ${model}`,
           },
         };
       }
@@ -1547,6 +1620,13 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       } else {
         modelsDir = FIXTURE_DEFAULT_MODELS_DIR;
       }
+      return clone(appSettingsSnapshot());
+    },
+    async settingsSetDefaultModel(_fence, model): Promise<AppSettingsDto> {
+      if (model !== null && !/^[^/]+\/[^/]+$/.test(model)) {
+        throw new Error("The default model must be a registered vendor/name pair.");
+      }
+      defaultModel = model;
       return clone(appSettingsSnapshot());
     },
     async logsDelete(_fence): Promise<AppSettingsDto> {

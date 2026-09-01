@@ -1141,23 +1141,61 @@ describe("global-first workspace", () => {
     await waitFor(() => expect(health).toHaveBeenCalledTimes(3));
   });
 
-  it("restarts the daemon with a registered model from Models", async () => {
+  // #238: a running PAM changes models in place. The restart dance is gone —
+  // nothing is stopped, nothing is started, and the copy no longer promises
+  // a restart that does not happen.
+  it("loads a registered model into the running daemon without restarting it", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge("model-on-deck");
     const stop = vi.spyOn(bridge, "stopDaemon");
     const start = vi.spyOn(bridge, "startDaemon");
+    const load = vi.spyOn(bridge, "modelLoad");
     render(<App bridge={bridge} initialView="models" />);
 
     const panel = await screen.findByRole("region", { name: "Model runtime" });
-    await user.click(
-      (await within(panel).findAllByRole("button", { name: "Restart PAM with this model" }))[0],
-    );
+    expect(
+      within(panel).queryByRole("button", { name: "Restart PAM with this model" }),
+    ).not.toBeInTheDocument();
+    await user.click((await within(panel).findAllByRole("button", { name: "Load" }))[0]);
 
-    await waitFor(() => expect(start).toHaveBeenCalled());
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(start.mock.calls[0][1]).toBe("qwen/qwen3-14b-instruct-q4");
+    await waitFor(() => expect(load).toHaveBeenCalled());
+    expect(load.mock.calls[0][1]).toBe("qwen/qwen3-14b-instruct-q4");
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     // The reloaded status moves the chosen model into the loaded slot.
     expect(await within(panel).findByText("loaded")).toBeInTheDocument();
+  });
+
+  // The other half of the same capability: the loaded model can be dropped
+  // and PAM keeps serving.
+  it("unloads the loaded model and keeps the daemon running", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("solved");
+    const stop = vi.spyOn(bridge, "stopDaemon");
+    const unload = vi.spyOn(bridge, "modelUnload");
+    render(<App bridge={bridge} initialView="models" />);
+
+    const panel = await screen.findByRole("region", { name: "Model runtime" });
+    await user.click(await within(panel).findByRole("button", { name: "Unload" }));
+
+    await waitFor(() => expect(unload).toHaveBeenCalled());
+    expect(stop).not.toHaveBeenCalled();
+    expect(await within(panel).findByText("on deck")).toBeInTheDocument();
+  });
+
+  // A refusal has to reach the person who asked for it, with the line that
+  // fixes it, rather than disappearing into a silent no-op.
+  it("renders an ungranted unload's recovery line next to the model", async () => {
+    const user = userEvent.setup();
+    const bridge = fixtureBridge("model-load-blocked");
+    render(<App bridge={bridge} initialView="models" />);
+
+    const panel = await screen.findByRole("region", { name: "Model runtime" });
+    await user.click(await within(panel).findByRole("button", { name: "Unload" }));
+
+    expect(
+      await within(panel).findByText(/Grant the GUI caller the model.unload capability in Access/),
+    ).toBeInTheDocument();
   });
 
   it("starts the daemon with a registered model while PAM is paused", async () => {

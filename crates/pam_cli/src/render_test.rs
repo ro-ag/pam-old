@@ -4,9 +4,9 @@ use pam_protocol::{
     ApprovalDecisionDisposition, ApprovalDecisionResult, BriefItem, BriefProvenance, BriefResult,
     CancellationDisposition, CancellationResult, ConfigurationPresence, DaemonLifecycleResult,
     Event, EventEnvelope, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, Failure,
-    FailureCode, ModelFinishReason, ModelGenerationResult, ModelUnregisterResult, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState, ResultBody,
-    ResultPayload, SourceAvailability,
+    FailureCode, ModelFinishReason, ModelGenerationResult, ModelLoadResult, ModelUnloadResult,
+    ModelUnregisterResult, ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION,
+    PacState, ResultBody, ResultPayload, SourceAvailability,
 };
 
 use super::render::{
@@ -68,13 +68,62 @@ fn model_unregistration_renders_the_record_that_left_the_registry() {
 }
 
 #[test]
+fn a_swap_reports_both_the_model_that_arrived_and_the_one_it_displaced() {
+    let presentation = present_result(&ResultBody::Success {
+        truth: OperationTruth::Changed,
+        payload: ResultPayload::ModelLoad(ModelLoadResult {
+            model: "byteshape/qwen3.6-q4ks".to_owned(),
+            size_bytes: 16_492_334_496,
+            previous: Some("byteshape/qwen3.6-q4km".to_owned()),
+            already_loaded: false,
+        }),
+    });
+
+    assert_eq!(
+        presentation.stdout,
+        "model=byteshape/qwen3.6-q4ks size_bytes=16492334496 previous=byteshape/qwen3.6-q4km already_loaded=false truth=changed\n"
+    );
+
+    // A load into a daemon holding nothing says so rather than inventing a
+    // model it displaced.
+    let presentation = present_result(&ResultBody::Success {
+        truth: OperationTruth::Changed,
+        payload: ResultPayload::ModelLoad(ModelLoadResult {
+            model: "byteshape/qwen3.6-q4ks".to_owned(),
+            size_bytes: 16_492_334_496,
+            previous: None,
+            already_loaded: false,
+        }),
+    });
+    assert_eq!(
+        presentation.stdout,
+        "model=byteshape/qwen3.6-q4ks size_bytes=16492334496 previous=none already_loaded=false truth=changed\n"
+    );
+
+    // Unloading acknowledges the model whose memory came back, and its truth
+    // is a change rather than an observation.
+    let presentation = present_result(&ResultBody::Success {
+        truth: OperationTruth::Changed,
+        payload: ResultPayload::ModelUnload(ModelUnloadResult {
+            model: "byteshape/qwen3.6-q4ks".to_owned(),
+            size_bytes: 16_492_334_496,
+        }),
+    });
+    assert_eq!(
+        presentation.stdout,
+        "model=byteshape/qwen3.6-q4ks size_bytes=16492334496 truth=changed\n"
+    );
+    assert!(presentation.stderr.is_empty());
+}
+
+#[test]
 fn a_refused_unregistration_reports_its_recovery_command_on_stderr() {
     let presentation = present_result(&ResultBody::Failure(Failure {
         code: FailureCode::LeaseConflict,
         message: "the requested model is loaded in this daemon and cannot be unregistered"
             .to_owned(),
         recovery: Some(
-            "restart PAM without this model using `pam daemon`, then unregister vendor/loaded"
+            "run `pam model unload` (or Unload in the Models view), then unregister vendor/loaded"
                 .to_owned(),
         ),
         approval: None,
@@ -84,7 +133,7 @@ fn a_refused_unregistration_reports_its_recovery_command_on_stderr() {
     assert!(presentation.stderr.contains("Failure: lease_conflict"));
     assert!(
         presentation.stderr.contains(
-            "Recovery: restart PAM without this model using `pam daemon`, then unregister vendor/loaded"
+            "Recovery: run `pam model unload` (or Unload in the Models view), then unregister vendor/loaded"
         ),
         "the refusal must carry its recovery command: {}",
         presentation.stderr

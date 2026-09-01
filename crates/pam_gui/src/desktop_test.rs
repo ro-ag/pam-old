@@ -6,8 +6,9 @@ use pam_protocol::{
     ActivityEventSummary, ActivityResult, ApprovalChallenge, CallerListResult, CallerSummary,
     ConfigurationPresence, ConnectorConfigureResult, ConnectorListResult, ConnectorSummary,
     ConnectorTestDisposition, ConnectorTestResult, FailureCode, MAX_MODEL_OUTPUT_TOKENS,
-    ModelFinishReason, ModelGenerationResult, ModelStatusResult, ModelSummary, ModelUsage,
-    NetworkDiagnosticsResult, OperationTruth, PacState, RequestEnvelope,
+    ModelFinishReason, ModelGenerationResult, ModelLoadResult, ModelStatusResult, ModelSummary,
+    ModelTransition, ModelTransitionPhase, ModelUnloadResult, ModelUsage, NetworkDiagnosticsResult,
+    OperationTruth, PacState, RequestEnvelope,
 };
 use pam_skills::CanonicalEntryId;
 use std::sync::atomic::AtomicUsize;
@@ -33,13 +34,14 @@ use super::{
         failure_kind_for_test, flow_compose_data_for_test, flow_graph_data_for_test,
         flow_workspace_at_for_test, gui_registration_current_for_test,
         manage_skill_library_without_io_for_test, mark_model_loading_for_test,
-        model_delete_weights_dto_for_test, model_infer_dto_for_test, model_status_dto_for_test,
-        model_sweep_dto_for_test, model_unregister_dto_for_test, model_verify_dto_for_test,
-        post_save_reload_error_for_test, read_startup_progress, reap_daemon_child_for_test,
-        registered_model_catalog_in_for_test, registered_model_path_in_for_test,
-        registration_contract_for_test, registration_failure_detail, replace_daemon_child_for_test,
-        reserve_daemon_for_test, reserve_for_test, startup_budget_for_bytes_for_test,
-        stop_outcome_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
+        model_delete_weights_dto_for_test, model_infer_dto_for_test, model_load_dto_for_test,
+        model_status_dto_for_test, model_sweep_dto_for_test, model_unload_dto_for_test,
+        model_unregister_dto_for_test, model_verify_dto_for_test, post_save_reload_error_for_test,
+        read_startup_progress, reap_daemon_child_for_test, registered_model_catalog_in_for_test,
+        registered_model_path_in_for_test, registration_contract_for_test,
+        registration_failure_detail, replace_daemon_child_for_test, reserve_daemon_for_test,
+        reserve_for_test, startup_budget_for_bytes_for_test, stop_outcome_for_test,
+        switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
     model_url_download::ModelUrlDownloadParams,
@@ -588,6 +590,7 @@ fn model_status_dto_serializes_the_exact_frontend_ok_contract() {
             ModelSummary::new("vendor/name", 123).unwrap(),
         ],
         load_failure: None,
+        transition: None,
     }));
 
     assert_eq!(
@@ -600,7 +603,8 @@ fn model_status_dto_serializes_the_exact_frontend_ok_contract() {
                 { "modelId": "vendor/name", "sizeBytes": 123 }
             ],
             "loadFailure": null,
-            "loading": false
+            "loading": false,
+            "transition": null
         })
     );
 }
@@ -611,6 +615,7 @@ fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
         loaded: None,
         registered: Vec::new(),
         load_failure: None,
+        transition: None,
     }));
 
     assert_eq!(
@@ -620,7 +625,8 @@ fn model_status_dto_reports_an_empty_surface_without_a_loaded_model() {
             "loaded": null,
             "registered": [],
             "loadFailure": null,
-            "loading": false
+            "loading": false,
+            "transition": null
         })
     );
 }
@@ -638,6 +644,7 @@ fn model_status_dto_carries_the_daemon_reported_load_failure() {
              match the calibrated macOS runtime profile"
                 .to_owned(),
         ),
+        transition: None,
     }));
 
     let value = serde_json::to_value(dto).unwrap();
@@ -659,6 +666,7 @@ fn model_status_dto_reports_no_load_failure_once_a_model_is_loaded() {
         loaded: Some(ModelSummary::new("vendor/name", 123).unwrap()),
         registered: vec![ModelSummary::new("vendor/name", 123).unwrap()],
         load_failure: None,
+        transition: None,
     }));
 
     assert_eq!(
@@ -1229,7 +1237,7 @@ fn model_unregister_dto_carries_the_removed_record_and_every_refusal_recovery() 
         detail: "the requested model is loaded in this daemon and cannot be unregistered"
             .to_owned(),
         recovery: Some(
-            "restart PAM without this model using `pam daemon`, then unregister vendor/name"
+            "run `pam model unload` (or Unload in the Models view), then unregister vendor/name"
                 .to_owned(),
         ),
     });
@@ -1241,10 +1249,137 @@ fn model_unregister_dto_carries_the_removed_record_and_every_refusal_recovery() 
                 "kind": "unavailable",
                 "code": null,
                 "detail": "the requested model is loaded in this daemon and cannot be unregistered",
-                "recovery": "restart PAM without this model using `pam daemon`, then unregister vendor/name"
+                "recovery": "run `pam model unload` (or Unload in the Models view), then unregister vendor/name"
             }
         })
     );
+}
+
+/// Loading and unloading are the whole point of #238: the GUI changes models
+/// without a restart, and every refusal arrives with the line that fixes it.
+#[test]
+fn model_load_and_unload_dtos_carry_the_swap_the_no_op_and_every_refusal() {
+    // A swap reports both halves, so the view can say what left as well as
+    // what arrived.
+    let swapped = model_load_dto_for_test(ObservatoryState::Available(ModelLoadResult {
+        model: "vendor/name".to_owned(),
+        size_bytes: 2_600_000_000,
+        previous: Some("vendor/older".to_owned()),
+        already_loaded: false,
+    }));
+    assert_eq!(
+        serde_json::to_value(swapped).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "model": "vendor/name",
+            "sizeBytes": 2_600_000_000_u64,
+            "previous": "vendor/older",
+            "alreadyLoaded": false
+        })
+    );
+
+    // Loading the model already serving moves nothing, and says so rather
+    // than claiming a change.
+    let no_op = model_load_dto_for_test(ObservatoryState::Available(ModelLoadResult {
+        model: "vendor/name".to_owned(),
+        size_bytes: 2_600_000_000,
+        previous: None,
+        already_loaded: true,
+    }));
+    let value = serde_json::to_value(no_op).unwrap();
+    assert_eq!(value["alreadyLoaded"], true);
+    assert_eq!(value["previous"], serde_json::Value::Null);
+
+    // A policy refusal is blocked with the grant that would allow it.
+    let blocked = model_load_dto_for_test(ObservatoryState::Blocked {
+        code: FailureCode::Forbidden,
+        detail: "Policy denies model.load.".to_owned(),
+        recovery: Some("Grant model.load for the GUI caller.".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(blocked).unwrap(),
+        serde_json::json!({
+            "status": "blocked",
+            "failure": {
+                "kind": "blocked",
+                "code": "forbidden",
+                "detail": "Policy denies model.load.",
+                "recovery": "Grant model.load for the GUI caller."
+            }
+        })
+    );
+
+    // A load that failed in the daemon is unavailable, and the daemon's own
+    // reason and recovery survive to the frontend intact.
+    let failed = model_load_dto_for_test(ObservatoryState::Unavailable {
+        code: Some("internal".to_owned()),
+        detail: "model load failed; the daemon will serve without a model: weights drifted"
+            .to_owned(),
+        recovery: Some(
+            "run `pam model verify vendor/name` to see what changed under the registration, then load again"
+                .to_owned(),
+        ),
+    });
+    let value = serde_json::to_value(failed).unwrap();
+    assert_eq!(value["status"], "unavailable");
+    assert_eq!(
+        value["failure"]["recovery"],
+        "run `pam model verify vendor/name` to see what changed under the registration, then load again"
+    );
+
+    // Unloading acknowledges the memory that came back.
+    let unloaded = model_unload_dto_for_test(ObservatoryState::Available(ModelUnloadResult {
+        model: "vendor/name".to_owned(),
+        size_bytes: 2_600_000_000,
+    }));
+    assert_eq!(
+        serde_json::to_value(unloaded).unwrap(),
+        serde_json::json!({
+            "status": "ok",
+            "model": "vendor/name",
+            "sizeBytes": 2_600_000_000_u64
+        })
+    );
+
+    let nothing = model_unload_dto_for_test(ObservatoryState::Unavailable {
+        code: Some("not_found".to_owned()),
+        detail: "no model is loaded in this daemon".to_owned(),
+        recovery: Some("load one with `pam model load <vendor/name>` before unloading".to_owned()),
+    });
+    assert_eq!(
+        serde_json::to_value(nothing).unwrap(),
+        serde_json::json!({
+            "status": "unavailable",
+            "failure": {
+                "kind": "unavailable",
+                "code": "not_found",
+                "detail": "no model is loaded in this daemon",
+                "recovery": "load one with `pam model load <vendor/name>` before unloading"
+            }
+        })
+    );
+}
+
+/// A daemon in the middle of a load or an unload says so, so the Models view
+/// can show the phase instead of an unexplained empty slot.
+#[test]
+fn model_status_dto_reports_the_daemons_own_transition() {
+    let dto = model_status_dto_for_test(ObservatoryState::Available(ModelStatusResult {
+        loaded: None,
+        registered: vec![ModelSummary::new("vendor/name", 123).unwrap()],
+        load_failure: None,
+        transition: Some(ModelTransition {
+            phase: ModelTransitionPhase::Loading,
+            model: "vendor/name".to_owned(),
+        }),
+    }));
+
+    let value = serde_json::to_value(dto).unwrap();
+    assert_eq!(value["transition"]["phase"], "loading");
+    assert_eq!(value["transition"]["model"], "vendor/name");
+    // The startup-load inference stays a separate signal: this daemon
+    // answered, so it is not "loading" in that sense.
+    assert_eq!(value["loading"], false);
 }
 
 #[test]
@@ -2268,6 +2403,7 @@ async fn an_unreachable_daemon_with_a_live_child_reports_its_model_as_loading() 
         registered: Vec::new(),
         load_failure: None,
         loading: false,
+        transition: None,
     };
     let mut live_slot = Some(spawn_fake_daemon(&executable));
 

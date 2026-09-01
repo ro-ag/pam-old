@@ -61,6 +61,10 @@ const AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 /// A tier reset walks the whole store and, for evidence, the blob directory,
 /// so it gets a longer window than an ordinary read.
 const RESET_TIMEOUT: Duration = Duration::from_mins(1);
+/// Loading hashes and maps a multi-gigabyte artifact, and unloading waits for
+/// the outgoing model to finish draining. Neither is a status read, so both
+/// get the same window the registry health check gets.
+const MODEL_LOAD_TIMEOUT: Duration = Duration::from_mins(10);
 const APPROVAL_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 
 fn open_local_administrative_store() -> Result<(ProjectId, CallerId, Store), i32> {
@@ -667,6 +671,77 @@ pub(crate) fn model_import_resource(descriptor: &ModelDescriptor) -> ResourceNam
 fn hash_model_import_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
+}
+
+/// Brings one registered model into the running daemon, without a restart.
+///
+/// The daemon owns the swap: it drains and drops whatever it was serving
+/// before the new runtime is built, so this command never asks the host to
+/// hold two models at once. A load that fails leaves the daemon serving
+/// without a model and says why, exactly like a failed startup load.
+pub(crate) async fn model_load(model: ModelKey, approval_id: Option<ApprovalId>) -> i32 {
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    let request = match context.model_load(model.id()) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("{}", escape_text(&error.to_string()));
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    // Mapping a multi-gigabyte artifact is minutes of work, not a status read,
+    // so the load gets the same patience the registry health check gets.
+    match exchange(&request, MODEL_LOAD_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model load"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::ModelLoad(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("model load"),
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Drops the loaded model and frees its memory, leaving the daemon serving.
+///
+/// Confirmed like the other operations whose effect reaches past the caller:
+/// nothing durable is lost — the registration and the weights both stay, and
+/// `pam model load` puts it back — but any answer the model is generating
+/// right now is cancelled, and the reload costs the full load again.
+pub(crate) async fn model_unload(yes: bool, approval_id: Option<ApprovalId>) -> i32 {
+    if !yes {
+        eprintln!(
+            "Unloading frees the model's memory and cancels any answer it is generating. Re-run with --yes to confirm. The registration and the weights on disk both stay, and `pam model load` brings it back."
+        );
+        return EXIT_OPERATION_FAILED;
+    }
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    match exchange(&context.model_unload(), MODEL_LOAD_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model unload"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::ModelUnload(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("model unload"),
+        Err(error) => report_exchange_error(&error),
+    }
 }
 
 /// Removes one model's registration through the daemon that owns the store.

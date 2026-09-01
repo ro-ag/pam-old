@@ -708,6 +708,69 @@ fn model_registry_commands_parse_into_their_exact_modes() {
 }
 
 #[test]
+fn model_load_and_unload_parse_into_their_exact_modes() {
+    let model = pam_model::ModelKey::new("byteshape", "qwen3.6-q4ks").unwrap();
+
+    // Loading names the model and needs no consent flag: it adds a model
+    // rather than taking one away, and a wrong identity is refused by the
+    // daemon before anything is unloaded.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "load", "byteshape/qwen3.6-q4ks"])
+            .unwrap()
+            .mode(),
+        Mode::ModelLoad {
+            model: model.clone(),
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from([
+            "pam",
+            "model",
+            "load",
+            "byteshape/qwen3.6-q4ks",
+            "--approval-id",
+            "approval-1",
+        ])
+        .unwrap()
+        .mode(),
+        Mode::ModelLoad {
+            model,
+            approval_id: Some(ApprovalId::from("approval-1")),
+        }
+    );
+
+    // Unloading names nothing — it drops whatever this daemon holds — and its
+    // effect reaches past the caller, so consent is explicit and parsed.
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "unload"])
+            .unwrap()
+            .mode(),
+        Mode::ModelUnload {
+            yes: false,
+            approval_id: None,
+        }
+    );
+    assert_eq!(
+        Cli::try_parse_from(["pam", "model", "unload", "--yes"])
+            .unwrap()
+            .mode(),
+        Mode::ModelUnload {
+            yes: true,
+            approval_id: None,
+        }
+    );
+
+    for arguments in [
+        vec!["pam", "model", "load"],
+        vec!["pam", "model", "load", "bad/model/extra"],
+        vec!["pam", "model", "unload", "byteshape/qwen3.6-q4ks"],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+}
+
+#[test]
 fn model_health_commands_parse_into_their_exact_modes() {
     let model = pam_model::ModelKey::new("byteshape", "qwen3.6-q4ks").unwrap();
 

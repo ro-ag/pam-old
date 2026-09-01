@@ -62,6 +62,7 @@ fn start_daemon(
             endpoint,
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path),
             brief_provider: None,
             connector_secret_backend: None,
@@ -593,6 +594,212 @@ async fn model_register_needs_its_grant_and_then_writes_the_registry() {
         vec!["qwen/routed-model".to_owned()]
     );
 
+    let _ = fs::remove_dir_all(runtime);
+}
+
+fn load_request(request_id: &str, caller: &str, model: &str) -> RequestEnvelope {
+    authenticated(
+        RequestEnvelope::model_load(
+            RequestId::from(request_id),
+            CallerId::from(caller),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::new(format!("{request_id}-key")),
+            model,
+        )
+        .unwrap(),
+    )
+}
+
+fn unload_request(request_id: &str, caller: &str) -> RequestEnvelope {
+    authenticated(RequestEnvelope::model_unload(
+        RequestId::from(request_id),
+        CallerId::from(caller),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::new(format!("{request_id}-key")),
+    ))
+}
+
+fn status_request(request_id: &str, caller: &str) -> RequestEnvelope {
+    authenticated(RequestEnvelope::model_status(
+        RequestId::from(request_id),
+        CallerId::from(caller),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::new(format!("{request_id}-key")),
+    ))
+}
+
+/// Loading and unloading are the two halves of changing a model without
+/// restarting, and both are grant-gated. This drives the real envelopes
+/// through the daemon's own dispatch: the refusals, the not-found answers, and
+/// the load failure that leaves the daemon serving and saying why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // One daemon proves the whole load/unload boundary.
+async fn model_load_and_unload_are_granted_separately_and_never_stop_the_daemon() {
+    let runtime = test_runtime("daemon-scope-model-load");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed_caller(&seed, "ungranted-operator", TEST_CREDENTIAL).await;
+    for (id, capability) in [
+        ("daemon-scope-load-register-grant", "model.register"),
+        ("daemon-scope-load-grant", "model.load"),
+        ("daemon-scope-unload-grant", "model.unload"),
+    ] {
+        daemon_scope_grant(&seed, id, "scope-operator", capability).await;
+    }
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    request_exchange(
+        &endpoint,
+        &register_request("scope-load-seed", "scope-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+
+    // Neither capability is baseline: an ungranted caller is refused, and the
+    // refusal names the exact grant that would allow it.
+    let denied = request_exchange(
+        &endpoint,
+        &load_request(
+            "scope-load-denied",
+            "ungranted-operator",
+            "qwen/routed-model",
+        ),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = denied.result.body else {
+        panic!("an ungranted caller must not load a model");
+    };
+    assert_eq!(failure.code, FailureCode::Forbidden);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("pam access grant model.load --daemon --resource model:qwen/routed-model")
+    );
+
+    let denied = request_exchange(
+        &endpoint,
+        &unload_request("scope-unload-denied", "ungranted-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = denied.result.body else {
+        panic!("an ungranted caller must not unload a model");
+    };
+    assert_eq!(failure.code, FailureCode::Forbidden);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("pam access grant model.unload --daemon --resource models:loaded")
+    );
+
+    // Nothing is loaded, so unloading has nothing to drop and says so.
+    let empty = request_exchange(
+        &endpoint,
+        &unload_request("scope-unload-empty", "scope-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = empty.result.body else {
+        panic!("unloading nothing must be a plain not-found");
+    };
+    assert_eq!(failure.code, FailureCode::NotFound);
+    assert_eq!(failure.message, "no model is loaded in this daemon");
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("load one with `pam model load <vendor/name>` before unloading")
+    );
+
+    // A model that was never registered is a not-found, and the registry read
+    // happens before anything is unloaded.
+    let missing = request_exchange(
+        &endpoint,
+        &load_request("scope-load-missing", "scope-operator", "qwen/absent"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(missing.result.body, ResultBody::Failure(ref failure)
+            if failure.code == FailureCode::NotFound),
+        "an unregistered model must report not-found: {:?}",
+        missing.result.body
+    );
+
+    // The registered row points at weights that are not there, so the load
+    // fails exactly the way a startup load failure does: the request reports
+    // it, and the daemon keeps serving.
+    let drifted = request_exchange(
+        &endpoint,
+        &load_request("scope-load-drifted", "scope-operator", "qwen/routed-model"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = drifted.result.body else {
+        panic!("weights that are not there cannot load");
+    };
+    assert_eq!(failure.code, FailureCode::Internal);
+    assert!(
+        failure
+            .message
+            .starts_with("model load failed; the daemon will serve without a model:"),
+        "a runtime load failure must read like a startup one: {}",
+        failure.message
+    );
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some(
+            "run `pam model verify qwen/routed-model` to see what changed under the registration, then load again"
+        )
+    );
+
+    // The daemon is still answering, still reports the catalog, and keeps the
+    // reason on its surface rather than only in a log line.
+    let status = request_exchange(
+        &endpoint,
+        &status_request("scope-load-status", "scope-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelStatus(surface),
+    } = status.result.body
+    else {
+        panic!("a daemon that could not load a model still answers model.status");
+    };
+    assert_eq!(truth, OperationTruth::Observed);
+    assert!(surface.loaded.is_none());
+    assert!(surface.transition.is_none());
+    assert!(
+        surface
+            .load_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("the daemon will serve without a model")),
+        "the failed load must stay reportable: {:?}",
+        surface.load_failure
+    );
+    assert_eq!(
+        surface
+            .registered
+            .iter()
+            .map(pam_protocol::ModelSummary::model_id)
+            .collect::<Vec<_>>(),
+        vec!["qwen/routed-model"]
+    );
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
     let _ = fs::remove_dir_all(runtime);
 }
 
