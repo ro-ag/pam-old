@@ -22,14 +22,29 @@ const TEST_CREDENTIAL: &str = "daemon-scope-caller-credential";
 /// How long a test waits for one exchange to come back.
 ///
 /// This is the client's patience, not an assertion: every exchange in this file
-/// asserts the *result* it gets, never that the exchange timed out. Daemon
-/// startup is no longer charged here — `wait_until_ready` pays for it before
-/// the first asserted exchange — so this covers one round trip and nothing
-/// else. It stays generous because a shared CI runner can still stall a real
-/// IPC round trip with `SQLite` behind it, and a connector exchange reaches the
-/// native trust store, a security-server round trip measured as high as 6s
-/// against a fresh debug binary.
-const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(15);
+/// asserts the *result* it gets, never that the exchange timed out. A healthy
+/// daemon answers in milliseconds, so the number costs nothing until something
+/// is genuinely slow. Daemon startup is not charged here either —
+/// `wait_until_ready` pays for it before the first asserted exchange.
+///
+/// It has to clear two budgets that live underneath it, and fifteen seconds sat
+/// on top of both:
+///
+/// * The client opens a fresh connection per exchange, and `zeromq`'s
+///   `connect_forever` retries a refused or not-yet-listening endpoint on an
+///   exponential back-off — roughly 1.4s, 2.0s, 2.7s, 3.8s, 5.3s — summing to
+///   **15.15s** before the sixth attempt. A 15s deadline sits 0.15s *below*
+///   that, so an exchange needing the full cycle is guaranteed to lose the race
+///   and to report a flat ~15.2s `DeadlineExceeded` on a trivial request.
+/// * `model.load` initializes the llama.cpp backend, which on macOS compiles
+///   ggml's embedded Metal library. Warm, that costs ~0.01s; cold, with the
+///   machine oversubscribed, it measured **14.6s to 15.8s** across 24
+///   concurrent copies of this binary — and all of it is charged to whichever
+///   model exchange runs first. A CI runner is always cold.
+///
+/// So this must not be "tidied" back to 15s: fifteen is the one value certain
+/// to fire in the middle of work that was about to succeed.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
 
 fn test_runtime(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -77,8 +92,8 @@ fn start_daemon(
 ///
 /// The endpoint is bound last: the store opens and migrates, the credential
 /// store warms and any configured model loads first. A shared CI runner
-/// stretches every one of those, so readiness is given far more patience than
-/// any single exchange.
+/// stretches every one of those, so readiness is given more patience than any
+/// single exchange.
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long one readiness probe waits before it is retried.
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -91,9 +106,9 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// and the cost of that gap lands on whichever exchange goes first. The
 /// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
 /// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
-/// seconds and one that is late by ten exhausts a fifteen-second deadline
-/// outright. Waiting for a complete round trip here keeps startup out of the
-/// exchange deadlines, which then cover only the exchange they are spent on.
+/// seconds and one that is late by ten spends the whole 15.15s retry budget.
+/// Waiting for a complete round trip here keeps startup out of the exchange
+/// deadlines, which then cover only the exchange they are spent on.
 ///
 /// The probe is deliberately inert. Its capability and payload do not match, so
 /// the daemon answers on shape alone — before authentication, policy or the

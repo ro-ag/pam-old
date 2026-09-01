@@ -74,6 +74,22 @@ fn detect_single(bin: &Path, project: &Path) -> DetectedEvaluator {
     .unwrap()
 }
 
+/// How long a test waits for the shell stub standing in for the evaluator.
+///
+/// Client patience, not an assertion: these tests assert what the stub wrote
+/// and what came back, never how long it took. The stub itself is `printf` and
+/// finishes in milliseconds — but `run_evaluator` spawns a real process, pipes
+/// a prompt into it and reaps it, and on an oversubscribed runner every one of
+/// those steps queues behind everybody else's. Fifteen seconds looked
+/// enormously generous and still lost: under 24 concurrent copies of this test
+/// binary these runs returned `DeadlineExceeded`. Forty-five seconds is just as
+/// free while the machine is healthy, because a healthy run never reaches it.
+///
+/// The one deadline in this file that is deliberately tiny lives in
+/// `elapsed_deadline_kills_and_reaps_the_child`, which asserts the timeout
+/// fires. That one is an assertion and must stay where it is.
+const STUB_DEADLINE: Duration = Duration::from_secs(45);
+
 fn test_config(
     deadline: Duration,
     max_stdout_bytes: usize,
@@ -181,7 +197,7 @@ fn a_global_audit_without_an_audited_project_keeps_every_path_entry() {
     let response = run_evaluator(
         &detected,
         "private prompt over stdin",
-        test_config(Duration::from_secs(15), 1024, 1024),
+        test_config(STUB_DEADLINE, 1024, 1024),
     )
     .unwrap();
 
@@ -253,11 +269,12 @@ fn claude_runs_once_with_no_tools_sanitized_path_stdin_and_an_empty_workspace() 
     let response = run_evaluator(
         &evaluator,
         "private prompt over stdin",
-        test_config(Duration::from_secs(15), 1024, 1024),
+        test_config(STUB_DEADLINE, 1024, 1024),
     );
     assert!(
         response.is_ok(),
-        "stub rejected evaluator environment: {}",
+        "evaluator run failed with {:?}; environment leaks: {}",
+        response.as_ref().err(),
         fs::read_to_string(&environment_leak_log).unwrap_or_default()
     );
     let response = response.unwrap();
@@ -345,7 +362,7 @@ fn nonzero_exit_returns_a_typed_non_sensitive_error() {
     let error = run_evaluator(
         &evaluator,
         "private evaluator prompt",
-        test_config(Duration::from_secs(15), 1024, 1024),
+        test_config(STUB_DEADLINE, 1024, 1024),
     )
     .unwrap_err();
 
@@ -395,12 +412,8 @@ fn completed_leader_cannot_leave_a_descendant_holding_evaluator_pipes() {
     let evaluator = detect_single(&bin, &project);
     let started = Instant::now();
 
-    let response = run_evaluator(
-        &evaluator,
-        "prompt",
-        test_config(Duration::from_secs(15), 1024, 1024),
-    )
-    .unwrap();
+    let response =
+        run_evaluator(&evaluator, "prompt", test_config(STUB_DEADLINE, 1024, 1024)).unwrap();
 
     assert_eq!(response, "leader response");
     assert!(started.elapsed() < Duration::from_secs(3));
@@ -429,7 +442,7 @@ fn a_child_that_exits_without_reading_stdin_does_not_report_stdin_write() {
     write_stub(&bin, "claude", "printf 'stub response'");
     let evaluator = detect_single(&bin, &project);
     let prompt = "x".repeat(600_000);
-    let config = EvaluatorRunConfig::new(Duration::from_secs(15), 1_048_576, 1024, 1024).unwrap();
+    let config = EvaluatorRunConfig::new(STUB_DEADLINE, 1_048_576, 1024, 1024).unwrap();
 
     let response = run_evaluator(&evaluator, &prompt, config).unwrap();
 
@@ -445,12 +458,7 @@ fn oversized_standard_output_is_drained_and_rejected() {
     let evaluator = detect_single(&bin, &project);
 
     assert_eq!(
-        run_evaluator(
-            &evaluator,
-            "prompt",
-            test_config(Duration::from_secs(15), 16, 1024),
-        )
-        .unwrap_err(),
+        run_evaluator(&evaluator, "prompt", test_config(STUB_DEADLINE, 16, 1024),).unwrap_err(),
         EvaluatorRunError::StdoutTooLarge
     );
 }
@@ -464,12 +472,7 @@ fn invalid_utf8_standard_output_is_rejected() {
     let evaluator = detect_single(&bin, &project);
 
     assert_eq!(
-        run_evaluator(
-            &evaluator,
-            "prompt",
-            test_config(Duration::from_secs(15), 1024, 1024),
-        )
-        .unwrap_err(),
+        run_evaluator(&evaluator, "prompt", test_config(STUB_DEADLINE, 1024, 1024),).unwrap_err(),
         EvaluatorRunError::InvalidUtf8Stdout
     );
 }

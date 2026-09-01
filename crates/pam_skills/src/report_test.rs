@@ -23,6 +23,18 @@ use super::{
 #[cfg(unix)]
 use super::{EvaluatorKind, SaturationGrade, SkillsAuditFailureReason};
 
+/// How long a test waits for the shell stub standing in for the evaluator.
+///
+/// Client patience, not an assertion: these audits assert the report they get,
+/// never how long the stub took. `run_skills_audit` spawns a real process and
+/// pipes a prompt through it, and on an oversubscribed runner a two-second
+/// deadline expires before the stub is even scheduled — which surfaces here not
+/// as an error but as a missing invocation log, because the audit folds the
+/// timeout into the report. See `evaluator_test::STUB_DEADLINE` for the same
+/// reasoning and the measurements behind it.
+#[cfg(unix)]
+const STUB_DEADLINE: Duration = Duration::from_secs(45);
+
 static TEST_PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct TestProject {
@@ -409,7 +421,7 @@ fn unix_stub_evaluator_runs_one_complete_private_audit_through_stdin() {
         &audit_scan,
         Some(project.path()),
         &injected_path(evaluator.path()),
-        EvaluatorRunConfig::new(Duration::from_secs(2), 256 * 1024, 256 * 1024, 1024).unwrap(),
+        EvaluatorRunConfig::new(STUB_DEADLINE, 256 * 1024, 256 * 1024, 1024).unwrap(),
     )
     .unwrap();
 
@@ -550,7 +562,7 @@ fn escape_heavy_prompt_is_rejected_at_the_serialized_byte_cap_before_invocation(
         &audit_scan,
         Some(project.path()),
         &injected_path(evaluator.path()),
-        EvaluatorRunConfig::new(Duration::from_secs(2), maximum_prompt_bytes, 1024, 1024).unwrap(),
+        EvaluatorRunConfig::new(STUB_DEADLINE, maximum_prompt_bytes, 1024, 1024).unwrap(),
     )
     .unwrap();
 
@@ -660,7 +672,7 @@ fn rejected_and_nonzero_stubs_retain_the_same_private_footprint_with_failed_stat
             &audit_scan,
             Some(project.path()),
             &injected_path(evaluator.path()),
-            EvaluatorRunConfig::new(Duration::from_secs(2), 256 * 1024, 256 * 1024, 1024).unwrap(),
+            EvaluatorRunConfig::new(STUB_DEADLINE, 256 * 1024, 256 * 1024, 1024).unwrap(),
         )
         .unwrap();
 

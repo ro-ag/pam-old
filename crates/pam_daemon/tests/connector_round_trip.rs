@@ -102,12 +102,25 @@ fn start_daemon(
     (shutdown_tx, daemon)
 }
 
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: every exchange here asserts the result
+/// it gets, not that it timed out, so a generous number costs nothing while the
+/// daemon is healthy. It must clear the transport's own budget: the client
+/// opens a fresh connection per exchange, and `zeromq`'s `connect_forever`
+/// retries a refused or not-yet-listening endpoint on an exponential back-off
+/// of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s — **15.15s** in total, which is
+/// why the fifteen seconds this file used to spend was the one value certain to
+/// fire in the middle of a connect that was about to succeed. Startup is
+/// excluded separately, by `wait_until_ready`.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// How long a test waits for a freshly started daemon to answer.
 ///
 /// The endpoint is bound last: the store opens and migrates, the credential
 /// store warms and any configured model loads first. A shared CI runner
-/// stretches every one of those, so readiness is given far more patience than
-/// any single exchange.
+/// stretches every one of those, so readiness is given more patience than any
+/// single exchange.
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long one readiness probe waits before it is retried.
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -120,9 +133,9 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// and the cost of that gap lands on whichever exchange goes first. The
 /// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
 /// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
-/// seconds and one that is late by ten exhausts a fifteen-second deadline
-/// outright. Waiting for a complete round trip here keeps startup out of the
-/// exchange deadlines, which then cover only the exchange they are spent on.
+/// seconds and one that is late by ten spends the whole 15.15s retry budget.
+/// Waiting for a complete round trip here keeps startup out of the exchange
+/// deadlines, which then cover only the exchange they are spent on.
 ///
 /// The probe is deliberately inert. Its capability and payload do not match, so
 /// the daemon answers on shape alone — before authentication, policy or the
@@ -266,13 +279,9 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
 
     // Baseline list: the built-in connector is visible, unconfigured, and
     // credential-free.
-    let listed = request_exchange(
-        &endpoint,
-        &list_request("list-initial"),
-        Duration::from_secs(2),
-    )
-    .await
-    .unwrap();
+    let listed = request_exchange(&endpoint, &list_request("list-initial"), EXCHANGE_TIMEOUT)
+        .await
+        .unwrap();
     let ResultBody::Success {
         truth,
         payload: ResultPayload::ConnectorList(initial),
@@ -303,7 +312,7 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
                 secret: ConnectorSecret::new(CONNECTOR_SECRET).unwrap(),
             }),
         ),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -331,7 +340,7 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
 
     // The self-test runs the real connector against the unroutable base URL and
     // reports a bounded failure without hanging or echoing the secret.
-    let tested = request_exchange(&endpoint, &test_request("test"), Duration::from_secs(30))
+    let tested = request_exchange(&endpoint, &test_request("test"), EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let encoded = encode(&tested.result).unwrap();
@@ -354,13 +363,9 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
     assert!(tested.detail.len() <= 1024);
 
     // The recorded outcome and stored configuration survive into the listing.
-    let listed = request_exchange(
-        &endpoint,
-        &list_request("list-after"),
-        Duration::from_secs(2),
-    )
-    .await
-    .unwrap();
+    let listed = request_exchange(&endpoint, &list_request("list-after"), EXCHANGE_TIMEOUT)
+        .await
+        .unwrap();
     let ResultBody::Success {
         payload: ResultPayload::ConnectorList(after),
         ..
@@ -380,7 +385,7 @@ async fn connector_lifecycle_lists_configures_and_tests_without_exposing_secrets
     let cleared = request_exchange(
         &endpoint,
         &configure_request("clear", None, Some(ConnectorCredentialAction::Clear)),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -444,7 +449,7 @@ async fn connector_writes_require_grants_and_list_respects_explicit_deny() {
         ),
         test_request("test-denied"),
     ] {
-        let denied = request_exchange(&endpoint, &request, Duration::from_secs(2))
+        let denied = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
             .await
             .unwrap();
         assert!(matches!(
@@ -467,7 +472,7 @@ async fn connector_writes_require_grants_and_list_respects_explicit_deny() {
             IdempotencyKey::from("list-denied-key"),
         )
         .authenticated(CallerCredential::new("denied-observer-credential")),
-        Duration::from_secs(2),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();

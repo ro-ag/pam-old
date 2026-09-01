@@ -51,14 +51,32 @@ use crate::DaemonError;
 use crate::logging::{DaemonLog, LogLevel};
 use pam_client::{ExchangeError, request_exchange, request_exchange_streaming, request_status};
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: the tests below assert the result an
+/// exchange returns, not that it timed out, so this number costs nothing while
+/// the daemon is healthy. It has to clear the transport's own budget — the
+/// client opens a fresh connection per exchange, and `zeromq`'s
+/// `connect_forever` retries a refused or not-yet-listening endpoint on an
+/// exponential back-off of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s, **15.15s**
+/// in total. Fifteen seconds, the previous value, sat just underneath that: the
+/// one number certain to fire in the middle of a connect that was about to
+/// succeed. The tests that do assert a deadline pass their own short one.
+const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 const TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How long `wait_for_state` polls the store for one expected request state.
+///
+/// Deliberately *not* `TEST_TIMEOUT`. That one is client patience, where waiting
+/// longer buys a result; this one watches for a state the queue passes through,
+/// so once the request has moved on the poll can never succeed and every extra
+/// second is a test thread held open for a failure that is already decided.
+const STATE_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a test waits for a freshly started daemon to answer.
 ///
 /// The endpoint is bound last: the store opens and migrates, the credential
 /// store warms and any configured model loads first. A shared CI runner
-/// stretches every one of those, so readiness is given far more patience than
-/// any single exchange.
+/// stretches every one of those, so readiness is given more patience than any
+/// single exchange.
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long one readiness probe waits before it is retried.
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1192,9 +1210,9 @@ async fn the_endpoint_is_not_advertised_until_the_model_has_loaded() {
 /// and the cost of that gap lands on whichever exchange goes first. The
 /// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
 /// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
-/// seconds and one that is late by ten exhausts a fifteen-second deadline
-/// outright. Waiting for a complete round trip here keeps startup out of the
-/// exchange deadlines, which then cover only the exchange they are spent on.
+/// seconds and one that is late by ten spends the whole 15.15s retry budget.
+/// Waiting for a complete round trip here keeps startup out of the exchange
+/// deadlines, which then cover only the exchange they are spent on.
 ///
 /// The probe is deliberately inert. Its capability and payload do not match, so
 /// the daemon answers on shape alone — before authentication, policy or the
@@ -1534,7 +1552,7 @@ async fn seed_max_evidence_policy_state(
 }
 
 async fn wait_for_state(store: &Store, request_id: &RequestId, expected: RequestState) {
-    let deadline = Instant::now() + TEST_TIMEOUT;
+    let deadline = Instant::now() + STATE_POLL_TIMEOUT;
     loop {
         let snapshot = store.snapshot(request_id.clone()).await;
         if snapshot
@@ -1547,7 +1565,7 @@ async fn wait_for_state(store: &Store, request_id: &RequestId, expected: Request
         let now = Instant::now();
         assert!(
             now < deadline,
-            "request {request_id} did not reach {expected:?} within {TEST_TIMEOUT:?}; last_snapshot={snapshot:?}",
+            "request {request_id} did not reach {expected:?} within {STATE_POLL_TIMEOUT:?}; last_snapshot={snapshot:?}",
         );
         tokio::time::sleep(TEST_POLL_INTERVAL.min(deadline - now)).await;
     }
@@ -1813,7 +1831,7 @@ async fn wait_resumes_live_and_terminal_work_with_split_correlation() {
     let target_observer = tokio::spawn({
         let endpoint = endpoint.clone();
         let target = target.clone();
-        async move { request_status(&endpoint, &target, Duration::from_secs(2)).await }
+        async move { request_status(&endpoint, &target, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &target.request_id, RequestState::Leased).await;
@@ -1841,7 +1859,7 @@ async fn wait_resumes_live_and_terminal_work_with_split_correlation() {
         target.request_id.clone(),
         1,
     );
-    let live = request_exchange(&endpoint, &wait_request, Duration::from_secs(2))
+    let live = request_exchange(&endpoint, &wait_request, TEST_TIMEOUT)
         .await
         .unwrap();
     let target_exchange = target_observer.await.unwrap().unwrap();
@@ -1971,7 +1989,7 @@ async fn dropping_wait_observer_does_not_cancel_target_work() {
     let target_observer = tokio::spawn({
         let endpoint = endpoint.clone();
         let target = target.clone();
-        async move { request_status(&endpoint, &target, Duration::from_secs(2)).await }
+        async move { request_status(&endpoint, &target, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &target.request_id, RequestState::Leased).await;
@@ -2015,7 +2033,7 @@ async fn streaming_wait_timeout_retains_progress_and_does_not_cancel_target_work
     let target_observer = tokio::spawn({
         let endpoint = endpoint.clone();
         let target = target.clone();
-        async move { request_status(&endpoint, &target, Duration::from_secs(2)).await }
+        async move { request_status(&endpoint, &target, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &target.request_id, RequestState::Leased).await;
@@ -2593,7 +2611,7 @@ async fn oversized_evidence_observer_is_rejected_and_daemon_stays_healthy() {
     )
     .unwrap();
 
-    let exchange = request_exchange(&endpoint, &oversized, Duration::from_secs(2))
+    let exchange = request_exchange(&endpoint, &oversized, TEST_TIMEOUT)
         .await
         .unwrap();
     let ResultBody::Failure(failure) = exchange.result.body else {
@@ -2846,8 +2864,8 @@ async fn daemon_parallelizes_projects_but_serializes_each_project() {
     let different_a = request("project-a", "different-a");
     let different_b = request("project-b", "different-b");
     let different = tokio::join!(
-        request_status(&endpoint, &different_a, Duration::from_secs(3)),
-        request_status(&endpoint, &different_b, Duration::from_secs(3))
+        request_status(&endpoint, &different_a, TEST_TIMEOUT),
+        request_status(&endpoint, &different_b, TEST_TIMEOUT)
     );
     let first_different_project = different.0.unwrap();
     let second_different_project = different.1.unwrap();
@@ -2866,8 +2884,8 @@ async fn daemon_parallelizes_projects_but_serializes_each_project() {
     let same_a = request("project-c", "same-a");
     let same_b = request("project-c", "same-b");
     let same = tokio::join!(
-        request_status(&endpoint, &same_a, Duration::from_secs(3)),
-        request_status(&endpoint, &same_b, Duration::from_secs(3))
+        request_status(&endpoint, &same_a, TEST_TIMEOUT),
+        request_status(&endpoint, &same_b, TEST_TIMEOUT)
     );
     let first_same_project = same.0.unwrap();
     let second_same_project = same.1.unwrap();
@@ -2925,7 +2943,7 @@ async fn accepted_work_survives_restart_and_replays_the_original_result() {
     let pending = tokio::spawn({
         let endpoint = endpoint.clone();
         let request = durable_request.clone();
-        async move { request_status(&endpoint, &request, Duration::from_secs(10)).await }
+        async move { request_status(&endpoint, &request, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &durable_request.request_id, RequestState::Leased).await;
@@ -2938,7 +2956,7 @@ async fn accepted_work_survives_restart_and_replays_the_original_result() {
     let (second_shutdown, second_daemon) =
         start_daemon(endpoint.clone(), state_path, Duration::ZERO);
     wait_until_ready(&endpoint).await;
-    let exchange = request_status(&endpoint, &durable_request, Duration::from_secs(2))
+    let exchange = request_status(&endpoint, &durable_request, TEST_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(
@@ -2976,7 +2994,7 @@ async fn cancelling_running_work_is_terminal_and_notifies_the_original_observer(
     let target_exchange = tokio::spawn({
         let endpoint = endpoint.clone();
         let target = target.clone();
-        async move { request_status(&endpoint, &target, Duration::from_secs(3)).await }
+        async move { request_status(&endpoint, &target, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &target.request_id, RequestState::Leased).await;
@@ -3162,14 +3180,14 @@ async fn idempotent_retry_keeps_both_observers_correlated_without_duplicate_even
     let first_observer = tokio::spawn({
         let endpoint = endpoint.clone();
         let first = first.clone();
-        async move { request_status(&endpoint, &first, Duration::from_secs(2)).await }
+        async move { request_status(&endpoint, &first, TEST_TIMEOUT).await }
     });
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &first.request_id, RequestState::Leased).await;
     let retry_observer = tokio::spawn({
         let endpoint = endpoint.clone();
         let retry = retry.clone();
-        async move { request_status(&endpoint, &retry, Duration::from_secs(2)).await }
+        async move { request_status(&endpoint, &retry, TEST_TIMEOUT).await }
     });
 
     let first_exchange = first_observer.await.unwrap().unwrap();

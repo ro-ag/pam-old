@@ -22,7 +22,18 @@ static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const TEST_CALLER: &str = "gui-flow-run-caller";
 const TEST_CREDENTIAL: &str = "gui-flow-run-credential";
-const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: the tests below assert the result an
+/// exchange returns, not that it timed out, so this number costs nothing while
+/// the daemon is healthy. It has to clear the transport's own budget — the
+/// client opens a fresh connection per exchange, and `zeromq`'s
+/// `connect_forever` retries a refused or not-yet-listening endpoint on an
+/// exponential back-off of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s, **15.15s**
+/// in total. Fifteen seconds, the previous value, sat just underneath that: the
+/// one number certain to fire in the middle of a connect that was about to
+/// succeed. The tests that do assert a deadline pass their own short one.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
 
 struct TestDirectory(PathBuf);
 

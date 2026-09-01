@@ -143,12 +143,25 @@ async fn start_daemon(
     (shutdown_tx, daemon)
 }
 
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: every exchange here asserts the result
+/// it gets, not that it timed out, so a generous number costs nothing while the
+/// daemon is healthy. It must clear the transport's own budget: the client
+/// opens a fresh connection per exchange, and `zeromq`'s `connect_forever`
+/// retries a refused or not-yet-listening endpoint on an exponential back-off
+/// of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s — **15.15s** in total, which is
+/// why the fifteen seconds this file used to spend was the one value certain to
+/// fire in the middle of a connect that was about to succeed. Startup is
+/// excluded separately, by `wait_until_ready`.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// How long a test waits for a freshly started daemon to answer.
 ///
 /// The endpoint is bound last: the store opens and migrates, the credential
 /// store warms and any configured model loads first. A shared CI runner
-/// stretches every one of those, so readiness is given far more patience than
-/// any single exchange.
+/// stretches every one of those, so readiness is given more patience than any
+/// single exchange.
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long one readiness probe waits before it is retried.
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -161,9 +174,9 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// and the cost of that gap lands on whichever exchange goes first. The
 /// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
 /// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
-/// seconds and one that is late by ten exhausts a fifteen-second deadline
-/// outright. Waiting for a complete round trip here keeps startup out of the
-/// exchange deadlines, which then cover only the exchange they are spent on.
+/// seconds and one that is late by ten spends the whole 15.15s retry budget.
+/// Waiting for a complete round trip here keeps startup out of the exchange
+/// deadlines, which then cover only the exchange they are spent on.
 ///
 /// The probe is deliberately inert. Its capability and payload do not match, so
 /// the daemon answers on shape alone — before authentication, policy or the
@@ -261,7 +274,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
     let bounded = request_exchange(
         &endpoint,
         &activity_request("activity-bounded", "observatory-test", TEST_CREDENTIAL, 1),
-        Duration::from_secs(5),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -283,7 +296,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
         let exchange = request_exchange(
             &endpoint,
             &activity_request(request_id, "observatory-test", TEST_CREDENTIAL, limit),
-            Duration::from_secs(5),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap();
@@ -340,7 +353,7 @@ async fn daemon_activity_is_newest_first_bounded_baseline_and_deny_overridable()
             "denied-observer-credential",
             5,
         ),
-        Duration::from_secs(5),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -401,7 +414,7 @@ async fn model_status_reports_the_registered_catalog_and_deny_overridable() {
     let exchange = request_exchange(
         &endpoint,
         &model_status_request("model-status", "observatory-test", TEST_CREDENTIAL),
-        Duration::from_secs(5),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -438,7 +451,7 @@ async fn model_status_reports_the_registered_catalog_and_deny_overridable() {
             "denied-observer",
             "denied-observer-credential",
         ),
-        Duration::from_secs(5),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -488,7 +501,7 @@ async fn caller_list_returns_revocations_without_credential_material() {
         IdempotencyKey::from("caller-list-key"),
     )
     .authenticated(CallerCredential::new(TEST_CREDENTIAL));
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(5))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
 

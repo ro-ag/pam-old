@@ -25,12 +25,32 @@ use zeromq::{DealerSocket, Socket, SocketSend, ZmqMessage};
 
 const TEST_CREDENTIAL: &str = "integration-caller-credential";
 
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: every exchange here asserts the result
+/// it gets, not that it timed out, so a generous number costs nothing while the
+/// daemon is healthy. It must clear the transport's own budget: the client
+/// opens a fresh connection per exchange, and `zeromq`'s `connect_forever`
+/// retries a refused or not-yet-listening endpoint on an exponential back-off
+/// of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s — **15.15s** in total, which is
+/// why the fifteen seconds this file used to spend was the one value certain to
+/// fire in the middle of a connect that was about to succeed. Startup is
+/// excluded separately, by `wait_until_ready`.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long a test waits for the daemon task to finish after it is stopped.
+///
+/// Patience again, not an assertion: the tests below assert what shutdown left
+/// behind, never how quickly it got there. Draining in-flight handlers and
+/// closing `SQLite` is real work, and an oversubscribed runner stretches it.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// How long a test waits for a freshly started daemon to answer.
 ///
 /// The endpoint is bound last: the store opens and migrates, the credential
 /// store warms and any configured model loads first. A shared CI runner
-/// stretches every one of those, so readiness is given far more patience than
-/// any single exchange.
+/// stretches every one of those, so readiness is given more patience than any
+/// single exchange.
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long one readiness probe waits before it is retried.
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -43,9 +63,9 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// and the cost of that gap lands on whichever exchange goes first. The
 /// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
 /// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
-/// seconds and one that is late by ten exhausts a fifteen-second deadline
-/// outright. Waiting for a complete round trip here keeps startup out of the
-/// exchange deadlines, which then cover only the exchange they are spent on.
+/// seconds and one that is late by ten spends the whole 15.15s retry budget.
+/// Waiting for a complete round trip here keeps startup out of the exchange
+/// deadlines, which then cover only the exchange they are spent on.
 ///
 /// The probe is deliberately inert. Its capability and payload do not match, so
 /// the daemon answers on shape alone — before authentication, policy or the
@@ -127,7 +147,7 @@ async fn brief_crosses_transport_with_explicit_unavailable_provenance() {
     )
     .authenticated(CallerCredential::new(TEST_CREDENTIAL));
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(15))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(exchange.events.is_empty());
@@ -167,7 +187,7 @@ async fn network_diagnostics_require_an_authenticated_project_grant() {
         .authenticated(CallerCredential::new(TEST_CREDENTIAL))
     };
 
-    let denied = request_exchange(&endpoint, &request("denied"), Duration::from_secs(15))
+    let denied = request_exchange(&endpoint, &request("denied"), EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
@@ -195,7 +215,7 @@ async fn network_diagnostics_require_an_authenticated_project_grant() {
         .unwrap();
     store.shutdown().await.unwrap();
 
-    let allowed = request_exchange(&endpoint, &request("allowed"), Duration::from_secs(15))
+    let allowed = request_exchange(&endpoint, &request("allowed"), EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
@@ -430,7 +450,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
         .unwrap();
 
     let request = status_request();
-    let exchange = request_status(&endpoint, &request, Duration::from_secs(15))
+    let exchange = request_status(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
 
@@ -451,7 +471,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
 
     let mut future_request = status_request();
     future_request.protocol_version = PROTOCOL_VERSION + 1;
-    let future_exchange = request_status(&endpoint, &future_request, Duration::from_secs(15))
+    let future_exchange = request_status(&endpoint, &future_request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(future_exchange.events.is_empty());
@@ -461,7 +481,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
     assert_eq!(failure.code, FailureCode::UnsupportedProtocolVersion);
 
     shutdown.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(2), daemon)
+    tokio::time::timeout(SHUTDOWN_TIMEOUT, daemon)
         .await
         .unwrap()
         .unwrap()
@@ -471,7 +491,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
 
     let (second_shutdown, second_daemon) = start_daemon(endpoint.clone()).await;
     wait_until_ready(&endpoint).await;
-    request_status(&endpoint, &status_request(), Duration::from_secs(15))
+    request_status(&endpoint, &status_request(), EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     second_shutdown.send(()).unwrap();
@@ -532,7 +552,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
             FailureCode::Forbidden,
         ),
     ] {
-        let exchange = request_exchange(&endpoint, &request, Duration::from_secs(15))
+        let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
             .await
             .unwrap();
         assert!(matches!(
@@ -544,7 +564,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
     }
 
     let stop = stop_request("stop-allowed", "integration-test", Some(TEST_CREDENTIAL));
-    let acknowledged = request_exchange(&endpoint, &stop, Duration::from_secs(15))
+    let acknowledged = request_exchange(&endpoint, &stop, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(acknowledged.result.request_id, stop.request_id);
@@ -558,7 +578,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
     ));
 
     drop(shutdown);
-    tokio::time::timeout(Duration::from_secs(2), daemon)
+    tokio::time::timeout(SHUTDOWN_TIMEOUT, daemon)
         .await
         .unwrap()
         .unwrap()
@@ -568,7 +588,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
 
     let (second_shutdown, second_daemon) = start_daemon(endpoint.clone()).await;
     wait_until_ready(&endpoint).await;
-    request_status(&endpoint, &status_request(), Duration::from_secs(15))
+    request_status(&endpoint, &status_request(), EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     request_exchange(
@@ -578,7 +598,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
             "integration-test",
             Some(TEST_CREDENTIAL),
         ),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -625,11 +645,11 @@ async fn authentication_rejects_missing_wrong_and_revoked_credentials() {
     )
     .authenticated(CallerCredential::new("wrong credential"));
 
-    let missing_failure = request_status(&endpoint, &missing, Duration::from_secs(15))
+    let missing_failure = request_status(&endpoint, &missing, EXCHANGE_TIMEOUT)
         .await
         .unwrap()
         .result;
-    let wrong_failure = request_status(&endpoint, &wrong, Duration::from_secs(15))
+    let wrong_failure = request_status(&endpoint, &wrong, EXCHANGE_TIMEOUT)
         .await
         .unwrap()
         .result;
@@ -644,7 +664,7 @@ async fn authentication_rejects_missing_wrong_and_revoked_credentials() {
 
     let valid = status_request();
     assert!(matches!(
-        request_status(&endpoint, &valid, Duration::from_secs(15))
+        request_status(&endpoint, &valid, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -668,7 +688,7 @@ async fn authentication_rejects_missing_wrong_and_revoked_credentials() {
         IdempotencyKey::from("auth-revoked"),
     )
     .authenticated(CallerCredential::new(TEST_CREDENTIAL));
-    let revoked_result = request_status(&endpoint, &revoked, Duration::from_secs(15))
+    let revoked_result = request_status(&endpoint, &revoked, EXCHANGE_TIMEOUT)
         .await
         .unwrap()
         .result;
@@ -740,7 +760,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     )
     .authenticated(CallerCredential::new(TEST_CREDENTIAL));
     assert!(matches!(
-        request_exchange(&endpoint, &ungranted, Duration::from_secs(15))
+        request_exchange(&endpoint, &ungranted, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -749,7 +769,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     ));
 
     let current = approval_project_current("current-challenge", None);
-    let challenged = request_exchange(&endpoint, &current, Duration::from_secs(15))
+    let challenged = request_exchange(&endpoint, &current, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(challenged.events.is_empty());
@@ -786,7 +806,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
         ),
     ] {
         assert!(matches!(
-            request_exchange(&endpoint, &unauthenticated, Duration::from_secs(15))
+            request_exchange(&endpoint, &unauthenticated, EXCHANGE_TIMEOUT)
                 .await
                 .unwrap()
                 .result
@@ -803,7 +823,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
         approval_id.clone(),
         ProtocolApprovalDecision::Approve,
     );
-    let wrong_project_result = request_exchange(&endpoint, &wrong_project, Duration::from_secs(15))
+    let wrong_project_result = request_exchange(&endpoint, &wrong_project, EXCHANGE_TIMEOUT)
         .await
         .unwrap()
         .result;
@@ -832,7 +852,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
             approval_id.clone(),
             decision,
         );
-        let result = request_exchange(&endpoint, &other_caller, Duration::from_secs(15))
+        let result = request_exchange(&endpoint, &other_caller, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result;
@@ -857,7 +877,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     )
     .with_approval(ApprovalId::from("unexpected-receipt"));
     assert!(matches!(
-        request_exchange(&endpoint, &malformed, Duration::from_secs(15))
+        request_exchange(&endpoint, &malformed, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -876,7 +896,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
         request_exchange(
             &endpoint,
             &oversized_approval_id,
-            Duration::from_secs(15),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap()
@@ -893,7 +913,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
         approval_id.clone(),
         ProtocolApprovalDecision::Approve,
     );
-    let approved = request_exchange(&endpoint, &approve, Duration::from_secs(15))
+    let approved = request_exchange(&endpoint, &approve, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(approved.events.is_empty());
@@ -915,7 +935,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
             approval_id.clone(),
             ProtocolApprovalDecision::Approve,
         ),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -938,7 +958,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
                 approval_id.clone(),
                 ProtocolApprovalDecision::Deny,
             ),
-            Duration::from_secs(15),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap()
@@ -948,7 +968,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     ));
 
     let exact_retry = approval_project_current("current-approved", Some(approval_id.clone()));
-    let current_result = request_exchange(&endpoint, &exact_retry, Duration::from_secs(15))
+    let current_result = request_exchange(&endpoint, &exact_retry, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(current_result.events.is_empty());
@@ -982,7 +1002,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
         request_exchange(
             &endpoint,
             &approval_project_current("current-reused", Some(approval_id)),
-            Duration::from_secs(15),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap()
@@ -994,7 +1014,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     let denied_challenge = request_exchange(
         &endpoint,
         &approval_project_current("current-deny-challenge", None),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -1012,7 +1032,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
             denied_id.clone(),
             ProtocolApprovalDecision::Deny,
         ),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -1035,7 +1055,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
                 denied_id.clone(),
                 ProtocolApprovalDecision::Deny,
             ),
-            Duration::from_secs(15),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap()
@@ -1087,7 +1107,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
             expired_id.clone(),
             ProtocolApprovalDecision::Approve,
         ),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -1110,7 +1130,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
                 expired_id.clone(),
                 ProtocolApprovalDecision::Deny,
             ),
-            Duration::from_secs(15),
+            EXCHANGE_TIMEOUT,
         )
         .await
         .unwrap()
@@ -1130,7 +1150,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
             "integration-test",
             Some(TEST_CREDENTIAL),
         ),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();
@@ -1152,7 +1172,7 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
     let challenge_result = request_status(
         &endpoint,
         &approval_status("approval-request", None),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap()
@@ -1167,7 +1187,7 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
     )
     .authenticated(CallerCredential::new("approval-caller-credential"))
     .with_approval(challenge.clone());
-    let wrong = request_exchange(&endpoint, &wrong_effect, Duration::from_secs(15))
+    let wrong = request_exchange(&endpoint, &wrong_effect, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
@@ -1177,7 +1197,7 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
 
     let approved = approval_status("approval-approved", Some(challenge.clone()));
     assert!(matches!(
-        request_status(&endpoint, &approved, Duration::from_secs(15))
+        request_status(&endpoint, &approved, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -1186,7 +1206,7 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
     ));
     let replay = approval_status("approval-replay", Some(challenge));
     assert!(matches!(
-        request_status(&endpoint, &replay, Duration::from_secs(15))
+        request_status(&endpoint, &replay, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -1199,14 +1219,14 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
         "approval-caller",
         Some("approval-caller-credential"),
     );
-    let stop_challenge = request_exchange(&endpoint, &stop, Duration::from_secs(15))
+    let stop_challenge = request_exchange(&endpoint, &stop, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let stop_approval = approve_challenge(&state_path, stop_challenge.result.body).await;
     let stopped = request_exchange(
         &endpoint,
         &stop.with_approval(stop_approval),
-        Duration::from_secs(15),
+        EXCHANGE_TIMEOUT,
     )
     .await
     .unwrap();

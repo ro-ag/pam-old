@@ -43,6 +43,20 @@ use super::{
 };
 use pam_client::request_exchange;
 
+/// How long a test waits for one exchange to come back.
+///
+/// Client patience, never an assertion: the tests below assert the result an
+/// exchange returns, not that it timed out, so this number costs nothing while
+/// the daemon is healthy. It has to clear the transport's own budget — the
+/// client opens a fresh connection per exchange, and `zeromq`'s
+/// `connect_forever` retries a refused or not-yet-listening endpoint on an
+/// exponential back-off of roughly 1.4s, 2.0s, 2.7s, 3.8s and 5.3s, **15.15s**
+/// in total. The two-to-twenty-second deadlines this file used to spell out one
+/// call at a time all sat inside that budget. Delays the tests deliberately
+/// impose on the daemon keep their own literals; this is only the client's
+/// patience.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const HEADER: &str = r#"
@@ -822,7 +836,7 @@ async fn git_status_runs_end_to_end_with_durable_evidence_and_semantic_replay() 
     seed_flow_request_authority(&state_path, &workspace, &request).await;
     let (shutdown, daemon) = start_daemon(endpoint.clone(), state_path.clone());
     wait_until_ready(&endpoint).await;
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(15))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(exchange.events[0].event, Event::Accepted));
@@ -877,7 +891,7 @@ async fn git_status_runs_end_to_end_with_durable_evidence_and_semantic_replay() 
         request.request_id.clone(),
         0,
     );
-    let replayed = request_exchange(&endpoint, &replay, Duration::from_secs(5))
+    let replayed = request_exchange(&endpoint, &replay, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(replayed.events, exchange.events);
@@ -912,7 +926,7 @@ async fn explicit_git_verification_is_verified_and_replays_semantic_evidence() {
     let (shutdown, daemon) = start_daemon(endpoint.clone(), state_path);
     wait_until_ready(&endpoint).await;
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(15))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let ResultBody::Success {
@@ -946,7 +960,7 @@ async fn explicit_git_verification_is_verified_and_replays_semantic_evidence() {
         request.request_id.clone(),
         0,
     );
-    let replayed = request_exchange(&endpoint, &replay, Duration::from_secs(5))
+    let replayed = request_exchange(&endpoint, &replay, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(replayed.events, exchange.events);
@@ -973,7 +987,7 @@ async fn legacy_git_diff_continues_as_observation_without_verification_claims() 
     let (shutdown, daemon) = start_daemon(endpoint.clone(), state_path);
     wait_until_ready(&endpoint).await;
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(15))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let ResultBody::Success {
@@ -1033,7 +1047,7 @@ async fn one_daemon_executes_flows_for_two_explicit_project_roots() {
     let (shutdown, daemon) = start_daemon(endpoint.clone(), state_path);
     wait_until_ready(&endpoint).await;
     for request in [&first, &second] {
-        let exchange = request_exchange(&endpoint, request, Duration::from_secs(15))
+        let exchange = request_exchange(&endpoint, request, EXCHANGE_TIMEOUT)
             .await
             .unwrap();
         assert!(matches!(
@@ -1086,7 +1100,7 @@ async fn flow_approval_challenge_rolls_back_and_exact_retry_replays_existing_res
 
     let (shutdown, daemon) = start_secure_daemon(endpoint.clone(), state_path.clone());
     wait_until_ready(&endpoint).await;
-    let challenged = request_exchange(&endpoint, &request, Duration::from_secs(5))
+    let challenged = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(challenged.events.is_empty());
@@ -1125,7 +1139,7 @@ async fn flow_approval_challenge_rolls_back_and_exact_retry_replays_existing_res
     control.shutdown().await.unwrap();
 
     let approved = request.clone().with_approval(approval_id);
-    let first = request_exchange(&endpoint, &approved, Duration::from_secs(15))
+    let first = request_exchange(&endpoint, &approved, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
@@ -1135,7 +1149,7 @@ async fn flow_approval_challenge_rolls_back_and_exact_retry_replays_existing_res
             payload: ResultPayload::FlowRun(ref result),
         } if result.outcome() == RunOutcome::Solved
     ));
-    let replayed = request_exchange(&endpoint, &approved, Duration::from_secs(5))
+    let replayed = request_exchange(&endpoint, &approved, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(replayed.events, first.events);
@@ -1143,7 +1157,7 @@ async fn flow_approval_challenge_rolls_back_and_exact_retry_replays_existing_res
 
     let mut alias = approved;
     alias.request_id = RequestId::from("flow-approval-alias");
-    let conflict = request_exchange(&endpoint, &alias, Duration::from_secs(5))
+    let conflict = request_exchange(&endpoint, &alias, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
@@ -1179,7 +1193,7 @@ async fn unauthenticated_flow_fails_before_workspace_inspection() {
     wait_until_ready(&endpoint).await;
     fs::remove_dir_all(workspace.join(".git")).unwrap();
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(5))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(exchange.events.is_empty());
@@ -1225,7 +1239,7 @@ async fn cross_project_flow_fails_before_workspace_policy_or_acceptance() {
     wait_until_ready(&endpoint).await;
     fs::remove_dir_all(workspace.join(".git")).unwrap();
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(5))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(exchange.events.is_empty());
@@ -1317,11 +1331,12 @@ async fn saturated_flow_preflight_returns_busy_without_acceptance_and_recovers()
     wait_until_ready(&endpoint).await;
 
     let first_endpoint = endpoint.clone();
-    let first_task = tokio::spawn(async move {
-        request_exchange(&first_endpoint, &first, Duration::from_secs(10)).await
-    });
+    let first_task =
+        tokio::spawn(
+            async move { request_exchange(&first_endpoint, &first, EXCHANGE_TIMEOUT).await },
+        );
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let busy = request_exchange(&endpoint, &saturated, Duration::from_secs(2))
+    let busy = request_exchange(&endpoint, &saturated, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let ResultBody::Failure(failure) = busy.result.body else {
@@ -1349,7 +1364,7 @@ async fn saturated_flow_preflight_returns_busy_without_acceptance_and_recovers()
         }
     ));
     assert!(matches!(
-        request_exchange(&endpoint, &recovered, Duration::from_secs(10))
+        request_exchange(&endpoint, &recovered, EXCHANGE_TIMEOUT)
             .await
             .unwrap()
             .result
@@ -2478,7 +2493,7 @@ action = { type = "connector", connector = "github-actions", capability = "runs.
     ];
 
     for request in &requests {
-        let exchange = request_exchange(&endpoint, request, Duration::from_secs(5))
+        let exchange = request_exchange(&endpoint, request, EXCHANGE_TIMEOUT)
             .await
             .unwrap();
         assert!(exchange.events.is_empty());
@@ -2531,7 +2546,7 @@ async fn retryable_command_failure_exhausts_the_declared_budget() {
     let (shutdown, daemon) = start_daemon(endpoint.clone(), state_path);
     wait_until_ready(&endpoint).await;
 
-    let exchange = request_exchange(&endpoint, &request, Duration::from_secs(20))
+    let exchange = request_exchange(&endpoint, &request, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     let ResultBody::Success {
@@ -2601,7 +2616,7 @@ async fn cancellation_during_retry_keeps_the_lease_live_and_finishes_cancelled()
     let target_id = request.request_id.clone();
     let target_endpoint = endpoint.clone();
     let target = tokio::spawn(async move {
-        request_exchange(&target_endpoint, &request, Duration::from_secs(15)).await
+        request_exchange(&target_endpoint, &request, EXCHANGE_TIMEOUT).await
     });
 
     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2614,7 +2629,7 @@ async fn cancellation_during_retry_keeps_the_lease_live_and_finishes_cancelled()
         IdempotencyKey::from("cancel-retry-observer-key"),
         target_id,
     );
-    let cancelled = request_exchange(&endpoint, &cancel, Duration::from_secs(5))
+    let cancelled = request_exchange(&endpoint, &cancel, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(cancelled.result.body, ResultBody::Success { .. }));
@@ -2663,7 +2678,7 @@ async fn lost_flow_cancel_reply_is_recoverable_and_repeat_is_observed() {
     let target_endpoint = endpoint.clone();
     let target_request = request.clone();
     let target = tokio::spawn(async move {
-        request_exchange(&target_endpoint, &target_request, Duration::from_secs(15)).await
+        request_exchange(&target_endpoint, &target_request, EXCHANGE_TIMEOUT).await
     });
     let observer = Store::open(&state_path).unwrap();
     for _ in 0..500 {
@@ -2685,7 +2700,7 @@ async fn lost_flow_cancel_reply_is_recoverable_and_repeat_is_observed() {
         request.request_id.clone(),
         pam_protocol::ExpectedTargetKind::FlowRun,
     );
-    let mut abandoned = ClientTransport::connect(&endpoint, Duration::from_secs(2))
+    let mut abandoned = ClientTransport::connect(&endpoint, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     abandoned
@@ -2720,7 +2735,7 @@ async fn lost_flow_cancel_reply_is_recoverable_and_repeat_is_observed() {
         request.request_id.clone(),
         pam_protocol::ExpectedTargetKind::FlowRun,
     );
-    let repeat = request_exchange(&endpoint, &repeat, Duration::from_secs(2))
+    let repeat = request_exchange(&endpoint, &repeat, EXCHANGE_TIMEOUT)
         .await
         .unwrap();
     assert!(matches!(
