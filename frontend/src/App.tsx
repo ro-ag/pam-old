@@ -1,5 +1,5 @@
 import { WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { MotionConfig, motion } from "motion/react";
 import {
   type CSSProperties,
   useCallback,
@@ -673,15 +673,18 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
           <Toolbar toggleButtonRef={sidebarToggleRef} commandButtonRef={commandButtonRef} queueButtonRef={queueButtonRef} projectName={projectData?.project.name ?? null} queueCount={projectData ? projectData.current.queue.length : null} fixture={projectData?.fixture ?? bridge.mode === "fixture"} collapsed={state.sidebarCollapsed} pending={busy} theme={theme} themeMode={themeMode} density={density} onThemeChange={selectTheme} onThemeModeChange={selectThemeMode} onDensityChange={selectDensity} onToggleSidebar={toggleSidebar} onOpenCommand={openCommandPalette} onRefresh={refresh} onOpenQueue={openQueue} />
           <div className="workspace-body">
           {state.loadState === "recovering" && state.error && <div className="inline-recovery" role="alert"><WarningCircle size={18} /><span>{state.error}</span><button type="button" onClick={refresh}>Retry</button></div>}
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              className="view-transition"
-              key={state.activeView}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.24, ease: [0.33, 1, 0.68, 1] }}
-            >
+          {/* No exit animation and no AnimatePresence wait: serializing
+              exit-then-enter left a blank beat on every switch, and a stalled
+              frame kept the OLD view on screen while the sidebar highlighted
+              the new one (issue #57). The new view mounts immediately and
+              fades in. */}
+          <motion.div
+            className="view-transition"
+            key={state.activeView}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: [0.33, 1, 0.68, 1] }}
+          >
               {state.activeView === "overview" && (
                 <OverviewView
                   bridge={bridge}
@@ -757,8 +760,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
                   onOpenConsole={() => dispatch({ type: "navigate", view: "activity" })}
                 />
               )}
-            </motion.div>
-          </AnimatePresence>
+          </motion.div>
           </div>
         </section>
       </div>

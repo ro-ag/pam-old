@@ -312,9 +312,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .daemon-status { display: flex; min-height: 18px; gap: var(--pam-space-100); align-items: center; margin: 0; padding: 0 var(--pam-space-100); color: var(--pam-muted); font-size: 11px; }
 .sidebar.is-collapsed .daemon-status { justify-content: center; padding: 0; }
 .sidebar.is-collapsed .daemon-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.daemon-confirm { padding: 0 var(--pam-space-100) 2px; line-height: 1.35; }
-.sidebar.is-collapsed .daemon-confirm { display: grid; gap: 4px; padding: 0; justify-items: stretch; font-size: 10px; }
-.sidebar.is-collapsed .daemon-confirm .button { min-height: 26px; padding: 0 4px; font-size: 10px; }
+.sidebar.is-collapsed .confirm-action .button { min-height: 26px; padding: 0 4px; font-size: 10px; }
 .utility-nav { display: flex; gap: 3px; }
 .utility-nav button, .toolbar button, .drawer-close {
   display: grid;
@@ -1028,7 +1026,6 @@ body { color: var(--pam-text); background: var(--pam-chrome); }
 .daemon-restart:hover { color: var(--pam-chrome-text); background: var(--pam-chrome-raised); }
 .daemon-restart:disabled { color: var(--pam-chrome-muted); background: transparent; cursor: not-allowed; opacity: 0.45; }
 .daemon-status { color: var(--pam-chrome-muted); }
-.daemon-confirm { font-size: 11px; }
 .daemon-control { min-height: max(28px, calc(38px * var(--pam-density))); padding: 0 12px; border-radius: 10px; color: var(--pam-chrome-muted); }
 .daemon-control:hover { color: var(--pam-chrome-text); background: var(--pam-chrome-raised); }
 .utility-nav button { width: 34px; height: 34px; color: var(--pam-chrome-muted); }
@@ -1561,3 +1558,46 @@ label.model-import-consent { display: flex; align-items: center; gap: 8px; color
 .brand-identity { display: flex; flex-direction: column; line-height: 1.05; }
 .brand-identity .app-version { color: var(--pam-chrome-muted); font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 .model-host-notice { margin: 0 0 10px; font-size: 12px; }
+
+/* Destructive-action feedback: one vocabulary for every surface that deletes
+   something (model rows, the danger zone, logs, the sidebar stop). The
+   confirm is a full-width block, never another button in the pile; a refusal
+   looks like a refusal, an outcome like an outcome. */
+.button--danger { border: 1px solid color-mix(in srgb, var(--pam-danger) 48%, transparent); color: var(--pam-danger); background: var(--pam-surface-raised); }
+.button--danger:hover:not(:disabled) { border-color: var(--pam-danger); color: #fff; background: var(--pam-danger); }
+.button--danger:disabled { opacity: 0.55; }
+.confirm-action { display: grid; width: 100%; justify-items: start; gap: calc(8px * var(--pam-density)); padding: calc(12px * var(--pam-density)) 14px; border: 1px solid color-mix(in srgb, var(--pam-danger) 30%, transparent); border-radius: 10px; background: var(--pam-danger-soft); }
+.confirm-action-question { margin: 0; max-width: 72ch; color: var(--pam-text); font-size: 12.5px; overflow-wrap: anywhere; }
+.confirm-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm-action > label { display: grid; gap: 4px; justify-items: start; color: var(--pam-muted); font-size: 11px; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The danger zone reads as one before any row is armed. */
+.panel--danger { border-color: color-mix(in srgb, var(--pam-danger) 26%, transparent); }
+.panel--danger .panel-title .eyebrow { color: var(--pam-danger); }
+/* The confirm block spans the row grid it lands in, under the identity and
+   the actions that armed it. */
+.access-list article > .confirm-action { grid-column: 1 / -1; }
+/* Bare text inputs had no rule at all and rendered invisible (issue #54):
+   every input the settings and confirm surfaces use is styled here. */
+.confirm-action input[type="text"], .connector-row-controls input[type="text"] { min-width: 180px; min-height: max(28px, calc(32px * var(--pam-density))); padding: 5px 7px; border: 1px solid var(--pam-line); border-radius: 5px; color: var(--pam-text); background: var(--pam-surface-raised); font-size: 11px; }
+.inline-message { display: flex; gap: 8px; align-items: flex-start; max-width: 72ch; padding: calc(8px * var(--pam-density)) 12px; border: 1px solid; border-radius: 8px; font-size: 12px; }
+.inline-message > svg { flex: 0 0 auto; margin-top: 2px; }
+.inline-message > div { display: grid; min-width: 0; gap: 3px; }
+.inline-message p { margin: 0; color: var(--pam-text); overflow-wrap: anywhere; }
+.inline-message--error { border-color: color-mix(in srgb, var(--pam-danger) 34%, transparent); background: var(--pam-danger-soft); }
+.inline-message--error > svg { color: var(--pam-danger); }
+.inline-message--success { border-color: color-mix(in srgb, var(--pam-success) 34%, transparent); background: var(--pam-success-soft); }
+.inline-message--success > svg { color: var(--pam-success); }
+.inline-message-recovery { color: var(--pam-muted); }
+/* Reset previews: labeled rows instead of the wire's snake_case sentence. */
+.reset-preview { display: grid; width: 100%; gap: 6px; }
+.reset-preview table { width: max-content; max-width: 100%; border-collapse: collapse; font-size: 12px; }
+.reset-preview td { padding: 3px 14px 3px 0; color: var(--pam-text); }
+.reset-preview td.reset-preview-count { text-align: right; font-variant-numeric: tabular-nums; }
+.reset-preview td:last-child { padding-right: 0; color: var(--pam-muted); font-variant-numeric: tabular-nums; }
+.reset-preview-flows { margin: 0; max-width: 72ch; color: var(--pam-muted); font-size: 12px; overflow-wrap: anywhere; }
+/* The sidebar stop-confirm reuses the same vocabulary, sized to its footer. */
+.sidebar .confirm-action { padding: 8px 10px; }
+.sidebar .confirm-action-question { font-size: 11px; }
+.sidebar .confirm-action-buttons { display: grid; width: 100%; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sidebar .confirm-action .button { min-height: 28px; padding: 0 6px; font-size: 11px; }

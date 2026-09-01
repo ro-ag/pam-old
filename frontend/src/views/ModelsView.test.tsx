@@ -213,6 +213,39 @@ describe("model runtime panel", () => {
     }
   });
 
+  // Issue #59: unregistering and the weights check are daemon calls, so with
+  // Pam paused they wait, visibly, instead of offering a click that can only
+  // end in a refusal — which read as "the model stayed in the list".
+  it("disables unregister and the weights check while Pam is paused, with the reason", async () => {
+    const props = await modelProps("offline");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(within(panel).getByText(/Checking weights and unregistering need Pam running/)).toBeInTheDocument();
+    for (const row of within(panel).getAllByRole("article")) {
+      const unregister = within(row).getByRole("button", { name: "Unregister" });
+      expect(unregister).toBeDisabled();
+      expect(unregister).toHaveAttribute("title", "Start Pam to unregister models");
+      expect(within(row).getByRole("button", { name: "Check weights" })).toBeDisabled();
+    }
+  });
+
+  it("disarms an armed confirmation when Pam stops under it", async () => {
+    const props = await modelProps("model-on-deck");
+    const offlineProps = await modelProps("offline");
+    const { rerender } = render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel).getAllByRole("article")[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Unregister" }));
+    expect(within(row).getByText(/from Pam's registry\?/)).toBeInTheDocument();
+
+    // Pam pauses while the confirm is armed: the confirm could now only fire
+    // a call that fails, so it goes away with the daemon.
+    rerender(<ModelsView {...props} daemon={offlineProps.daemon} modelStatus={offlineProps.modelStatus} />);
+    expect(screen.queryByText(/from Pam's registry\?/)).not.toBeInTheDocument();
+  });
+
   it("gates unregistering behind a confirmation that says the weights stay on disk", async () => {
     const props = await modelProps("model-on-deck");
     const unregister = vi.spyOn(props.bridge, "modelUnregister");

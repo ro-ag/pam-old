@@ -41,6 +41,7 @@ import {
   useState,
 } from "react";
 import type { ViewId } from "../domain";
+import { ConfirmAction } from "./ActionFeedback";
 import {
   clampSidebarWidth,
   minimumSidebarWidth,
@@ -236,25 +237,14 @@ export function Sidebar({
             )}
           </div>
           {running && confirmingStop && (
-            <div className="connector-confirm daemon-confirm" role="group" aria-label="Confirm stopping Pam">
-              <span>Stop Pam? It unloads the loaded model and drops queued work.</span>
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                disabled={pending}
-                onClick={() => { setConfirmingStop(false); onToggleDaemon(); }}
-              >
-                Stop
-              </button>
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                disabled={pending}
-                onClick={() => setConfirmingStop(false)}
-              >
-                Keep running
-              </button>
-            </div>
+            <ConfirmAction
+              question="Stop Pam? It unloads the loaded model and drops queued work."
+              actionLabel="Stop"
+              cancelLabel="Keep running"
+              busy={pending}
+              onConfirm={() => { setConfirmingStop(false); onToggleDaemon(); }}
+              onCancel={() => setConfirmingStop(false)}
+            />
           )}
         </section>
         <button
