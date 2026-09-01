@@ -2,6 +2,7 @@ import { Brain, CaretDown, CaretRight, Check, Eject, FolderOpen, Power, PushPin,
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { withDaemonOperation } from "../bridge";
+import { ConfirmAction, FailureNotice } from "../components/ActionFeedback";
 import { PanelEmpty, PanelLoading } from "../components/PanelState";
 import type {
   DaemonStartupProgressDto,
@@ -1394,7 +1395,7 @@ export function ModelPanel({
   // next to the model it refused.
   const [confirmingUnregister, setConfirmingUnregister] = useState<string | null>(null);
   const [unregisterBusy, setUnregisterBusy] = useState<string | null>(null);
-  const [unregisterError, setUnregisterError] = useState<{ modelId: string; detail: string } | null>(null);
+  const [unregisterError, setUnregisterError] = useState<{ modelId: string; detail: string; recovery: string | null } | null>(null);
 
   const unregisterModel = async (modelId: string) => {
     setConfirmingUnregister(null);
@@ -1407,11 +1408,12 @@ export function ModelPanel({
       } else {
         setUnregisterError({
           modelId,
-          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+          detail: response.failure.detail,
+          recovery: response.failure.recovery,
         });
       }
     } catch (error) {
-      setUnregisterError({ modelId, detail: presentError(error) });
+      setUnregisterError({ modelId, detail: presentError(error), recovery: null });
     } finally {
       setUnregisterBusy(null);
     }
@@ -1422,7 +1424,7 @@ export function ModelPanel({
   // unregistering it needs no in-row confirmation, only its own busy state
   // and a place for a refusal to land.
   const [unloadBusy, setUnloadBusy] = useState(false);
-  const [unloadFailure, setUnloadFailure] = useState<string | null>(null);
+  const [unloadFailure, setUnloadFailure] = useState<{ detail: string; recovery: string | null } | null>(null);
 
   const unloadModel = async () => {
     setUnloadBusy(true);
@@ -1432,10 +1434,10 @@ export function ModelPanel({
       if (response.status === "ok") {
         onModelUnloaded(response.model);
       } else {
-        setUnloadFailure([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+        setUnloadFailure({ detail: response.failure.detail, recovery: response.failure.recovery });
       }
     } catch (error) {
-      setUnloadFailure(presentError(error));
+      setUnloadFailure({ detail: presentError(error), recovery: null });
     } finally {
       setUnloadBusy(false);
     }
@@ -1506,7 +1508,7 @@ export function ModelPanel({
   // artifact, so it never runs on its own — a row is checked when asked.
   const [weightsHealth, setWeightsHealth] = useState<Record<string, ModelHealthDto>>({});
   const [weightsBusy, setWeightsBusy] = useState<string | null>(null);
-  const [weightsFailure, setWeightsFailure] = useState<{ modelId: string | null; detail: string } | null>(null);
+  const [weightsFailure, setWeightsFailure] = useState<{ modelId: string | null; detail: string; recovery: string | null } | null>(null);
   const [sweep, setSweep] = useState<ModelSweepDto | null>(null);
 
   const checkWeights = async (modelId?: string) => {
@@ -1523,11 +1525,12 @@ export function ModelPanel({
       } else {
         setWeightsFailure({
           modelId: modelId ?? null,
-          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+          detail: response.failure.detail,
+          recovery: response.failure.recovery,
         });
       }
     } catch (error) {
-      setWeightsFailure({ modelId: modelId ?? null, detail: presentError(error) });
+      setWeightsFailure({ modelId: modelId ?? null, detail: presentError(error), recovery: null });
     } finally {
       setWeightsBusy(null);
     }
@@ -1562,6 +1565,17 @@ export function ModelPanel({
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
 
+  // An armed confirmation is a promise only a running daemon can keep. When
+  // Pam stops under one, the confirm would fire a call that can only fail —
+  // so going offline disarms whatever was armed, the same way the triggers
+  // disable.
+  useEffect(() => {
+    if (offline) {
+      setConfirmingUnregister(null);
+      setConfirmingDelete(null);
+    }
+  }, [offline]);
+
   const deleteWeights = async (modelId: string) => {
     setConfirmingDelete(null);
     setDeleteBusy(modelId);
@@ -1573,11 +1587,12 @@ export function ModelPanel({
       } else {
         setWeightsFailure({
           modelId,
-          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+          detail: response.failure.detail,
+          recovery: response.failure.recovery,
         });
       }
     } catch (error) {
-      setWeightsFailure({ modelId, detail: presentError(error) });
+      setWeightsFailure({ modelId, detail: presentError(error), recovery: null });
     } finally {
       setDeleteBusy(null);
     }
@@ -1587,7 +1602,7 @@ export function ModelPanel({
     try {
       await bridge.revealPath(withDaemonOperation(), path);
     } catch (error) {
-      setWeightsFailure({ modelId: null, detail: presentError(error) });
+      setWeightsFailure({ modelId: null, detail: presentError(error), recovery: null });
     }
   };
 
@@ -1606,7 +1621,7 @@ export function ModelPanel({
   // provenance gate allows, and unregistering.
   const catalogRow = (model: { modelId: string; sizeBytes: number }) => {
     const health = weightsHealth[model.modelId];
-    const rowFailure = weightsFailure?.modelId === model.modelId ? weightsFailure.detail : null;
+    const rowFailure = weightsFailure?.modelId === model.modelId ? weightsFailure : null;
     const pinned = defaultModel === model.modelId;
     return (
       <article key={model.modelId}>
@@ -1620,25 +1635,22 @@ export function ModelPanel({
               {transition.phase === "loading" ? "Loading…" : "Unloading…"}
             </p>
           )}
-          {pinFailure?.modelId === model.modelId && (
-            <p className="model-verify is-fail" role="alert">{pinFailure.detail}</p>
-          )}
+          {pinFailure?.modelId === model.modelId && <FailureNotice detail={pinFailure.detail} />}
           {health && (
             health.health === "ok" ? (
               <p className="model-verify is-pass" role="status">
                 <Check size={16} aria-hidden="true" /> {WEIGHTS_HEALTH_LABELS.ok}
               </p>
             ) : (
-              <p className="model-verify is-fail" role="alert">
-                {WEIGHTS_HEALTH_LABELS[health.health]}
-                {health.detail ? ` — ${health.detail}` : ""}
-              </p>
+              <FailureNotice
+                detail={`${WEIGHTS_HEALTH_LABELS[health.health]}${health.detail ? ` — ${health.detail}` : ""}`}
+              />
             )
           )}
           {unregisterError?.modelId === model.modelId && (
-            <p className="model-verify is-fail" role="alert">{unregisterError.detail}</p>
+            <FailureNotice detail={unregisterError.detail} recovery={unregisterError.recovery} />
           )}
-          {rowFailure && <p className="model-verify is-fail" role="alert">{rowFailure}</p>}
+          {rowFailure && <FailureNotice detail={rowFailure.detail} recovery={rowFailure.recovery} />}
         </div>
         <div className="model-row-actions">
           <button
@@ -1653,10 +1665,14 @@ export function ModelPanel({
               pinned row clears it, so Pam can be told to start with no model
               at all. */}
           {defaultModelPin(model.modelId)}
+          {/* Checking weights and unregistering are daemon calls: with Pam
+              paused they could only fail, so they wait, visibly, instead of
+              offering a click that ends in a refusal (issue #59). */}
           <button
             type="button"
             className="button button--secondary button--small"
-            disabled={weightsBusy !== null}
+            disabled={weightsBusy !== null || offline}
+            title={offline ? "Start Pam to check weights" : undefined}
             onClick={() => void checkWeights(model.modelId)}
           >
             <Stethoscope size={17} /> {weightsBusy === model.modelId ? "Checking weights…" : "Check weights"}
@@ -1665,36 +1681,15 @@ export function ModelPanel({
               own models directory, and only after the check that proved it. A
               GGUF Pam verified in place belongs to whoever put it there: the
               honest offer for that row is to show them where it is. */}
-          {health && health.weightsDeletable && (
-            confirmingDelete === model.modelId ? (
-              <span className="connector-confirm">
-                Delete {formatModelSize(health.sizeBytes)} of weights at {health.path} and unregister {model.modelId}?
-                <button
-                  type="button"
-                  className="button button--secondary button--small"
-                  disabled={deleteBusy === model.modelId}
-                  onClick={() => void deleteWeights(model.modelId)}
-                >
-                  Delete weights
-                </button>
-                <button
-                  type="button"
-                  className="button button--secondary button--small"
-                  onClick={() => setConfirmingDelete(null)}
-                >
-                  Keep
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                disabled={deleteBusy === model.modelId}
-                onClick={() => { setWeightsFailure(null); setConfirmingDelete(model.modelId); }}
-              >
-                <Trash size={17} /> Delete weights
-              </button>
-            )
+          {health && health.weightsDeletable && confirmingDelete !== model.modelId && (
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              disabled={deleteBusy === model.modelId}
+              onClick={() => { setWeightsFailure(null); setConfirmingDelete(model.modelId); }}
+            >
+              <Trash size={17} /> Delete weights
+            </button>
           )}
           {health && !health.weightsDeletable && (
             <button
@@ -1705,36 +1700,38 @@ export function ModelPanel({
               <FolderOpen size={17} /> Reveal in Finder
             </button>
           )}
-          {confirmingUnregister === model.modelId ? (
-            <span className="connector-confirm">
-              Remove {model.modelId} from Pam&apos;s registry? The GGUF file stays on disk.
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                disabled={unregisterBusy === model.modelId}
-                onClick={() => void unregisterModel(model.modelId)}
-              >
-                Unregister
-              </button>
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                onClick={() => setConfirmingUnregister(null)}
-              >
-                Keep
-              </button>
-            </span>
-          ) : (
+          {confirmingUnregister !== model.modelId && (
             <button
               type="button"
               className="button button--secondary button--small"
-              disabled={unregisterBusy === model.modelId}
+              disabled={unregisterBusy === model.modelId || offline}
+              title={offline ? "Start Pam to unregister models" : undefined}
               onClick={() => { setUnregisterError(null); setConfirmingUnregister(model.modelId); }}
             >
               <Trash size={17} /> Unregister
             </button>
           )}
         </div>
+        {/* A confirmation is its own moment: it spans the row's grid below the
+            actions instead of exploding the flex line that armed it. */}
+        {health && health.weightsDeletable && confirmingDelete === model.modelId && (
+          <ConfirmAction
+            question={`Delete ${formatModelSize(health.sizeBytes)} of weights at ${health.path} and unregister ${model.modelId}?`}
+            actionLabel="Delete weights"
+            busy={deleteBusy === model.modelId}
+            onConfirm={() => void deleteWeights(model.modelId)}
+            onCancel={() => setConfirmingDelete(null)}
+          />
+        )}
+        {confirmingUnregister === model.modelId && (
+          <ConfirmAction
+            question={`Remove ${model.modelId} from Pam's registry? The GGUF file stays on disk.`}
+            actionLabel="Unregister"
+            busy={unregisterBusy === model.modelId}
+            onConfirm={() => void unregisterModel(model.modelId)}
+            onCancel={() => setConfirmingUnregister(null)}
+          />
+        )}
       </article>
     );
   };
@@ -1768,17 +1765,31 @@ export function ModelPanel({
                   Registered at {row.path}, but nothing is there ·{" "}
                   {formatModelSize(row.sizeBytes)} recorded
                 </p>
+                {unregisterError?.modelId === row.model && (
+                  <FailureNotice detail={unregisterError.detail} recovery={unregisterError.recovery} />
+                )}
               </div>
               <div className="model-row-actions">
-                <button
-                  type="button"
-                  className="button button--secondary button--small"
-                  disabled={unregisterBusy === row.model}
-                  onClick={() => void unregisterModel(row.model)}
-                >
-                  <Trash size={17} /> Unregister
-                </button>
+                {confirmingUnregister !== row.model && (
+                  <button
+                    type="button"
+                    className="button button--secondary button--small"
+                    disabled={unregisterBusy === row.model}
+                    onClick={() => { setUnregisterError(null); setConfirmingUnregister(row.model); }}
+                  >
+                    <Trash size={17} /> Unregister
+                  </button>
+                )}
               </div>
+              {confirmingUnregister === row.model && (
+                <ConfirmAction
+                  question={`Remove ${row.model} from Pam's registry? Nothing is at its registered path.`}
+                  actionLabel="Unregister"
+                  busy={unregisterBusy === row.model}
+                  onConfirm={() => void unregisterModel(row.model)}
+                  onCancel={() => setConfirmingUnregister(null)}
+                />
+              )}
             </article>
           ))}
           {weightsOnDisk.orphans.map((orphan) => (
@@ -1796,14 +1807,12 @@ export function ModelPanel({
         </div>
       )}
       {weightsFailure?.modelId === null && (
-        <p className="model-verify is-fail" role="alert">{weightsFailure.detail}</p>
+        <FailureNotice detail={weightsFailure.detail} recovery={weightsFailure.recovery} />
       )}
     </section>
   );
 
-  const sweepFailure = sweep && sweep.status !== "ok"
-    ? [sweep.failure.detail, sweep.failure.recovery].filter(Boolean).join(" ")
-    : null;
+  const sweepFailure = sweep && sweep.status !== "ok" ? sweep.failure : null;
   return (
     <section className="panel model-panel" aria-labelledby="model-panel-heading">
       <div className="panel-title">
@@ -1817,7 +1826,7 @@ export function ModelPanel({
           rows below get it from `.model-runtime`, so these lines share it. */}
       {(loadFailure || startup?.phase) && (
         <div className="model-runtime">
-          {loadFailure && <p className="model-verify is-fail" role="alert">{loadFailure}</p>}
+          {loadFailure && <FailureNotice detail={loadFailure} />}
           {startup?.phase === "verifying" && (
             <p className="model-note" role="status">
               Checking {startup.modelId} — verifying the artifact's integrity, {formatElapsed(startup.elapsedSeconds)} so far.
@@ -1849,7 +1858,7 @@ export function ModelPanel({
           <div className="model-runtime">
             <p className="model-note">
               Pam is paused, so nothing is loaded right now. Start it with a registered model to
-              chat and verify.
+              chat and verify. Checking weights and unregistering need Pam running.
             </p>
             <div className="access-list model-rows">{registered.map(catalogRow)}</div>
           </div>
@@ -1906,18 +1915,14 @@ export function ModelPanel({
             {defaultModelPin(loaded.modelId)}
           </div>
           {defaultModel === loaded.modelId && <p className="model-note">Pam starts with this model.</p>}
-          {unloadFailure && <p className="model-verify is-fail" role="alert">{unloadFailure}</p>}
-          {pinFailure?.modelId === loaded.modelId && (
-            <p className="model-verify is-fail" role="alert">{pinFailure.detail}</p>
-          )}
+          {unloadFailure && <FailureNotice detail={unloadFailure.detail} recovery={unloadFailure.recovery} />}
+          {pinFailure?.modelId === loaded.modelId && <FailureNotice detail={pinFailure.detail} />}
           {verify.state === "pass" && (
             <p className="model-verify is-pass" role="status">
               <Check size={16} aria-hidden="true" /> Verified · {verify.ms} ms · {verify.tokens} token{verify.tokens === 1 ? "" : "s"} back
             </p>
           )}
-          {verify.state === "fail" && (
-            <p className="model-verify is-fail" role="alert">{verify.detail}</p>
-          )}
+          {verify.state === "fail" && <FailureNotice detail={verify.detail} />}
           {registered.some((model) => model.modelId !== loaded.modelId) && (
             <div className="access-list model-rows">
               {registered.filter((model) => model.modelId !== loaded.modelId).map(catalogRow)}
@@ -1932,7 +1937,7 @@ export function ModelPanel({
       ) : null}
       {sweepFailure && (
         <div className="model-runtime">
-          <p className="model-verify is-fail" role="alert">{sweepFailure}</p>
+          <FailureNotice detail={sweepFailure.detail} recovery={sweepFailure.recovery} />
         </div>
       )}
       {sweepSection}

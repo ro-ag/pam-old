@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fixtureBridge, type FixtureScenario } from "../fixtures";
@@ -88,11 +88,13 @@ describe("SettingsView danger zone", () => {
 
     await user.click(screen.getByRole("button", { name: /Preview reset access/ }));
 
-    // The blast radius is on screen before anything can be confirmed.
+    // The blast radius is on screen before anything can be confirmed, as
+    // labeled rows rather than the wire's snake_case kinds.
     const preview = await screen.findByTestId("reset-preview-access");
     expect(preview).toHaveTextContent("9 items");
-    expect(preview).toHaveTextContent("grants 6");
-    expect(preview).toHaveTextContent("approvals 2");
+    expect(within(preview).getByText("Capability grants")).toBeInTheDocument();
+    expect(within(preview).getByText("Approvals")).toBeInTheDocument();
+    expect(within(preview).getByText("Flow authorizations")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({ projectHandle: "daemon", generation: "daemon" }),
@@ -148,7 +150,7 @@ describe("SettingsView danger zone", () => {
     const preview = await screen.findByTestId("reset-preview-factory");
     // The flow library is named, so the typed confirmation is informed.
     expect(preview).toHaveTextContent("release-readiness.toml");
-    expect(preview).toHaveTextContent("flows 2");
+    expect(within(preview).getByText("Flows")).toBeInTheDocument();
 
     const confirm = screen.getByRole("button", { name: "Factory reset" });
     expect(confirm).toBeDisabled();
@@ -175,7 +177,8 @@ describe("SettingsView danger zone", () => {
     await user.click(screen.getByRole("button", { name: /Preview factory reset/ }));
 
     expect(spy).toHaveBeenCalledWith(expect.anything(), true, true);
-    expect(await screen.findByTestId("reset-preview-factory")).toHaveTextContent("model_weights 2");
+    const preview = await screen.findByTestId("reset-preview-factory");
+    expect(within(preview).getByText("Model weights")).toBeInTheDocument();
   });
 
   it("renders a refusal with its recovery line and never arms the confirm", async () => {
@@ -186,7 +189,9 @@ describe("SettingsView danger zone", () => {
     await screen.findByText(/on disk today/);
     await user.click(screen.getByRole("button", { name: /Preview reset identity/ }));
 
-    const alert = await screen.findByText(/project policy denied this capability/);
+    // The refusal is one announcement: the detail plus its recovery line.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/project policy denied this capability/);
     expect(alert).toHaveTextContent("pam access grant reset.identity --daemon");
     expect(screen.queryByTestId("reset-preview-identity")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reset identity" })).not.toBeInTheDocument();
@@ -200,7 +205,9 @@ describe("SettingsView danger zone", () => {
     await screen.findByText(/on disk today/);
     await user.click(screen.getByRole("button", { name: /Preview factory reset/ }));
 
-    expect(await screen.findByText(/a running daemon still owns/)).toHaveTextContent("Stop Pam first");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/a running daemon still owns/);
+    expect(alert).toHaveTextContent("Stop Pam first");
     expect(screen.queryByTestId("reset-preview-factory")).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
-import { ArrowClockwise, FileText, FolderOpen, GitBranch, HardDrive, Trash, Warning } from "@phosphor-icons/react";
+import { ArrowClockwise, FileText, FolderOpen, GitBranch, HardDrive, ListMagnifyingGlass, Terminal, Trash, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { withDaemonOperation } from "../bridge";
+import { ConfirmAction, FailureNotice, SuccessNotice } from "../components/ActionFeedback";
 import { PanelError, PanelLoading } from "../components/PanelState";
 import type { AppSettingsDto, PamBridge, ResetDto, ResetResultDto } from "../domain";
 import { presentError } from "../state";
@@ -37,6 +38,13 @@ type ResetControlId = ResetTierId | "factory";
 /// enough for the one operation that also deletes the flow library.
 const FACTORY_CONFIRMATION = "RESET";
 
+/// What went wrong and how to get unstuck, kept apart so the refusal renders
+/// as two lines instead of one run-on sentence.
+interface ResetFailure {
+  detail: string;
+  recovery: string | null;
+}
+
 function runTierReset(bridge: PamBridge, tier: ResetTierId, dryRun: boolean): Promise<ResetDto> {
   switch (tier) {
     case "access":
@@ -50,10 +58,6 @@ function runTierReset(bridge: PamBridge, tier: ResetTierId, dryRun: boolean): Pr
   }
 }
 
-function resetFailureText(response: Exclude<ResetDto, { status: "ok" }>): string {
-  return [response.failure.detail, response.failure.recovery].filter(Boolean).join(" ");
-}
-
 function resetSummary(result: ResetResultDto): string {
   return `${result.totalItems} items, ${formatBytes(result.totalBytes)}`;
 }
@@ -64,6 +68,59 @@ function formatBytes(bytes: number): string {
   const exponent = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const value = bytes / 1024 ** exponent;
   return `${exponent === 0 ? value : value.toFixed(1)} ${units[exponent]}`;
+}
+
+// The wire's snake_case kinds, translated for the one screen where a person
+// decides what leaves. An unknown kind still renders, prettified.
+const RESET_KIND_LABELS: Record<string, string> = {
+  grants: "Capability grants",
+  approvals: "Approvals",
+  flow_authorizations: "Flow authorizations",
+  callers: "Callers",
+  caller_files: "Caller files",
+  keychain_entries: "Keychain entries",
+  audit_events: "Audit events",
+  evidence: "Evidence",
+  flow_runs: "Flow runs",
+  models: "Model registrations",
+  model_weights: "Model weights",
+  flows: "Flows",
+  settings: "Settings",
+  logs: "Logs",
+  runtime: "Runtime files",
+  state_database: "State database",
+  other_data_files: "Other data files",
+};
+
+function resetKindLabel(kind: string): string {
+  return RESET_KIND_LABELS[kind] ?? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`.replaceAll("_", " ");
+}
+
+// The blast radius as labeled rows: zero-count kinds are noise when something
+// would leave, but with nothing to remove at all the empty kinds are the fact.
+function ResetPreviewDetail({ result }: { result: ResetResultDto }) {
+  const rows = result.items.filter((entry) => entry.count > 0);
+  const flows = result.items.find((entry) => entry.kind === "flows");
+  return (
+    <div className="reset-preview">
+      {rows.length > 0 && (
+        <table>
+          <tbody>
+            {rows.map((entry) => (
+              <tr key={entry.kind}>
+                <td>{resetKindLabel(entry.kind)}</td>
+                <td className="reset-preview-count">{entry.count}</td>
+                <td>{formatBytes(entry.bytes)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {flows && flows.names.length > 0 && (
+        <p className="reset-preview-flows">Flows removed: {flows.names.join(", ")}.</p>
+      )}
+    </div>
+  );
 }
 
 export interface SettingsViewProps {
@@ -86,7 +143,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
   // confirm button only arms once its own dry run has been rendered.
   const [resetPreview, setResetPreview] = useState<Partial<Record<ResetControlId, ResetResultDto>>>({});
   const [resetOutcome, setResetOutcome] = useState<Partial<Record<ResetControlId, ResetResultDto>>>({});
-  const [resetError, setResetError] = useState<Partial<Record<ResetControlId, string>>>({});
+  const [resetError, setResetError] = useState<Partial<Record<ResetControlId, ResetFailure>>>({});
   const [resetBusy, setResetBusy] = useState<ResetControlId | null>(null);
   const [includeWeights, setIncludeWeights] = useState(false);
   const [factoryTyped, setFactoryTyped] = useState("");
@@ -95,7 +152,10 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
 
   const recordReset = (control: ResetControlId, response: ResetDto, dryRun: boolean) => {
     if (response.status !== "ok") {
-      setResetError((current) => ({ ...current, [control]: resetFailureText(response) }));
+      setResetError((current) => ({
+        ...current,
+        [control]: { detail: response.failure.detail, recovery: response.failure.recovery },
+      }));
       setResetPreview((current) => ({ ...current, [control]: undefined }));
       return;
     }
@@ -118,7 +178,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
           : await runTierReset(bridge, control, dryRun);
       recordReset(control, response, dryRun);
     } catch (error) {
-      setResetError((current) => ({ ...current, [control]: presentError(error) }));
+      setResetError((current) => ({ ...current, [control]: { detail: presentError(error), recovery: null } }));
     } finally {
       setResetBusy(null);
       if (control === "factory" && !dryRun) setFactoryTyped("");
@@ -250,7 +310,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                       </button>
                     )}
                   </form>
-                  {modelsDirError && <p className="connector-note" role="alert">{modelsDirError}</p>}
+                  {modelsDirError && <FailureNotice detail={modelsDirError} />}
                 </div>
                 <button type="button" className="button button--secondary button--small" onClick={() => void reveal(settings.modelsDir)}>
                   Reveal
@@ -278,7 +338,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                 </button>
               </article>
             </div>
-            {revealError && <p className="panel-body connector-note" role="alert">{revealError}</p>}
+            {revealError && <div className="panel-body"><FailureNotice detail={revealError} /></div>}
           </section>
 
           <section className="panel" aria-labelledby="logs-heading">
@@ -286,39 +346,39 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
               <div><span className="eyebrow">Diagnostics</span><h2 id="logs-heading">Logs</h2></div>
             </div>
             <div className="panel-body">
-            <p className="connector-note">
-              {formatBytes(settings.logsSizeBytes)} on disk today. Pam also keeps a live, bounded window
-              of recent lines in memory — see it in{" "}
-              <button type="button" className="button button--secondary button--small" onClick={onOpenConsole}>
-                Console
-              </button>
-              .
-            </p>
-            {deleteError && <p className="connector-note" role="alert">{deleteError}</p>}
-            {!confirmingDelete ? (
-              <button
-                type="button"
-                className="button button--secondary button--small"
-                disabled={settings.logsSizeBytes === 0}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                <Trash size={17} /> Delete logs
-              </button>
-            ) : (
-              <span className="connector-confirm">
-                Delete Pam&apos;s on-disk log files? The in-memory console keeps working either way.
-                <button type="button" className="button button--secondary button--small" disabled={deleteBusy} onClick={() => void deleteLogs()}>
-                  Delete
+              <p className="connector-note">
+                {formatBytes(settings.logsSizeBytes)} on disk today. Pam also keeps a live, bounded
+                window of recent lines in memory.
+              </p>
+              {deleteError && <FailureNotice detail={deleteError} />}
+              <div className="settings-actions">
+                <button type="button" className="button button--secondary button--small" onClick={onOpenConsole}>
+                  <Terminal size={17} /> Console
                 </button>
-                <button type="button" className="button button--secondary button--small" disabled={deleteBusy} onClick={() => setConfirmingDelete(false)}>
-                  Keep
-                </button>
-              </span>
-            )}
+                {!confirmingDelete && (
+                  <button
+                    type="button"
+                    className="button button--secondary button--small"
+                    disabled={settings.logsSizeBytes === 0}
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    <Trash size={17} /> Delete logs
+                  </button>
+                )}
+              </div>
+              {confirmingDelete && (
+                <ConfirmAction
+                  question="Delete Pam's on-disk log files? The in-memory console keeps working either way."
+                  actionLabel="Delete"
+                  busy={deleteBusy}
+                  onConfirm={() => void deleteLogs()}
+                  onCancel={() => setConfirmingDelete(false)}
+                />
+              )}
             </div>
           </section>
 
-          <section className="panel" aria-labelledby="danger-heading">
+          <section className="panel panel--danger" aria-labelledby="danger-heading">
             <div className="panel-title">
               <div>
                 <span className="eyebrow">Danger zone</span>
@@ -340,42 +400,19 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                     <p className="connector-note">
                       <strong>{tier.action}.</strong> {tier.blurb}
                     </p>
-                    {failure && (
-                      <p className="connector-note" role="alert">
-                        {failure}
-                      </p>
-                    )}
-                    {outcome && (
-                      <p className="connector-note">
-                        Removed {resetSummary(outcome)}.
-                      </p>
-                    )}
+                    {failure && <FailureNotice detail={failure.detail} recovery={failure.recovery} />}
+                    {outcome && <SuccessNotice>Removed {resetSummary(outcome)}.</SuccessNotice>}
                     {preview ? (
-                      <span className="connector-confirm">
-                        <span data-testid={`reset-preview-${tier.id}`}>
-                          This removes {resetSummary(preview)}:{" "}
-                          {preview.items
-                            .map((entry) => `${entry.kind} ${entry.count} (${formatBytes(entry.bytes)})`)
-                            .join(", ")}
-                          .
-                        </span>
-                        <button
-                          type="button"
-                          className="button button--secondary button--small"
-                          disabled={busy}
-                          onClick={() => void runReset(tier.id, false)}
-                        >
-                          {tier.action}
-                        </button>
-                        <button
-                          type="button"
-                          className="button button--secondary button--small"
-                          disabled={busy}
-                          onClick={() => dismissPreview(tier.id)}
-                        >
-                          Keep
-                        </button>
-                      </span>
+                      <ConfirmAction
+                        testId={`reset-preview-${tier.id}`}
+                        question={`This removes ${resetSummary(preview)}.`}
+                        actionLabel={tier.action}
+                        busy={busy}
+                        onConfirm={() => void runReset(tier.id, false)}
+                        onCancel={() => dismissPreview(tier.id)}
+                      >
+                        <ResetPreviewDetail result={preview} />
+                      </ConfirmAction>
                     ) : (
                       <button
                         type="button"
@@ -383,7 +420,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                         disabled={busy}
                         onClick={() => void runReset(tier.id, true)}
                       >
-                        <Trash size={17} /> Preview {tier.action.toLowerCase()}
+                        <ListMagnifyingGlass size={17} /> Preview {tier.action.toLowerCase()}
                       </button>
                     )}
                   </article>
@@ -407,31 +444,25 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                   Also delete the weights of every registered model
                 </label>
                 {resetError.factory && (
-                  <p className="connector-note" role="alert">
-                    {resetError.factory}
-                  </p>
+                  <FailureNotice detail={resetError.factory.detail} recovery={resetError.factory.recovery} />
                 )}
                 {resetOutcome.factory && (
-                  <p className="connector-note">
+                  <SuccessNotice>
                     Removed {resetSummary(resetOutcome.factory)}.
                     {receiptPath ? ` Receipt written to ${receiptPath}.` : ""}
-                  </p>
+                  </SuccessNotice>
                 )}
                 {resetPreview.factory ? (
-                  <span className="connector-confirm">
-                    <span data-testid="reset-preview-factory">
-                      This removes {resetSummary(resetPreview.factory)}:{" "}
-                      {resetPreview.factory.items
-                        .map((entry) => `${entry.kind} ${entry.count} (${formatBytes(entry.bytes)})`)
-                        .join(", ")}
-                      .
-                      {(() => {
-                        const flows = resetPreview.factory?.items.find((entry) => entry.kind === "flows");
-                        return flows && flows.names.length > 0
-                          ? ` Flows removed: ${flows.names.join(", ")}.`
-                          : "";
-                      })()}
-                    </span>
+                  <ConfirmAction
+                    testId="reset-preview-factory"
+                    question={`This removes ${resetSummary(resetPreview.factory)}.`}
+                    actionLabel="Factory reset"
+                    busy={resetBusy === "factory"}
+                    confirmDisabled={factoryTyped !== FACTORY_CONFIRMATION}
+                    onConfirm={() => void runReset("factory", false)}
+                    onCancel={() => dismissPreview("factory")}
+                  >
+                    <ResetPreviewDetail result={resetPreview.factory} />
                     <label>
                       Type {FACTORY_CONFIRMATION} to confirm
                       <input
@@ -441,23 +472,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
                         onChange={(event) => setFactoryTyped(event.target.value)}
                       />
                     </label>
-                    <button
-                      type="button"
-                      className="button button--secondary button--small"
-                      disabled={resetBusy === "factory" || factoryTyped !== FACTORY_CONFIRMATION}
-                      onClick={() => void runReset("factory", false)}
-                    >
-                      Factory reset
-                    </button>
-                    <button
-                      type="button"
-                      className="button button--secondary button--small"
-                      disabled={resetBusy === "factory"}
-                      onClick={() => dismissPreview("factory")}
-                    >
-                      Keep
-                    </button>
-                  </span>
+                  </ConfirmAction>
                 ) : (
                   <button
                     type="button"
