@@ -54,11 +54,11 @@ describe("SettingsView", () => {
     await screen.findByText(/on disk today/);
     await user.click(screen.getByRole("button", { name: "Delete logs" }));
     expect(spy).not.toHaveBeenCalled();
-    expect(screen.getByText(/Delete PAM's on-disk log files\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Delete Pam's on-disk log files\?/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Keep" }));
     expect(spy).not.toHaveBeenCalled();
-    expect(screen.queryByText(/Delete PAM's on-disk log files\?/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Delete Pam's on-disk log files\?/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Delete logs" }));
     await user.click(screen.getByRole("button", { name: "Delete" }));
@@ -192,7 +192,7 @@ describe("SettingsView danger zone", () => {
     expect(screen.queryByRole("button", { name: "Reset identity" })).not.toBeInTheDocument();
   });
 
-  it("refuses a factory reset while PAM is running and shows how to stop it", async () => {
+  it("refuses a factory reset while Pam is running and shows how to stop it", async () => {
     const user = userEvent.setup();
     const props = settingsProps();
     render(<SettingsView {...props} />);
@@ -200,7 +200,7 @@ describe("SettingsView danger zone", () => {
     await screen.findByText(/on disk today/);
     await user.click(screen.getByRole("button", { name: /Preview factory reset/ }));
 
-    expect(await screen.findByText(/a running daemon still owns/)).toHaveTextContent("Stop PAM first");
+    expect(await screen.findByText(/a running daemon still owns/)).toHaveTextContent("Stop Pam first");
     expect(screen.queryByTestId("reset-preview-factory")).not.toBeInTheDocument();
   });
 });

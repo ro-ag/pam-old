@@ -1,7 +1,7 @@
 //! GUI-owned local model import.
 //!
-//! The desktop shell is the whole surface: the user points PAM at a GGUF and
-//! accepts its license in the panel, and PAM computes the file digest, the
+//! The desktop shell is the whole surface: the user points Pam at a GGUF and
+//! accepts its license in the panel, and Pam computes the file digest, the
 //! notice digest, and the size itself before running the shared verification
 //! and registration path. No terminal round-trip, ever.
 
@@ -34,7 +34,7 @@ const MODEL_IMPORT_TIMEOUT: Duration = Duration::from_mins(15);
 /// `model_inspect` only reads the GGUF header, never the tensor data.
 const MODEL_INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Qwen3-Coder-30B-A3B-Instruct at `Q4_K_S` (~17.5 GB) is the smallest model
-/// PAM's flows were validated on; anything under this floor needs the
+/// Pam's flows were validated on; anything under this floor needs the
 /// explicit Advanced override to register.
 pub(crate) const MIN_RECOMMENDED_MODEL_BYTES: u64 = 17_000_000_000;
 
@@ -338,11 +338,11 @@ fn hash_file(
     path: &Path,
     progress: &AtomicU64,
 ) -> Result<(ContentDigest, u64), ModelImportFailure> {
-    let open_recovery = "Point PAM at the downloaded .gguf file, then import again.";
+    let open_recovery = "Point Pam at the downloaded .gguf file, then import again.";
     reject_non_regular_file(path, open_recovery)?;
     let mut file = File::open(path).map_err(|error| {
         ModelImportFailure::new(
-            format!("PAM could not open the model file: {error}"),
+            format!("Pam could not open the model file: {error}"),
             open_recovery,
         )
     })?;
@@ -352,7 +352,7 @@ fn hash_file(
     loop {
         let read = file.read(&mut buffer).map_err(|error| {
             ModelImportFailure::new(
-                format!("PAM could not read the model file: {error}"),
+                format!("Pam could not read the model file: {error}"),
                 open_recovery,
             )
         })?;
@@ -394,7 +394,7 @@ pub(crate) fn verify_and_register(
         let floor_gb = MIN_RECOMMENDED_MODEL_BYTES / 100_000_000;
         return Err(ModelImportFailure::new(
             format!(
-                "This model is {}.{} GB — below PAM's recommended minimum of {}.{} GB, so results will fall short in real flows.",
+                "This model is {}.{} GB — below Pam's recommended minimum of {}.{} GB, so results will fall short in real flows.",
                 size_gb / 10,
                 size_gb % 10,
                 floor_gb / 10,
@@ -452,7 +452,7 @@ pub(crate) async fn run_model_import(
         Ok(Ok(result)) => result?,
         Ok(Err(_)) => {
             return Err(ModelImportFailure::new(
-                "PAM could not complete model verification.",
+                "Pam could not complete model verification.",
                 "Retry the exact import.",
             ));
         }
@@ -467,7 +467,7 @@ pub(crate) async fn run_model_import(
         // import can start.
         Err(_) => {
             return Err(ModelImportFailure::new(
-                "PAM could not complete model verification in time.",
+                "Pam could not complete model verification in time.",
                 "Retry the exact import.",
             ));
         }
@@ -478,7 +478,7 @@ pub(crate) async fn run_model_import(
 }
 
 /// One pre-import preview of a candidate GGUF: its identity metadata and
-/// whether it clears PAM's recommended size floor.
+/// whether it clears Pam's recommended size floor.
 pub(crate) struct ModelInspectReport {
     pub file_name: String,
     pub size_bytes: u64,
@@ -493,7 +493,7 @@ pub(crate) struct ModelInspectReport {
 pub(crate) async fn run_model_inspect(
     path: PathBuf,
 ) -> Result<ModelInspectReport, ModelImportFailure> {
-    let recovery = "Point PAM at a downloaded .gguf file.";
+    let recovery = "Point Pam at a downloaded .gguf file.";
     let file_name = path
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
@@ -509,7 +509,7 @@ pub(crate) async fn run_model_inspect(
         }
         Ok(Err(_)) => {
             return Err(ModelImportFailure::new(
-                "PAM could not complete model inspection.",
+                "Pam could not complete model inspection.",
                 recovery,
             ));
         }
@@ -518,7 +518,7 @@ pub(crate) async fn run_model_inspect(
         // how long `command_gate` stays held.
         Err(_) => {
             return Err(ModelImportFailure::new(
-                "PAM could not complete model inspection in time.",
+                "Pam could not complete model inspection in time.",
                 recovery,
             ));
         }

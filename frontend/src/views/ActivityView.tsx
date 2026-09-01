@@ -116,7 +116,7 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
-        <div><h1>Activity</h1><p>What PAM has seen across the daemon.</p></div>
+        <div><h1>Activity</h1><p>What Pam has seen across the daemon.</p></div>
       </header>
       <section className="project-overview" aria-label="Daemon health">
         <article className="project-stat group flex items-center gap-3">
@@ -136,10 +136,10 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
       {offline ? (
         <PanelEmpty as="section" className="empty-state">
           <Power size={38} aria-hidden="true" />
-          <h2>PAM is paused</h2>
-          <p>The activity feed will pick up where it left off once PAM is back on watch.</p>
+          <h2>Pam is paused</h2>
+          <p>The activity feed will pick up where it left off once Pam is back on watch.</p>
           <button type="button" className="button button--primary" disabled={pending} onClick={onStartDaemon}>
-            <Power size={18} /> Start PAM
+            <Power size={18} /> Start Pam
           </button>
         </PanelEmpty>
       ) : (
@@ -165,7 +165,7 @@ export function ActivityView({ daemon, projects, bridge, pending, evidence, onEv
               {[activity.failure.detail, activity.failure.recovery].filter(Boolean).join(" ")}
             </PanelEmpty>
           ) : activity.events.length === 0 ? (
-            <PanelEmpty>No recent activity. PAM is on watch and new events will appear here.</PanelEmpty>
+            <PanelEmpty>No recent activity. Pam is on watch and new events will appear here.</PanelEmpty>
           ) : (
             <div className="access-list">
               {activity.events.map(eventRow)}

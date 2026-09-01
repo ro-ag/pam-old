@@ -251,7 +251,7 @@ pub(crate) async fn retention_prune(
     };
     if let Err(error) = record_audit_retention(&store, project_id, caller_id, audit).await {
         eprintln!(
-            "Retention completed (handles_deleted={}, blobs_deleted={}, blobs_pending={}, cleanup_unresolved={}, expired_audit_events_deleted={}), but PAM could not append the completion event.",
+            "Retention completed (handles_deleted={}, blobs_deleted={}, blobs_pending={}, cleanup_unresolved={}, expired_audit_events_deleted={}), but Pam could not append the completion event.",
             evidence.handles_deleted,
             evidence.blobs_deleted,
             evidence.blobs_pending,
@@ -625,7 +625,7 @@ pub(crate) async fn model_import(
         }
         Err(_) => {
             let _ = store.shutdown().await;
-            eprintln!("PAM could not complete model verification.");
+            eprintln!("Pam could not complete model verification.");
             return EXIT_OPERATION_FAILED;
         }
     };
@@ -957,7 +957,7 @@ pub(crate) async fn model_verify(
 /// Reconciles the registry against the models directory, in both directions.
 ///
 /// The sweep reports and never acts: clearing a dangling row is
-/// `pam model unregister`, and removing an orphaned file PAM downloaded is
+/// `pam model unregister`, and removing an orphaned file Pam downloaded is
 /// `pam model delete-weights`.
 pub(crate) async fn model_sweep(json: bool, approval_id: Option<ApprovalId>) -> i32 {
     let Some(context) = discover_context(approval_id).await else {
@@ -986,11 +986,11 @@ pub(crate) async fn model_sweep(json: bool, approval_id: Option<ApprovalId>) -> 
     }
 }
 
-/// Deletes one PAM-downloaded model's weights and unregisters it.
+/// Deletes one Pam-downloaded model's weights and unregisters it.
 ///
 /// Unregistering and deleting weights are two different effects and stay two
 /// commands. This one removes bytes, so it needs explicit consent, and the
-/// daemon still refuses any artifact PAM did not download into its own models
+/// daemon still refuses any artifact Pam did not download into its own models
 /// directory.
 pub(crate) async fn model_delete_weights(
     model: ModelKey,
@@ -999,7 +999,7 @@ pub(crate) async fn model_delete_weights(
 ) -> i32 {
     if !yes {
         eprintln!(
-            "Deleting the weights for {model} removes the file from disk and unregisters it. Re-run with --yes to confirm. PAM refuses any model it did not download into its own models directory."
+            "Deleting the weights for {model} removes the file from disk and unregisters it. Re-run with --yes to confirm. Pam refuses any model it did not download into its own models directory."
         );
         return EXIT_OPERATION_FAILED;
     }
@@ -1562,7 +1562,7 @@ pub(crate) async fn flow_run(
     let request = match context.flow_run(entry.source, run_id, idempotency_key, project.root()) {
         Ok(request) => request,
         Err(error) => {
-            eprintln!("PAM could not construct the bounded flow request.");
+            eprintln!("Pam could not construct the bounded flow request.");
             eprintln!("Details: {}", escape_text(&error.to_string()));
             return EXIT_OPERATION_FAILED;
         }
@@ -1740,7 +1740,7 @@ pub(crate) async fn flow_result(run_id: RequestId, approval_id: Option<ApprovalI
 
 /// Resolves the daemon-global flow-definition library root, creating it if
 /// this is the first time anything has opened it: unlike a project root, the
-/// global root is PAM's own user-data directory rather than something the
+/// global root is Pam's own user-data directory rather than something the
 /// user creates, so its absence on a fresh install is not an error.
 pub(crate) fn global_flow_library_root() -> Option<PathBuf> {
     let root = match flow_library_root() {
@@ -1751,7 +1751,7 @@ pub(crate) fn global_flow_library_root() -> Option<PathBuf> {
         }
     };
     if let Err(error) = fs::create_dir_all(&root) {
-        eprintln!("PAM could not create the global flow-definition library directory.");
+        eprintln!("Pam could not create the global flow-definition library directory.");
         eprintln!("Details: {}", escape_text(&error.to_string()));
         return None;
     }
@@ -2015,7 +2015,7 @@ pub(crate) async fn evidence_show(handle: EvidenceHandle, raw: bool, output: Opt
             .write_all(&download.bytes)
             .and_then(|()| stdout.flush())
         {
-            eprintln!("PAM could not write verified evidence to standard output.");
+            eprintln!("Pam could not write verified evidence to standard output.");
             eprintln!("Details: {}", escape_text(&error.to_string()));
             return EXIT_OPERATION_FAILED;
         }
@@ -2094,7 +2094,7 @@ pub(crate) async fn reset_all(confirmation: ResetConfirmation, include_weights: 
     let context = ResetContext::new(paths, CredentialStore::Native);
     let endpoint = LocalEndpoint::default_for_user();
     if pam_daemon::daemon_owns_store(&endpoint) {
-        eprintln!("PAM is running, so a factory reset cannot remove the state it owns.");
+        eprintln!("Pam is running, so a factory reset cannot remove the state it owns.");
         eprintln!("Recovery: {DAEMON_RUNNING_RECOVERY}");
         return EXIT_OPERATION_FAILED;
     }
@@ -2204,7 +2204,7 @@ async fn restore_native_credential(caller_id: CallerId, previous: Option<CallerC
         && !error.is_not_found()
     {
         eprintln!(
-            "PAM could not restore the previous native credential after registration failed."
+            "Pam could not restore the previous native credential after registration failed."
         );
         eprintln!("Details: {}", escape_text(&error.to_string()));
     }
@@ -2328,7 +2328,7 @@ fn emit(presentation: Presentation) -> i32 {
 
 fn unexpected_events(operation: &str) -> i32 {
     eprintln!(
-        "PAM daemon returned unexpected events for the {} request.",
+        "Pam daemon returned unexpected events for the {} request.",
         escape_text(operation)
     );
     EXIT_OPERATION_FAILED
@@ -2336,7 +2336,7 @@ fn unexpected_events(operation: &str) -> i32 {
 
 fn unexpected_result(operation: &str) -> i32 {
     eprintln!(
-        "PAM daemon returned an unexpected result for the {} request.",
+        "Pam daemon returned an unexpected result for the {} request.",
         escape_text(operation)
     );
     EXIT_OPERATION_FAILED

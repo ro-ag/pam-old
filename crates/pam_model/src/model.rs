@@ -139,7 +139,7 @@ pub struct ModelDescriptor {
 }
 
 impl ModelDescriptor {
-    /// Largest model artifact PAM will acquire or register: one tebibyte.
+    /// Largest model artifact Pam will acquire or register: one tebibyte.
     pub const MAX_SIZE_BYTES: u64 = 1 << 40;
     /// Smallest possible GGUF v2/v3 fixed header.
     pub const MIN_SIZE_BYTES: u64 = 24;
@@ -260,7 +260,7 @@ pub struct RegisteredModel {
     pub registered_at_ms: u64,
 }
 
-/// One GGUF artifact PAM's macOS llama.cpp runtime has been calibrated
+/// One GGUF artifact Pam's macOS llama.cpp runtime has been calibrated
 /// against: an exact content digest and file size.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CalibratedArtifact {
@@ -270,7 +270,7 @@ pub struct CalibratedArtifact {
     pub size_bytes: u64,
 }
 
-/// Single source of truth for every GGUF artifact PAM's runtime can load:
+/// Single source of truth for every GGUF artifact Pam's runtime can load:
 /// the macOS runtime's load-time gate and the GUI's curated preset catalog
 /// both check membership here, so the two can never drift apart again.
 pub const CALIBRATED_ARTIFACTS: &[CalibratedArtifact] = &[

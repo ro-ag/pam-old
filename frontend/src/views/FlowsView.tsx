@@ -512,7 +512,7 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast, onEviden
       const response = await bridge.flowRunCancel(requestFence, run.runId);
       if (!sameAuthority(requestFence, fenceRef.current)) return;
       onToast(response.data.disposition === "requested"
-        ? "Cancellation requested; PAM stops at the next safe boundary"
+        ? "Cancellation requested; Pam stops at the next safe boundary"
         : `Cancellation ${response.data.disposition.replace(/_/g, " ")}`);
     } catch (error) {
       if (sameAuthority(requestFence, fenceRef.current)) setRunError(presentError(error));
@@ -523,7 +523,7 @@ export function FlowsView({ bridge, fence: fenceProp, onError, onToast, onEviden
 
   return (
     <main className="canvas" id="main-content">
-      <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke PAM.</p></div></header>
+      <header className="project-header compact"><div><h1>Flows</h1><p>One shared flow library — defined once, run from wherever you invoke Pam.</p></div></header>
       {loadError && !workspace ? (
         <PanelError
           as="section"

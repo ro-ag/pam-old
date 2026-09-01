@@ -66,7 +66,7 @@ describe("CallersPanel", () => {
     render(<CallersPanel {...props} />);
 
     expect(await screen.findByText(/caller registry is not being served/)).toBeInTheDocument();
-    expect(screen.getByText(/Start PAM to read the registered callers/)).toBeInTheDocument();
+    expect(screen.getByText(/Start Pam to read the registered callers/)).toBeInTheDocument();
   });
 });
 
@@ -119,11 +119,11 @@ describe("CallerRequestsPanel", () => {
     expect(props.onRegisterCaller).toHaveBeenCalled();
   });
 
-  it("stays calm while PAM is paused", async () => {
+  it("stays calm while Pam is paused", async () => {
     const props = await requestsProps("offline");
     render(<CallerRequestsPanel {...props} />);
 
-    expect(screen.getByText("PAM is paused, so no requests are being served.")).toBeInTheDocument();
+    expect(screen.getByText("Pam is paused, so no requests are being served.")).toBeInTheDocument();
   });
 });
 

@@ -1097,7 +1097,7 @@ pub(crate) async fn logs_delete(
     state.core.logs_delete(request.into_fence()).await
 }
 
-/// Validates `request.path` against PAM's own Settings locations, then opens
+/// Validates `request.path` against Pam's own Settings locations, then opens
 /// it in the system file manager. Deliberately not the opener plugin's own
 /// `reveal_item_in_dir` IPC command: the frontend never gets a permission to
 /// reveal an arbitrary path, only this validated one.

@@ -143,12 +143,12 @@ describe("ActivityView", () => {
     const spy = vi.spyOn(props.bridge, "daemonActivity");
     render(<ActivityView {...props} />);
 
-    expect(screen.getByRole("heading", { name: "PAM is paused" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pam is paused" })).toBeInTheDocument();
     expect(screen.getByText(/pick up where it left off/)).toBeInTheDocument();
     expect(spy).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Start PAM" }));
+    await user.click(screen.getByRole("button", { name: "Start Pam" }));
     expect(props.onStartDaemon).toHaveBeenCalledTimes(1);
   });
 
@@ -185,14 +185,14 @@ describe("ActivityView", () => {
     render(<ActivityView {...props} />);
 
     expect(await screen.findByRole("heading", { name: "Debug console" })).toBeInTheDocument();
-    expect(await screen.findByText(/PAM daemon ready/)).toBeInTheDocument();
+    expect(await screen.findByText(/Pam daemon ready/)).toBeInTheDocument();
   });
 
   it("keeps the console out of the paused view, which owns that state", async () => {
     const props = await activityProps("offline");
     render(<ActivityView {...props} />);
 
-    expect(screen.getByRole("heading", { name: "PAM is paused" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pam is paused" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Debug console" })).not.toBeInTheDocument();
   });
 

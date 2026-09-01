@@ -15,7 +15,7 @@ fn main() {
     };
     if wants_gui {
         if let Err(error) = pam_desktop::run() {
-            eprintln!("PAM could not start: {error}");
+            eprintln!("Pam could not start: {error}");
             std::process::exit(1);
         }
         return;

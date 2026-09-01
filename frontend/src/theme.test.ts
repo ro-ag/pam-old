@@ -24,7 +24,7 @@ vi.mock("@tauri-apps/api/app", () => ({
   setTheme: vi.fn().mockResolvedValue(undefined),
 }));
 
-describe("PAM themes", () => {
+describe("Pam themes", () => {
   it("accepts only the two named themes", () => {
     expect(storedPamTheme("ventisquero")).toBe("ventisquero");
     expect(storedPamTheme("vina")).toBe("vina");
@@ -49,7 +49,7 @@ describe("PAM themes", () => {
     })).toBe(defaultPamThemeMode);
   });
 
-  it("persists a selected theme under the PAM key", () => {
+  it("persists a selected theme under the Pam key", () => {
     const setItem = vi.fn();
     writePersistedPamTheme({ getItem: vi.fn(), setItem }, "vina");
     expect(setItem).toHaveBeenCalledWith(pamThemeStorageKey, "vina");
@@ -57,7 +57,7 @@ describe("PAM themes", () => {
     expect(setItem).toHaveBeenCalledWith(pamThemeModeStorageKey, "dark");
   });
 
-  it("defaults density to compact and persists it under the PAM key", () => {
+  it("defaults density to compact and persists it under the Pam key", () => {
     expect(storedPamDensity("comfortable")).toBe("comfortable");
     expect(storedPamDensity("compact")).toBe("compact");
     expect(storedPamDensity(null)).toBe(defaultPamDensity);

@@ -1,6 +1,6 @@
-//! Tiered reset of PAM's durable state.
+//! Tiered reset of Pam's durable state.
 //!
-//! PAM's state lives in five places with very different blast radii, so reset
+//! Pam's state lives in five places with very different blast radii, so reset
 //! is four scoped operations and never one nuke button: `access` drops grants
 //! and approvals, `identity` forces every caller to re-pair, `history` clears
 //! the audit ledger, the evidence store, and flow-run history, and `registry`
@@ -59,7 +59,7 @@ const FLOW_LIBRARY: [&str; 2] = [".pam", "flows"];
 const RECEIPT_PREFIX: &str = "pam-reset-receipt-";
 
 /// Recovery text for a reset refused because a daemon still owns the store.
-pub const DAEMON_RUNNING_RECOVERY: &str = "Stop PAM first -- quit the running `pam daemon`, or press Stop in the PAM control center -- then run the reset again.";
+pub const DAEMON_RUNNING_RECOVERY: &str = "Stop Pam first -- quit the running `pam daemon`, or press Stop in the Pam control center -- then run the reset again.";
 /// Recovery text for a reset that would change state without confirmation.
 pub const CONFIRMATION_RECOVERY: &str =
     "Re-run with --dry-run to see exactly what would go, then with --yes to perform it.";
@@ -107,11 +107,11 @@ impl ResetError {
                 path.display()
             )),
             Self::OutsideRoot(_) => Some(
-                "Reset refused a path outside PAM's data directory and changed nothing. Report this."
+                "Reset refused a path outside Pam's data directory and changed nothing. Report this."
                     .to_owned(),
             ),
             Self::Credentials(_) => Some(
-                "Unlock the login keychain and allow PAM to access its credentials, then run the reset again."
+                "Unlock the login keychain and allow Pam to access its credentials, then run the reset again."
                     .to_owned(),
             ),
             Self::DataDirectory(_) | Self::Store(_) | Self::Interrupted => None,
@@ -125,7 +125,7 @@ impl fmt::Display for ResetError {
             Self::DataDirectory(error) => {
                 write!(
                     formatter,
-                    "PAM could not resolve its data directory: {error}"
+                    "Pam could not resolve its data directory: {error}"
                 )
             }
             Self::Store(error) => write!(formatter, "durable state was unavailable: {error}"),
@@ -134,14 +134,14 @@ impl fmt::Display for ResetError {
             }
             Self::OutsideRoot(path) => write!(
                 formatter,
-                "refused to touch {} because it is outside PAM's data directory",
+                "refused to touch {} because it is outside Pam's data directory",
                 path.display()
             ),
             Self::Credentials(error) => {
                 write!(formatter, "the credential store was unavailable: {error}")
             }
             Self::DaemonRunning => {
-                formatter.write_str("a running daemon still owns PAM's durable state")
+                formatter.write_str("a running daemon still owns Pam's durable state")
             }
             Self::Interrupted => formatter.write_str("the reset was interrupted before it ran"),
         }
@@ -883,7 +883,7 @@ async fn registered_weight_paths(store: &Store) -> Result<Vec<PathBuf>, ResetErr
 
 /// Weights are counted from the registry rather than by sweeping a directory:
 /// the models directory is owner-configurable, may sit anywhere, and may hold
-/// files PAM never registered. Only artifacts PAM itself recorded are ever
+/// files Pam never registered. Only artifacts Pam itself recorded are ever
 /// removed.
 async fn weight_footprint(store: &Store) -> Result<(u64, u64), ResetError> {
     let mut count = 0_u64;
@@ -982,7 +982,7 @@ fn credential_locators_from_files(
     Ok(locators)
 }
 
-/// Reads the one `caller_id = "..."` line PAM writes into an identity file.
+/// Reads the one `caller_id = "..."` line Pam writes into an identity file.
 fn parse_caller_id(contents: &str) -> Option<CallerId> {
     contents
         .lines()
@@ -1018,7 +1018,7 @@ fn write_receipt(
 ) -> Result<PathBuf, ResetError> {
     let now_ms = now_ms();
     let path = context.paths.receipt_path(now_ms)?;
-    let mut body = String::from("PAM factory reset receipt\n");
+    let mut body = String::from("Pam factory reset receipt\n");
     let write = |body: &mut String, line: fmt::Arguments<'_>| {
         body.write_fmt(line)
             .expect("writing to a String cannot fail");

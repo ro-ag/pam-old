@@ -20,7 +20,7 @@ fn parses_sysctl_snapshot_and_applies_explicit_headroom() {
     // Host-derived, not a fixed 1 GiB: 5% of this Mac's model ceiling, which
     // is still above the retired constant after the absolute 8 GiB OS reserve
     // was folded into that ceiling. It covers every projection this Mac can
-    // admit; PAM's 25,092,535,456-byte Q6_K is no longer one of them.
+    // admit; Pam's 25,092,535,456-byte Q6_K is no longer one of them.
     assert_eq!(snapshot.projection_contingency_bytes(), 1_234_803_098);
     assert!(snapshot.projection_contingency_bytes() > GIB);
     assert_eq!(snapshot.pressure(), RuntimeMemoryPressure::Normal);

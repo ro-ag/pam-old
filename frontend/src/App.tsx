@@ -469,18 +469,18 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
     const stopping = daemon.state === "running";
     void runDaemonLifecycle(
       () => stopping ? bridge.stopDaemon(withDaemonOperation()) : bridge.startDaemon(withDaemonOperation()),
-      stopping ? "PAM stopped" : "PAM started",
+      stopping ? "Pam stopped" : "Pam started",
     );
   };
   const restartDaemon = () => {
     void runDaemonLifecycle(async () => {
       await bridge.stopDaemon(withDaemonOperation());
       await bridge.startDaemon(withDaemonOperation());
-    }, "PAM restarted");
+    }, "Pam restarted");
   };
-  // A running PAM loads the model in place: the daemon swaps it without ever
+  // A running Pam loads the model in place: the daemon swaps it without ever
   // going down, so nothing is stopped and nothing is restarted. Only a paused
-  // PAM still needs starting, and then the start carries the key. A refusal
+  // Pam still needs starting, and then the start carries the key. A refusal
   // renders in the Models view next to the row that asked for it; only a
   // thrown error reaches the toast here.
   const startWithModel = (modelId: string) => {
@@ -496,7 +496,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
         }
         await bridge.startDaemon(withDaemonOperation(), modelId);
       },
-      running ? `Loaded ${modelId}` : "PAM is on watch with the model",
+      running ? `Loaded ${modelId}` : "Pam is on watch with the model",
     ).then(() => void loadModelStatus());
   };
   const unloadModel = (modelId: string) => {
@@ -602,9 +602,9 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
     { id: "view-models", label: "Open Models", description: "Show the local model, its load progress, and how to add another.", shortcut: "⌘2" },
     { id: "view-flows", label: "Open Flows", description: "Show bounded project flow definitions.", shortcut: "⌘3" },
     { id: "view-skills", label: "Open Skills", description: "Show the skill inventory, library, and audit.", shortcut: "⌘4" },
-    { id: "view-access", label: "Open Access", description: "Show the capabilities PAM uses, its callers, and its connectors.", shortcut: "⌘5" },
+    { id: "view-access", label: "Open Access", description: "Show the capabilities Pam uses, its callers, and its connectors.", shortcut: "⌘5" },
     { id: "view-activity", label: "Open Activity", description: "Show the recent activity feed and the daemon's debug console.", shortcut: "⌘6" },
-    { id: "view-settings", label: "Open Settings", description: "Show where PAM keeps things, and clear its logs.", shortcut: "⌘7" },
+    { id: "view-settings", label: "Open Settings", description: "Show where Pam keeps things, and clear its logs.", shortcut: "⌘7" },
     ...(projectActive
       ? [{ id: "open-queue", label: "Open project queue", description: "Inspect the bounded retained request window." }]
       : []),
@@ -612,7 +612,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
       ? [{ id: "model-chat", label: "Chat with the model", description: "Review the local model in an ephemeral chat." }]
       : []),
     projectActive
-      ? { id: "refresh", label: "Refresh project", description: "Request current state from PAM.", shortcut: "⌘R" }
+      ? { id: "refresh", label: "Refresh project", description: "Request current state from Pam.", shortcut: "⌘R" }
       : { id: "refresh", label: "Refresh daemon", description: "Probe daemon health and reload the global views.", shortcut: "⌘R" },
   ];
   const runCommand = (id: string) => {

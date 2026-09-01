@@ -17,7 +17,7 @@ describe("visual QA fixture scenarios", () => {
     const missing = (await fixtureBridge("missing-credential").bootstrap()).snapshot!;
     expect(missing.data.health).toMatchObject({
       status: "degraded",
-      recovery: "Use Register GUI caller in PAM.",
+      recovery: "Use Register GUI caller in Pam.",
     });
     expect(missing.data.current).toMatchObject({
       status: "unavailable",
@@ -99,7 +99,7 @@ describe("visual QA fixture scenarios", () => {
 
   it("keeps startup transport failure separate from protocol snapshots", async () => {
     await expect(fixtureBridge("startup-error").bootstrap()).rejects.toThrow(
-      "The PAM daemon fixture is unavailable.",
+      "The Pam daemon fixture is unavailable.",
     );
   });
 

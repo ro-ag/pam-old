@@ -116,7 +116,7 @@ fn an_http_url_is_refused_by_name() {
 
     assert_eq!(
         failure.detail,
-        "PAM downloads models over HTTPS only; this URL uses the http scheme."
+        "Pam downloads models over HTTPS only; this URL uses the http scheme."
     );
     assert_eq!(
         failure.recovery.unwrap(),
@@ -131,7 +131,7 @@ fn a_file_url_is_refused_by_name() {
 
     assert_eq!(
         failure.detail,
-        "PAM downloads models over HTTPS only; this URL uses the file scheme."
+        "Pam downloads models over HTTPS only; this URL uses the file scheme."
     );
 }
 
@@ -142,7 +142,7 @@ fn an_ftp_url_is_refused_by_name() {
 
     assert_eq!(
         failure.detail,
-        "PAM downloads models over HTTPS only; this URL uses the ftp scheme."
+        "Pam downloads models over HTTPS only; this URL uses the ftp scheme."
     );
 }
 
@@ -151,7 +151,7 @@ fn a_string_that_is_not_a_url_is_refused_before_anything_else() {
     let failure =
         acquisition_from_url(&with_url("models.example/m.gguf"), public_resolver).unwrap_err();
 
-    assert_eq!(failure.detail, "PAM could not read that as a URL.");
+    assert_eq!(failure.detail, "Pam could not read that as a URL.");
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn embedded_credentials_are_refused() {
 
     assert_eq!(
         failure.detail,
-        "PAM refuses a download URL that carries embedded credentials."
+        "Pam refuses a download URL that carries embedded credentials."
     );
 }
 
@@ -184,7 +184,7 @@ fn a_query_or_fragment_is_refused_so_provenance_stays_plain() {
         let failure = acquisition_from_url(&with_url(url), public_resolver).unwrap_err();
         assert_eq!(
             failure.detail,
-            "PAM refuses a download URL with a query string or fragment; provenance records only \
+            "Pam refuses a download URL with a query string or fragment; provenance records only \
              the plain URL."
         );
     }
@@ -200,7 +200,7 @@ fn a_non_standard_port_is_refused_by_number() {
 
     assert_eq!(
         failure.detail,
-        "PAM downloads models from port 443 only; this URL uses port 8443."
+        "Pam downloads models from port 443 only; this URL uses port 8443."
     );
 }
 
@@ -214,7 +214,7 @@ fn a_url_that_does_not_end_in_a_gguf_name_is_refused() {
         let failure = acquisition_from_url(&with_url(url), public_resolver).unwrap_err();
         assert_eq!(
             failure.detail,
-            "That URL does not end in a .gguf file name PAM can save."
+            "That URL does not end in a .gguf file name Pam can save."
         );
     }
 }
@@ -225,12 +225,12 @@ fn a_loopback_host_is_refused_with_the_address_it_resolved_to() {
 
     assert_eq!(
         failure.detail,
-        "models.example resolves to 127.0.0.1, which is inside your own network; PAM will not \
+        "models.example resolves to 127.0.0.1, which is inside your own network; Pam will not \
          download a model from it."
     );
     assert_eq!(
         failure.recovery.unwrap(),
-        "Paste a URL on the public internet. PAM refuses private, loopback and link-local \
+        "Paste a URL on the public internet. Pam refuses private, loopback and link-local \
          addresses so a pasted link cannot reach into your network."
     );
 }
@@ -241,7 +241,7 @@ fn a_private_host_is_refused() {
 
     assert_eq!(
         failure.detail,
-        "models.example resolves to 10.0.0.5, which is inside your own network; PAM will not \
+        "models.example resolves to 10.0.0.5, which is inside your own network; Pam will not \
          download a model from it."
     );
 }
@@ -252,7 +252,7 @@ fn a_link_local_host_is_refused() {
 
     assert_eq!(
         failure.detail,
-        "models.example resolves to 169.254.169.254, which is inside your own network; PAM will \
+        "models.example resolves to 169.254.169.254, which is inside your own network; Pam will \
          not download a model from it."
     );
 }
@@ -274,7 +274,7 @@ fn an_unresolvable_host_says_so() {
 
     assert_eq!(
         failure.detail,
-        "PAM could not resolve the host models.example."
+        "Pam could not resolve the host models.example."
     );
 }
 
@@ -304,7 +304,7 @@ fn an_unaccepted_license_never_starts_a_download() {
 
     assert_eq!(
         failure.detail,
-        "PAM records the exact license you accept before it downloads anything."
+        "Pam records the exact license you accept before it downloads anything."
     );
 }
 
@@ -373,7 +373,7 @@ fn an_empty_license_notice_is_refused() {
 
     assert_eq!(
         failure.detail,
-        "PAM records the exact license notice you accept, so it cannot be empty."
+        "Pam records the exact license notice you accept, so it cannot be empty."
     );
 }
 

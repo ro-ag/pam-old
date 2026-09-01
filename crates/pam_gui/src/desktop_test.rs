@@ -90,7 +90,7 @@ fn gui_registration_recovery_uses_a_stable_typed_current_code() {
                 "kind": "unavailable",
                 "code": "gui_registration_required",
                 "detail": "Native credential is unavailable.",
-                "recovery": "Use Register GUI caller in PAM."
+                "recovery": "Use Register GUI caller in Pam."
             }
         })
     );
@@ -168,7 +168,7 @@ fn tagged_desktop_dtos_serialize_variant_fields_in_the_frontend_contract() {
             failure: FailureDto {
                 kind: FailureKindDto::Unavailable,
                 code: Some("unknown_preset".to_owned()),
-                detail: "This preset is not offered by PAM.".to_owned(),
+                detail: "This preset is not offered by Pam.".to_owned(),
                 recovery: None,
             },
         })
@@ -178,7 +178,7 @@ fn tagged_desktop_dtos_serialize_variant_fields_in_the_frontend_contract() {
             "failure": {
                 "kind": "unavailable",
                 "code": "unknown_preset",
-                "detail": "This preset is not offered by PAM.",
+                "detail": "This preset is not offered by Pam.",
                 "recovery": null
             }
         })
@@ -234,12 +234,12 @@ fn registration_failure_detail_surfaces_the_helper_reason_or_exit_status() {
     let with_reason = std::process::Output {
         status: failed,
         stdout: Vec::new(),
-        stderr: b"PAM's native credential store is unavailable.\nRecovery: pam caller register\n"
+        stderr: b"Pam's native credential store is unavailable.\nRecovery: pam caller register\n"
             .to_vec(),
     };
     assert_eq!(
         registration_failure_detail(&with_reason),
-        "PAM GUI caller registration failed: PAM's native credential store is unavailable."
+        "Pam GUI caller registration failed: Pam's native credential store is unavailable."
     );
 
     let silent = std::process::Output {
@@ -249,7 +249,7 @@ fn registration_failure_detail_surfaces_the_helper_reason_or_exit_status() {
     };
     assert_eq!(
         registration_failure_detail(&silent),
-        format!("PAM GUI caller registration failed with {failed}.")
+        format!("Pam GUI caller registration failed with {failed}.")
     );
 }
 
@@ -564,8 +564,8 @@ fn observatory_denials_are_blocked_and_offline_reads_are_unavailable() {
 
     let unavailable = callers_dto_for_test(ObservatoryState::Unavailable {
         code: None,
-        detail: "The PAM daemon is not running.".to_owned(),
-        recovery: Some("Start the PAM daemon.".to_owned()),
+        detail: "The Pam daemon is not running.".to_owned(),
+        recovery: Some("Start the Pam daemon.".to_owned()),
     });
     assert_eq!(
         serde_json::to_value(unavailable).unwrap(),
@@ -574,8 +574,8 @@ fn observatory_denials_are_blocked_and_offline_reads_are_unavailable() {
             "failure": {
                 "kind": "unavailable",
                 "code": null,
-                "detail": "The PAM daemon is not running.",
-                "recovery": "Start the PAM daemon."
+                "detail": "The Pam daemon is not running.",
+                "recovery": "Start the Pam daemon."
             }
         })
     );
@@ -757,7 +757,7 @@ async fn only_a_registered_models_own_path_widens_the_reveal_allowlist() {
         .unwrap();
     store.shutdown().await.unwrap();
 
-    // Reveal is how PAM answers "I will not delete your file": the registered
+    // Reveal is how Pam answers "I will not delete your file": the registered
     // path is allowed, and nothing beside it is.
     assert!(registered_model_path_in_for_test(state_path.clone(), &weights).await);
     assert!(!registered_model_path_in_for_test(state_path, &directory.join("other.gguf")).await);
@@ -891,12 +891,12 @@ fn a_refused_weights_deletion_keeps_the_daemons_own_explanation_and_recovery() {
         })
     );
 
-    // PAM refusing to delete a file it never downloaded is not a policy
+    // Pam refusing to delete a file it never downloaded is not a policy
     // denial: it arrives as unavailable and its exact words survive intact.
     let refused = model_delete_weights_dto_for_test(ObservatoryState::Unavailable {
         code: None,
         detail:
-            "PAM did not download this model, so it will not delete the file at /elsewhere/name.gguf"
+            "Pam did not download this model, so it will not delete the file at /elsewhere/name.gguf"
                 .to_owned(),
         recovery: Some(
             "Run `pam model unregister vendor/name --yes` to drop the registry entry, then delete /elsewhere/name.gguf yourself."
@@ -910,7 +910,7 @@ fn a_refused_weights_deletion_keeps_the_daemons_own_explanation_and_recovery() {
             "failure": {
                 "kind": "unavailable",
                 "code": null,
-                "detail": "PAM did not download this model, so it will not delete the file at /elsewhere/name.gguf",
+                "detail": "Pam did not download this model, so it will not delete the file at /elsewhere/name.gguf",
                 "recovery": "Run `pam model unregister vendor/name --yes` to drop the registry entry, then delete /elsewhere/name.gguf yourself."
             }
         })
@@ -992,7 +992,7 @@ async fn model_download_reports_a_refused_pasted_url_as_unavailable_data() {
     assert_eq!(failure.code.as_deref(), Some("invalid_download_url"));
     assert_eq!(
         failure.detail,
-        "PAM downloads models over HTTPS only; this URL uses the http scheme."
+        "Pam downloads models over HTTPS only; this URL uses the http scheme."
     );
 }
 
@@ -1076,7 +1076,7 @@ async fn app_settings_reports_a_well_formed_default_snapshot() {
         .await
         .unwrap();
 
-    // `models_dir_is_default` depends on whatever this machine's real PAM
+    // `models_dir_is_default` depends on whatever this machine's real Pam
     // Settings already persisted, so only the paths' shape is asserted here.
     assert!(std::path::Path::new(&dto.models_dir).is_absolute());
     assert!(std::path::Path::new(&dto.data_dir).is_absolute());
@@ -1132,7 +1132,7 @@ async fn model_inspect_reports_identity_metadata_and_the_floor_verdict() {
             assert_eq!(file_name, "model.gguf");
             assert_eq!(architecture, None);
             assert_eq!(model_name, None);
-            // The tiny fixture is far below PAM's recommended minimum.
+            // The tiny fixture is far below Pam's recommended minimum.
             assert!(below_floor);
         }
         other => panic!("expected ModelInspectDto::Ok, got {other:?}"),
@@ -1404,8 +1404,8 @@ fn model_infer_denials_are_blocked_with_recovery_and_transport_is_unavailable() 
 
     let unavailable = model_infer_dto_for_test(ObservatoryState::Unavailable {
         code: None,
-        detail: "The PAM daemon is not running.".to_owned(),
-        recovery: Some("Start the PAM daemon.".to_owned()),
+        detail: "The Pam daemon is not running.".to_owned(),
+        recovery: Some("Start the Pam daemon.".to_owned()),
     });
     assert_eq!(
         serde_json::to_value(unavailable).unwrap(),
@@ -1414,8 +1414,8 @@ fn model_infer_denials_are_blocked_with_recovery_and_transport_is_unavailable() 
             "failure": {
                 "kind": "unavailable",
                 "code": null,
-                "detail": "The PAM daemon is not running.",
-                "recovery": "Start the PAM daemon."
+                "detail": "The Pam daemon is not running.",
+                "recovery": "Start the Pam daemon."
             }
         })
     );
@@ -1541,8 +1541,8 @@ fn connector_denials_are_blocked_with_recovery_and_transport_is_unavailable() {
 
     let unavailable = connector_test_dto_for_test(ObservatoryState::Unavailable {
         code: None,
-        detail: "The PAM daemon is not running.".to_owned(),
-        recovery: Some("Start the PAM daemon.".to_owned()),
+        detail: "The Pam daemon is not running.".to_owned(),
+        recovery: Some("Start the Pam daemon.".to_owned()),
     });
     assert_eq!(
         serde_json::to_value(unavailable).unwrap(),
@@ -1551,8 +1551,8 @@ fn connector_denials_are_blocked_with_recovery_and_transport_is_unavailable() {
             "failure": {
                 "kind": "unavailable",
                 "code": null,
-                "detail": "The PAM daemon is not running.",
-                "recovery": "Start the PAM daemon."
+                "detail": "The Pam daemon is not running.",
+                "recovery": "Start the Pam daemon."
             }
         })
     );
@@ -2099,7 +2099,7 @@ async fn a_daemon_deaf_during_model_load_keeps_polling_until_it_serves() {
             async move {
                 if probe_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
                     HealthState::Degraded {
-                        detail: "PAM daemon (pid 1) is running but did not respond in time."
+                        detail: "Pam daemon (pid 1) is running but did not respond in time."
                             .to_owned(),
                         recovery: None,
                     }
@@ -2142,7 +2142,7 @@ async fn a_daemon_still_loading_at_the_deadline_is_reported_starting_and_not_kil
         // Mid-load the daemon is alive but deaf: bound, not yet accepting.
         || async {
             HealthState::Degraded {
-                detail: "PAM daemon (pid 1) is running but did not respond in time.".to_owned(),
+                detail: "Pam daemon (pid 1) is running but did not respond in time.".to_owned(),
                 recovery: None,
             }
         },
@@ -2167,7 +2167,7 @@ async fn a_daemon_still_loading_at_the_deadline_is_reported_starting_and_not_kil
     let _ = child.kill();
     let _ = child.wait();
     assert!(notice.message.contains("still starting"));
-    assert!(notice.recovery.as_deref().unwrap().contains("Leave PAM"));
+    assert!(notice.recovery.as_deref().unwrap().contains("Leave Pam"));
     let _ = std::fs::remove_dir_all(&directory);
 }
 

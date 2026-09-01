@@ -113,7 +113,7 @@ export interface ControlCenterView {
   fixture: boolean;
 }
 
-// A project root PAM reports may be POSIX or Windows; either way, the last
+// A project root Pam reports may be POSIX or Windows; either way, the last
 // path segment is the display-worthy part.
 export function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -167,7 +167,7 @@ function currentView(current: CurrentDto, projectName: string, health: HealthDto
       approval: {
         approvalHandle: current.approval,
         title: "The daemon requires an exact approval",
-        reason: "PAM needs approval before reading retained state for the selected project.",
+        reason: "Pam needs approval before reading retained state for the selected project.",
         effect: "Read the selected project's bounded current queue and latest run",
         projectName,
         policyCapability: "project.current · exact project policy",
@@ -241,7 +241,7 @@ function healthView(health: HealthDto) {
 // snapshot exists; with an active project the snapshot health stays truthful.
 export function selectDaemonView(health: HealthDto | null): DaemonView {
   if (health === null) {
-    return { state: "unavailable", detail: "Checking on PAM…", model: null, modelMemory: null, queueDepth: null };
+    return { state: "unavailable", detail: "Checking on Pam…", model: null, modelMemory: null, queueDepth: null };
   }
   return healthView(health).daemon;
 }

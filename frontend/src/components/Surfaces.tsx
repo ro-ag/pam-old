@@ -344,7 +344,7 @@ export function CommandPalette({ commands, active, returnFocusTarget, onAction, 
 
   const dialog = (
     <Dialog className="command-dialog" aria-label="Command palette" aria-describedby={descriptionId}>
-      <VisuallyHidden><p id={descriptionId}>Search and run a PAM command.</p></VisuallyHidden>
+      <VisuallyHidden><p id={descriptionId}>Search and run a Pam command.</p></VisuallyHidden>
       <input
         autoFocus
         className="command-input"
@@ -415,12 +415,12 @@ export function StartupShell({ children }: StartupShellProps) {
   return (
     <div className="app-shell startup-shell" style={startupShellStyle}>
       <div className="atmosphere" aria-hidden="true" />
-      <aside className="sidebar is-collapsed startup-sidebar" aria-label="PAM identity">
-        <div className="brand" aria-label="PAM"><img src="/assets/pam-mark.png" alt="" /></div>
+      <aside className="sidebar is-collapsed startup-sidebar" aria-label="Pam identity">
+        <div className="brand" aria-label="Pam"><img src="/assets/pam-mark.png" alt="" /></div>
       </aside>
       <div className="resize-separator startup-separator" aria-hidden="true" />
       <section className="workspace startup-workspace">
-        <header className="toolbar startup-toolbar"><div className="breadcrumb"><strong>PAM</strong></div></header>
+        <header className="toolbar startup-toolbar"><div className="breadcrumb"><strong>Pam</strong></div></header>
         <main className="canvas startup-body" id="main-content">{children}</main>
       </section>
     </div>
@@ -433,7 +433,7 @@ export function LoadingScreen(_props: LoadingScreenProps) {
   return (
     <StartupShell>
       <PanelLoading as="section" className="empty-state state-card startup-state-card">
-        <h1>PAM</h1>
+        <h1>Pam</h1>
         <p>Finding the last registered project…</p>
       </PanelLoading>
     </StartupShell>
@@ -450,7 +450,7 @@ export function RecoveryScreen({ message, onRetry }: RecoveryScreenProps) {
     <StartupShell>
       <PanelError as="section" className="empty-state state-card startup-state-card is-attention">
         <WarningCircle size={38} />
-        <h1>PAM needs a moment</h1>
+        <h1>Pam needs a moment</h1>
         <p>{message}</p>
         <button type="button" className="button button--primary" onClick={onRetry}><ArrowClockwise size={18} /> Retry safely</button>
       </PanelError>

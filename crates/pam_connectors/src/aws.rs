@@ -1,6 +1,6 @@
 //! Typed AWS CLI passthrough operations.
 //!
-//! PAM stores no AWS keys: the connector spawns the operator's own `aws`
+//! Pam stores no AWS keys: the connector spawns the operator's own `aws`
 //! binary directly (never through a shell) with an allowlisted read-only
 //! command, daemon-controlled output flags, and an optional `--profile` name
 //! as its only stored configuration.

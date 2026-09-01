@@ -37,7 +37,7 @@ export function SkillInventoryPanel({ bridge, fence, refreshTick = 0 }: SkillInv
   );
 }
 
-// Global scopes (user home, plugins, system, PAM-managed) always take
+// Global scopes (user home, plugins, system, Pam-managed) always take
 // priority over project scopes: a project artifact whose name matches a
 // global one is shadowed and never wins the agent's attention.
 const GLOBAL_SCOPES = new Set(["managed", "system", "user", "plugin"]);

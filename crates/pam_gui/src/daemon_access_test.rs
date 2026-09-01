@@ -199,7 +199,7 @@ async fn a_capability_the_window_does_not_use_is_rejected_before_any_write() {
     .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "This is not a daemon-scoped capability the PAM window uses."
+        "This is not a daemon-scoped capability the Pam window uses."
     );
 
     let store = Store::open(&state_path).unwrap();

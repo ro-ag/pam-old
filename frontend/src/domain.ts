@@ -625,7 +625,7 @@ export interface ModelImportParams {
   licenseUrl: string;
   /** Exact license notice text the user accepted; the backend hashes it. */
   licenseNoticeText: string;
-  /** Registers a model below PAM's recommended minimum size anyway. */
+  /** Registers a model below Pam's recommended minimum size anyway. */
   allowSmall: boolean;
 }
 
@@ -669,10 +669,10 @@ export interface ModelHealthDto {
   sizeBytes: number;
   health: "ok" | "path_missing" | "size_mismatch" | "digest_mismatch" | "metadata_mismatch" | "unsafe_path" | "unreadable";
   detail: string | null;
-  /** `local` for a GGUF PAM verified in place, `https` for one it downloaded. */
+  /** `local` for a GGUF Pam verified in place, `https` for one it downloaded. */
   source: string;
   /**
-   * True only when PAM downloaded this artifact and it still sits inside the
+   * True only when Pam downloaded this artifact and it still sits inside the
    * models directory in effect right now. The daemon decides this; the view
    * never re-derives the rule.
    */
@@ -695,7 +695,7 @@ export interface OrphanWeightsDto {
 }
 
 // The sweep reports and never acts: a dangling row is cleared by unregistering
-// it, and an orphaned file PAM downloaded goes through Delete weights.
+// it, and an orphaned file Pam downloaded goes through Delete weights.
 export type ModelSweepDto =
   | {
       status: "ok";
@@ -719,7 +719,7 @@ export interface ModelImportStatusDto {
   stage: "hashing" | "registering" | null;
   hashedBytes: number;
   totalBytes: number;
-  /** Meaningful on "complete": whether the artifact is in PAM's calibrated
+  /** Meaningful on "complete": whether the artifact is in Pam's calibrated
    * set. Uncalibrated imports still register, but loading them is untested. */
   calibrated: boolean;
   failure: ModelFailureDto | null;
@@ -755,7 +755,7 @@ export interface ModelPresetDto {
   licenseId: string;
   licenseUrl: string;
   licenseNoticeText: string;
-  /** True when this exact artifact is in PAM's measured, known-good set. */
+  /** True when this exact artifact is in Pam's measured, known-good set. */
   calibrated: boolean;
   /**
    * Whether this Mac can run the preset, decided in Rust against the same
@@ -780,9 +780,9 @@ export type ModelDownloadDto =
   | { status: "ok" }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
-/** What to download. A preset is one of PAM's hand-checked catalog entries;
+/** What to download. A preset is one of Pam's hand-checked catalog entries;
  *  a url is a source the owner pasted and vouched for, carrying every field
- *  PAM needs to verify the bytes it receives. */
+ *  Pam needs to verify the bytes it receives. */
 export type ModelDownloadSource =
   | { kind: "preset"; presetId: string }
   | {
@@ -797,7 +797,7 @@ export type ModelDownloadSource =
       licenseId: string;
       licenseUrl: string;
       licenseNoticeText: string;
-      /** The explicit license acceptance; PAM refuses the download without it. */
+      /** The explicit license acceptance; Pam refuses the download without it. */
       accepted: boolean;
     };
 
@@ -826,7 +826,7 @@ export interface DaemonStartupProgressDto {
 
 export interface HostMemoryDto {
   totalBytes: number;
-  /** PAM's supported system minimum: local AI needs a 32 GiB machine. */
+  /** Pam's supported system minimum: local AI needs a 32 GiB machine. */
   supportedMinimumBytes: number;
 }
 
@@ -838,7 +838,7 @@ export interface AppSettingsDto {
   modelsDir: string;
   modelsDirIsDefault: boolean;
   /** The vendor/name a daemon start loads when the GUI asks for no specific
-   *  model, or null when PAM starts with no model. A pin, not a promise: a
+   *  model, or null when Pam starts with no model. A pin, not a promise: a
    *  model that is later unregistered stays pinned until it is changed, and
    *  the daemon says plainly that it is gone. */
   defaultModel: string | null;
@@ -950,7 +950,7 @@ export interface PamBridge {
    *  daemon drains and drops whatever it was serving before the new runtime
    *  is built. */
   modelLoad(fence: CommandFence, model: string): Promise<ModelLoadDto>;
-  /** Drops the loaded model and frees its memory; PAM keeps serving. */
+  /** Drops the loaded model and frees its memory; Pam keeps serving. */
   modelUnload(fence: CommandFence): Promise<ModelUnloadDto>;
   modelUnregister(fence: CommandFence, model: string): Promise<ModelUnregisterDto>;
   /** Registry health: re-reads registered weights. Not the loaded-model check. */
@@ -968,7 +968,7 @@ export interface PamBridge {
   appSettings(fence: CommandFence): Promise<AppSettingsDto>;
   settingsUpdate(fence: CommandFence, modelsDir: string | null): Promise<AppSettingsDto>;
   /** Pins the model a daemon start loads by default, or clears the pin with
-   *  null so PAM starts with no model. */
+   *  null so Pam starts with no model. */
   settingsSetDefaultModel(fence: CommandFence, model: string | null): Promise<AppSettingsDto>;
   logsDelete(fence: CommandFence): Promise<AppSettingsDto>;
   resetAccess(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;

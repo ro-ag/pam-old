@@ -1,4 +1,4 @@
-//! GUI-owned Settings v1: visibility into where PAM keeps things, plus the
+//! GUI-owned Settings v1: visibility into where Pam keeps things, plus the
 //! persisted preferences — a custom models download directory, and the model
 //! a daemon start loads when it is given no explicit one.
 //!
@@ -24,7 +24,7 @@ pub(crate) use pam_model::{default_models_dir, effective_models_dir, persisted_d
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const LOGS_DIR_NAME: &str = "logs";
-// Every on-disk file PAM writes under `<data_dir>/logs`: the daemon's own
+// Every on-disk file Pam writes under `<data_dir>/logs`: the daemon's own
 // rotating diagnostic log (`pam_daemon::logging::DaemonLog`, active file plus
 // at most one size-rotated predecessor) and the GUI's best-effort capture of
 // a GUI-launched daemon child's stderr (`desktop::daemon_stderr_capture`).
@@ -53,7 +53,7 @@ struct PersistedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models_dir: Option<String>,
     /// The `vendor/name` a daemon start loads when nothing explicit is asked
-    /// for. Absent means no default: PAM starts serving with no model.
+    /// for. Absent means no default: Pam starts serving with no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_model: Option<String>,
 }
@@ -82,7 +82,7 @@ pub(crate) fn resolve_home() -> Result<PathBuf, SettingsFailure> {
         .map(|dirs| dirs.home_dir().to_path_buf())
         .ok_or_else(|| {
             SettingsFailure::new(
-                "PAM could not resolve the user home directory.",
+                "Pam could not resolve the user home directory.",
                 "Verify the operating system user profile, then retry.",
             )
         })
@@ -115,22 +115,22 @@ fn load_persisted(data_dir: &Path) -> PersistedSettings {
 }
 
 fn write_persisted(data_dir: &Path, persisted: &PersistedSettings) -> Result<(), SettingsFailure> {
-    let recovery = "Verify PAM's local data directory is writable, then retry.";
+    let recovery = "Verify Pam's local data directory is writable, then retry.";
     fs::create_dir_all(data_dir).map_err(|error| {
         SettingsFailure::new(
-            format!("PAM could not reach its settings file: {error}"),
+            format!("Pam could not reach its settings file: {error}"),
             recovery,
         )
     })?;
     let text = serde_json::to_string_pretty(persisted).map_err(|error| {
         SettingsFailure::new(
-            format!("PAM could not encode its settings: {error}"),
+            format!("Pam could not encode its settings: {error}"),
             recovery,
         )
     })?;
     fs::write(settings_path(data_dir), text).map_err(|error| {
         SettingsFailure::new(
-            format!("PAM could not write its settings file: {error}"),
+            format!("Pam could not write its settings file: {error}"),
             recovery,
         )
     })
@@ -161,7 +161,7 @@ pub(crate) fn snapshot(data_dir: &Path, home: &Path) -> AppSettingsSnapshot {
 }
 
 fn validate_custom_dir(raw: &str) -> Result<PathBuf, SettingsFailure> {
-    let recovery = "Choose an absolute path PAM can create or already owns, then retry.";
+    let recovery = "Choose an absolute path Pam can create or already owns, then retry.";
     let trimmed = raw.trim();
     let path = PathBuf::from(trimmed);
     if trimmed.is_empty()
@@ -178,7 +178,7 @@ fn validate_custom_dir(raw: &str) -> Result<PathBuf, SettingsFailure> {
     }
     fs::create_dir_all(&path).map_err(|error| {
         SettingsFailure::new(
-            format!("PAM could not create or reach that directory: {error}"),
+            format!("Pam could not create or reach that directory: {error}"),
             recovery,
         )
     })?;
@@ -191,7 +191,7 @@ fn validate_custom_dir(raw: &str) -> Result<PathBuf, SettingsFailure> {
 /// # Errors
 ///
 /// Returns [`SettingsFailure`] when `new_dir` is relative, escapes with
-/// `..`, or names a directory PAM cannot create.
+/// `..`, or names a directory Pam cannot create.
 pub(crate) fn update_models_dir(
     data_dir: &Path,
     home: &Path,
@@ -265,7 +265,7 @@ pub(crate) fn delete_logs(
             && error.kind() != std::io::ErrorKind::NotFound
         {
             return Err(SettingsFailure::new(
-                format!("PAM could not delete {name}: {error}"),
+                format!("Pam could not delete {name}: {error}"),
                 "Close any program viewing the log file, then retry.",
             ));
         }
@@ -274,7 +274,7 @@ pub(crate) fn delete_logs(
 }
 
 /// True when `path` is exactly one of today's known Settings locations — the
-/// only paths PAM will open in the system file manager for `reveal_path`.
+/// only paths Pam will open in the system file manager for `reveal_path`.
 pub(crate) fn is_known_location(snapshot: &AppSettingsSnapshot, path: &Path) -> bool {
     path == snapshot.models_dir
         || path == snapshot.data_dir

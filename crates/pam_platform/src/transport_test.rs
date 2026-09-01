@@ -12,7 +12,7 @@ fn unavailable_transport_has_exact_recovery_action() {
     assert_eq!(error.recovery_action(), Some("pam daemon"));
     assert_eq!(
         error.to_string(),
-        "PAM daemon is not reachable. Start it with `pam daemon`."
+        "Pam daemon is not reachable. Start it with `pam daemon`."
     );
     assert_eq!(error.diagnostic(), "connection refused");
 }

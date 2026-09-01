@@ -1,13 +1,13 @@
 //! Reconciliation between the durable model registry and the weights on
-//! disk, plus the provenance gate that decides whether PAM may delete a
+//! disk, plus the provenance gate that decides whether Pam may delete a
 //! registered artifact.
 //!
 //! Registration and verification both answer "is this one artifact still what
 //! the registry says it is". This module answers the two questions that only
 //! make sense across the whole catalog: what the registry names that disk no
 //! longer has, and what disk holds that the registry never named. It also owns
-//! the one rule that keeps PAM from destroying a user's file — PAM deletes
-//! only what PAM downloaded, and only where PAM downloaded it to.
+//! the one rule that keeps Pam from destroying a user's file — Pam deletes
+//! only what Pam downloaded, and only where Pam downloaded it to.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// How deep beneath the models directory the sweep looks. Downloads land at
-/// `<root>/<vendor>/<file>.gguf`, so two levels covers the layout PAM writes;
+/// `<root>/<vendor>/<file>.gguf`, so two levels covers the layout Pam writes;
 /// the extra levels catch a user's own nesting without ever becoming an
 /// unbounded walk of an arbitrary directory the user pointed Settings at.
 const MAX_SWEEP_DEPTH: usize = 4;
@@ -108,26 +108,26 @@ pub fn sweep_models_directory(
     }
 }
 
-/// Why PAM will not delete a registered model's weights.
+/// Why Pam will not delete a registered model's weights.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WeightsRefusal {
     /// The registration recorded [`ModelSource::Local`]: `pam model import`
-    /// verified this GGUF where its owner already kept it, so PAM never
+    /// verified this GGUF where its owner already kept it, so Pam never
     /// downloaded the file and will not remove it.
     NotDownloadedByPam,
-    /// The artifact is PAM-downloaded but no longer sits under the models
+    /// The artifact is Pam-downloaded but no longer sits under the models
     /// directory in effect right now, so deleting it would reach outside the
-    /// only root PAM owns.
+    /// only root Pam owns.
     OutsideModelsDirectory,
-    /// The path stopped being a plain regular file PAM can safely remove — a
+    /// The path stopped being a plain regular file Pam can safely remove — a
     /// symlink, a directory, or an entry that vanished.
     Unsafe,
 }
 
-/// Decides whether PAM may delete one registered model's weights.
+/// Decides whether Pam may delete one registered model's weights.
 ///
 /// The gate has exactly two conditions and both must hold: the registration
-/// says PAM downloaded the artifact (`https` provenance), and the artifact is
+/// says Pam downloaded the artifact (`https` provenance), and the artifact is
 /// still inside the models directory in effect right now. An imported-in-place
 /// file fails the first; a downloaded file the user has since moved elsewhere
 /// fails the second.
@@ -275,7 +275,7 @@ impl DirectoryWalk {
     }
 }
 
-/// True for a `.gguf` artifact. The in-flight download siblings PAM writes
+/// True for a `.gguf` artifact. The in-flight download siblings Pam writes
 /// beside a destination — `.<name>.pam-model.part`, `.pam-model.json` and
 /// `.pam-model.lock` — all end in something else, so they are never weights.
 fn is_weights_file(name: &Path) -> bool {
@@ -289,12 +289,12 @@ fn is_weights_file(name: &Path) -> bool {
 pub const fn weights_refusal_message(refusal: WeightsRefusal) -> &'static str {
     match refusal {
         WeightsRefusal::NotDownloadedByPam => {
-            "PAM did not download this model, so it will not delete the file"
+            "Pam did not download this model, so it will not delete the file"
         }
         WeightsRefusal::OutsideModelsDirectory => {
-            "this model's weights are no longer inside PAM's models directory"
+            "this model's weights are no longer inside Pam's models directory"
         }
-        WeightsRefusal::Unsafe => "this model's path is not a regular file PAM can remove",
+        WeightsRefusal::Unsafe => "this model's path is not a regular file Pam can remove",
     }
 }
 

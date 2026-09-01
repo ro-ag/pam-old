@@ -146,7 +146,7 @@ impl fmt::Display for EvidenceError {
                 truth_label(expected)
             ),
             Self::BufferAllocation => {
-                formatter.write_str("PAM could not allocate the bounded evidence buffer")
+                formatter.write_str("Pam could not allocate the bounded evidence buffer")
             }
         }
     }
@@ -427,7 +427,7 @@ impl fmt::Display for OutputError {
             ),
             Self::Published { path, stage, .. } => write!(
                 formatter,
-                "output was written to {}, but PAM could not {}",
+                "output was written to {}, but Pam could not {}",
                 path.display(),
                 match stage {
                     OutputFinalizationStage::TemporaryCleanup => {
@@ -438,7 +438,7 @@ impl fmt::Display for OutputError {
                     }
                 }
             ),
-            Self::Io(_) => formatter.write_str("PAM could not safely write the output"),
+            Self::Io(_) => formatter.write_str("Pam could not safely write the output"),
         }
     }
 }

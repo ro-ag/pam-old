@@ -41,10 +41,10 @@ const GGUF_MAX_TENSOR_NAME_BYTES: u64 = 127;
 const GGUF_MAX_STRING_BYTES: u64 = 256 * 1024 * 1024;
 const GGUF_MAX_DIMENSIONS: u32 = 4;
 const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024;
-/// Display cap on the identity metadata strings PAM extracts for the UI
+/// Display cap on the identity metadata strings Pam extracts for the UI
 /// (`general.architecture`, `general.name`, `general.license`): each is a
 /// short identifier in every known GGUF, but none is required by the format
-/// itself, so a value past this cap is skipped like any other metadata PAM
+/// itself, so a value past this cap is skipped like any other metadata Pam
 /// doesn't read rather than treated as a malformed file — see
 /// `read_gguf_identity_string`.
 const GGUF_MAX_IDENTITY_STRING_BYTES: u64 = 256;

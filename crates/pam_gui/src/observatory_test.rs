@@ -34,7 +34,7 @@ fn explicit_policy_denials_are_blocked() {
 fn non_policy_failures_are_unavailable_and_keep_recovery_text() {
     let state: ObservatoryState<ActivityResult> = failure_state_for_test(failure(
         FailureCode::Internal,
-        Some("Start the PAM daemon.".to_owned()),
+        Some("Start the Pam daemon.".to_owned()),
     ));
 
     assert_eq!(
@@ -42,7 +42,7 @@ fn non_policy_failures_are_unavailable_and_keep_recovery_text() {
         ObservatoryState::Unavailable {
             code: None,
             detail: "observed failure".to_owned(),
-            recovery: Some("Start the PAM daemon.".to_owned()),
+            recovery: Some("Start the Pam daemon.".to_owned()),
         }
     );
 }
@@ -118,7 +118,7 @@ fn connector_transport_failures_are_unavailable() {
     let state: ObservatoryState<ConnectorTestResult> =
         connector_test_failure_state_for_test(failure(
             FailureCode::Internal,
-            Some("Start the PAM daemon.".to_owned()),
+            Some("Start the Pam daemon.".to_owned()),
         ));
 
     assert_eq!(
@@ -126,7 +126,7 @@ fn connector_transport_failures_are_unavailable() {
         ObservatoryState::Unavailable {
             code: None,
             detail: "observed failure".to_owned(),
-            recovery: Some("Start the PAM daemon.".to_owned()),
+            recovery: Some("Start the Pam daemon.".to_owned()),
         }
     );
 }
@@ -197,7 +197,7 @@ fn connector_configure_maps_credential_actions_through_without_retention_or_debu
 fn infer_transport_failures_are_unavailable() {
     let state: ObservatoryState<ModelGenerationResult> = infer_failure_state_for_test(failure(
         FailureCode::Internal,
-        Some("Start the PAM daemon.".to_owned()),
+        Some("Start the Pam daemon.".to_owned()),
     ));
 
     assert_eq!(
@@ -205,7 +205,7 @@ fn infer_transport_failures_are_unavailable() {
         ObservatoryState::Unavailable {
             code: None,
             detail: "observed failure".to_owned(),
-            recovery: Some("Start the PAM daemon.".to_owned()),
+            recovery: Some("Start the Pam daemon.".to_owned()),
         }
     );
 }

@@ -152,19 +152,19 @@ impl fmt::Display for StoreError {
     #[allow(clippy::too_many_lines)] // Keep the exhaustive public error mapping auditable.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(_) => formatter.write_str("PAM could not prepare its durable state path."),
-            Self::Sqlite(_) => formatter.write_str("PAM durable state is unavailable or corrupt."),
+            Self::Io(_) => formatter.write_str("Pam could not prepare its durable state path."),
+            Self::Sqlite(_) => formatter.write_str("Pam durable state is unavailable or corrupt."),
             Self::FutureSchema { found, supported } => write!(
                 formatter,
-                "PAM durable state schema {found} is newer than supported schema {supported}."
+                "Pam durable state schema {found} is newer than supported schema {supported}."
             ),
             Self::IntegrityCheckFailed(_) => {
-                formatter.write_str("PAM durable state failed its SQLite integrity check.")
+                formatter.write_str("Pam durable state failed its SQLite integrity check.")
             }
             Self::ForeignKeyCheckFailed(_) => {
-                formatter.write_str("PAM durable state contains an orphaned reference.")
+                formatter.write_str("Pam durable state contains an orphaned reference.")
             }
-            Self::WorkerStopped => formatter.write_str("PAM's durable state worker stopped."),
+            Self::WorkerStopped => formatter.write_str("Pam's durable state worker stopped."),
             Self::InvalidCallerCredential | Self::CallerAlreadyRegistered(_) => {
                 format_caller_error(self, formatter)
             }

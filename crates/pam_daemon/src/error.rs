@@ -46,22 +46,22 @@ impl fmt::Display for DaemonError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyRunning => formatter
-                .write_str("PAM daemon ownership is already claimed. Check it with `pam status`."),
+                .write_str("Pam daemon ownership is already claimed. Check it with `pam status`."),
             Self::LaunchNotGranted => formatter.write_str(
-                "The PAM daemon starts only from the control center. Open it with `pam gui`.",
+                "The Pam daemon starts only from the control center. Open it with `pam gui`.",
             ),
-            Self::Handler(_) => formatter.write_str("PAM daemon request handling failed."),
+            Self::Handler(_) => formatter.write_str("Pam daemon request handling failed."),
             Self::Identity(error) => error.fmt(formatter),
             Self::StaleState(_) => formatter.write_str(
-                "PAM daemon endpoint is stale. Restart PAM from the control center (`pam gui`).",
+                "Pam daemon endpoint is stale. Restart Pam from the control center (`pam gui`).",
             ),
-            Self::Io(_) => formatter.write_str("PAM could not prepare its local runtime state."),
+            Self::Io(_) => formatter.write_str("Pam could not prepare its local runtime state."),
             Self::Model(_) => {
-                formatter.write_str("PAM could not start the embedded model runtime.")
+                formatter.write_str("Pam could not start the embedded model runtime.")
             }
-            Self::Protocol(_) => formatter.write_str("PAM could not process a protocol message."),
+            Self::Protocol(_) => formatter.write_str("Pam could not process a protocol message."),
             Self::Reset(error) => error.fmt(formatter),
-            Self::Store(_) => formatter.write_str("PAM durable state is unavailable."),
+            Self::Store(_) => formatter.write_str("Pam durable state is unavailable."),
             Self::Transport(error) => error.fmt(formatter),
         }
     }

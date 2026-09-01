@@ -610,7 +610,7 @@ impl SkillLibraryEnvironment {
             .map(|directories| directories.home_dir().to_path_buf())
             .ok_or_else(|| {
                 DesktopErrorDto::unavailable(
-                    "PAM could not resolve the user home for the skill library.",
+                    "Pam could not resolve the user home for the skill library.",
                     None,
                 )
             })?;
@@ -1166,7 +1166,7 @@ fn library_error(_error: pam_skills::LibraryError) -> DesktopErrorDto {
 
 fn library_unavailable() -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not safely complete the canonical skill library action.",
+        "Pam could not safely complete the canonical skill library action.",
         Some(
             "Verify the global p-track home and selected agent installation, then retry."
                 .to_owned(),
@@ -1234,7 +1234,7 @@ fn resolve_library_roots(
         .unwrap_or_else(|| home.join(".ptrack"));
     if !bounded_absolute_path(&ptrack_home) {
         return Err(DesktopErrorDto::unavailable(
-            "PAM could not resolve the global p-track home safely.",
+            "Pam could not resolve the global p-track home safely.",
             None,
         ));
     }
@@ -1243,7 +1243,7 @@ fn resolve_library_roots(
         .unwrap_or_else(|| home.join(".codex"));
     if !bounded_absolute_path(&codex_home) {
         return Err(DesktopErrorDto::unavailable(
-            "PAM could not resolve the Codex home safely.",
+            "Pam could not resolve the Codex home safely.",
             None,
         ));
     }

@@ -251,7 +251,7 @@ async fn run_skill_audit_with_path(
     .await
     .map_err(|_| {
         DesktopErrorDto::unavailable(
-            "PAM could not join the bounded skill audit worker.",
+            "Pam could not join the bounded skill audit worker.",
             Some("Retry the skill audit.".to_owned()),
         )
     })??;
@@ -588,28 +588,28 @@ fn validated_verdict_dto(verdict: &SkillsAuditVerdict) -> SkillAuditVerdictDto {
 
 fn audit_scan_error() -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not safely read the local agent inventory configuration.",
+        "Pam could not safely read the local agent inventory configuration.",
         Some("Repair the configured agent registry, then retry the audit.".to_owned()),
     )
 }
 
 fn audit_run_error() -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not produce a bounded skill audit report.",
+        "Pam could not produce a bounded skill audit report.",
         Some("Review the local agent inventory and retry the audit.".to_owned()),
     )
 }
 
 fn stored_report_error() -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not validate the durable skill audit report.",
+        "Pam could not validate the durable skill audit report.",
         Some("Run a fresh skill audit to replace the invalid report.".to_owned()),
     )
 }
 
 fn store_error(_error: pam_store::StoreError) -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not access its durable skill audit report.",
-        Some("Verify the local PAM state directory and retry the audit.".to_owned()),
+        "Pam could not access its durable skill audit report.",
+        Some("Verify the local Pam state directory and retry the audit.".to_owned()),
     )
 }

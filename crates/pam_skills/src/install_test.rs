@@ -511,7 +511,7 @@ fn timed_out_git_descendant_tree_is_killed_before_workspace_cleanup() {
 #[cfg(unix)]
 fn initialize_repository(repository: &TestDirectory) {
     git(repository.path(), &["init", "--quiet"]);
-    git(repository.path(), &["config", "user.name", "PAM Test"]);
+    git(repository.path(), &["config", "user.name", "Pam Test"]);
     git(
         repository.path(),
         &["config", "user.email", "pam@example.invalid"],

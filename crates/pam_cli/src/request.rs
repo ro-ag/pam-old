@@ -79,7 +79,7 @@ impl RequestContext {
     /// Builds a context bound to the reserved daemon scope.
     ///
     /// Reset is daemon-global, so it must not require a project on disk: the
-    /// owner may be anywhere when they clear PAM's state, and its grants are
+    /// owner may be anywhere when they clear Pam's state, and its grants are
     /// written in the daemon scope.
     pub(crate) async fn discover_daemon_scope(
         approval_id: Option<ApprovalId>,
@@ -410,7 +410,7 @@ impl fmt::Display for NativeCredentialError {
         match self {
             Self::Store(error) => error.fmt(formatter),
             Self::WorkerUnavailable => {
-                formatter.write_str("PAM could not access the native credential worker.")
+                formatter.write_str("Pam could not access the native credential worker.")
             }
         }
     }

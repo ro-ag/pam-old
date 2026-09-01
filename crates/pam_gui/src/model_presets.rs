@@ -1,7 +1,7 @@
 //! Curated, pre-verified model download presets.
 //!
 //! Every entry here is static data checked in by hand against the vendor's
-//! published artifact; PAM never fetches or infers preset metadata over the
+//! published artifact; Pam never fetches or infers preset metadata over the
 //! network. The GUI downloads and registers a preset through the
 //! `model_download` runtime. A URL the owner pastes runs through that same
 //! runtime, but goes through [`crate::model_url_download`] first, which
@@ -10,7 +10,7 @@
 //!
 //! A preset carries its own size and digest literals. Membership in
 //! [`pam_model::CALIBRATED_ARTIFACTS`] — the measured, known-good set — is a
-//! separate verdict PAM surfaces per preset, not a precondition for offering
+//! separate verdict Pam surfaces per preset, not a precondition for offering
 //! one.
 
 use pam_core::ContentDigest;
@@ -40,7 +40,7 @@ pub struct ModelPreset {
 }
 
 impl ModelPreset {
-    /// Parses the plain hex digest into PAM's canonical `sha256:` form.
+    /// Parses the plain hex digest into Pam's canonical `sha256:` form.
     ///
     /// # Panics
     ///
@@ -52,7 +52,7 @@ impl ModelPreset {
             .expect("catalog digest is a validated 64-hex-char sha256")
     }
 
-    /// True when this exact artifact is in PAM's measured, known-good set.
+    /// True when this exact artifact is in Pam's measured, known-good set.
     /// A false verdict is not a refusal — the runtime loads uncalibrated
     /// artifacts that fit — but the picker says so before tens of GB move.
     #[must_use]
@@ -83,7 +83,7 @@ impl ModelPreset {
 }
 
 /// The largest artifact this host can devote to a model: its runtime ceiling
-/// (physical total less the OS reserve and PAM's own application reserve)
+/// (physical total less the OS reserve and Pam's own application reserve)
 /// minus the projection contingency every admitted load must budget for.
 ///
 /// This is the picker's fit rule, and it is the daemon's own arithmetic —
@@ -99,7 +99,7 @@ pub fn host_model_budget_bytes(host_total_bytes: u64) -> u64 {
     )
 }
 
-/// PAM's model runtime is macOS-only, and so is the host memory probe that
+/// Pam's model runtime is macOS-only, and so is the host memory probe that
 /// feeds this; off macOS nothing is ever measured, so nothing is refused.
 #[cfg(not(target_os = "macos"))]
 #[must_use]
@@ -107,10 +107,10 @@ pub fn host_model_budget_bytes(_host_total_bytes: u64) -> u64 {
     u64::MAX
 }
 
-/// Static curated catalog: exactly the presets PAM offers today.
+/// Static curated catalog: exactly the presets Pam offers today.
 ///
 /// Tiered by quantization from a 32 GiB Mac up to a 128 GiB one. The floor is
-/// the 24B/30B class — PAM's jobs (git history, Sonar logs, evidence) need
+/// the 24B/30B class — Pam's jobs (git history, Sonar logs, evidence) need
 /// real capacity, so nothing smaller belongs here. Which tiers a given Mac
 /// can actually run is [`ModelPreset::fits_host`]; the rest are shown
 /// disabled, with the reason.

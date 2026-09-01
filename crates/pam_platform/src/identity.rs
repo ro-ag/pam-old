@@ -27,7 +27,7 @@ const GIT_REPOSITORY_ENVIRONMENT: [&str; 9] = [
     "GIT_NAMESPACE",
 ];
 
-/// The local PAM surface using an identity for request scoping.
+/// The local Pam surface using an identity for request scoping.
 ///
 /// These labels distinguish local callers; they are not authentication
 /// credentials.
@@ -115,31 +115,31 @@ impl fmt::Display for IdentityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             IdentityErrorKind::UserDataUnavailable => {
-                formatter.write_str("PAM could not locate the current user's data directory.")
+                formatter.write_str("Pam could not locate the current user's data directory.")
             }
             IdentityErrorKind::NotProject => write!(
                 formatter,
-                "PAM could not find a project marker or Git repository from {}.",
+                "Pam could not find a project marker or Git repository from {}.",
                 display_path(self.path.as_deref())
             ),
             IdentityErrorKind::ReadFailed => write!(
                 formatter,
-                "PAM could not read identity state at {}.",
+                "Pam could not read identity state at {}.",
                 display_path(self.path.as_deref())
             ),
             IdentityErrorKind::WriteFailed => write!(
                 formatter,
-                "PAM could not persist identity state at {}.",
+                "Pam could not persist identity state at {}.",
                 display_path(self.path.as_deref())
             ),
             IdentityErrorKind::MalformedFile => write!(
                 formatter,
-                "PAM found malformed identity state at {}; it was left unchanged.",
+                "Pam found malformed identity state at {}; it was left unchanged.",
                 display_path(self.path.as_deref())
             ),
             IdentityErrorKind::UnsupportedVersion => write!(
                 formatter,
-                "PAM found an unsupported identity-state version at {}; it was left unchanged.",
+                "Pam found an unsupported identity-state version at {}; it was left unchanged.",
                 display_path(self.path.as_deref())
             ),
         }
@@ -200,7 +200,7 @@ pub fn caller_id(kind: CallerKind) -> Result<CallerId, IdentityError> {
     caller_id_in(&user_data_dir()?, kind)
 }
 
-/// Returns PAM's platform-appropriate durable per-user data directory.
+/// Returns Pam's platform-appropriate durable per-user data directory.
 ///
 /// # Errors
 ///
@@ -220,7 +220,7 @@ pub fn user_data_dir() -> Result<PathBuf, IdentityError> {
 
 /// Returns the current user's home directory.
 ///
-/// PAM's default model root is `<home>/llm`, so every component that has to
+/// Pam's default model root is `<home>/llm`, so every component that has to
 /// resolve the effective models directory — the GUI's Settings, and the
 /// daemon's registry health capabilities — needs the same home probe. Sharing
 /// one probe keeps them from disagreeing about where weights live.
@@ -241,7 +241,7 @@ pub fn user_home_dir() -> Result<PathBuf, IdentityError> {
         })
 }
 
-/// Returns the durable root PAM's daemon-global flow-definition library opens
+/// Returns the durable root Pam's daemon-global flow-definition library opens
 /// beneath. Flow definitions live at `<root>/.pam/flows`, the same relative
 /// layout a project's local catalog used before flow definitions became
 /// global; only the root changes. Shared by the GUI and CLI so both open the
@@ -801,10 +801,10 @@ fn publish_locked<F>(
 where
     F: Fn(&Path) -> Result<(), IdentityError>,
 {
-    // The persistent OS lock coordinates every PAM writer. Identity values are
+    // The persistent OS lock coordinates every Pam writer. Identity values are
     // scoping labels, not an authentication boundary; defending against
     // hostile out-of-band mutation belongs to the later trust/policy layer.
-    // Under normal PAM operation an existing target is validated and never
+    // Under normal Pam operation an existing target is validated and never
     // overwritten, including when it is malformed.
     if path_exists(path)? {
         validate_existing(path)?;

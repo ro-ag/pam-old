@@ -787,7 +787,7 @@ impl RequestEnvelope {
     /// the request. The daemon owns the durable model registry, so removing a
     /// registration is a routed request rather than a direct store write.
     /// Unregistering removes the registry row only: the weights on disk are
-    /// never touched, because PAM verifies a GGUF in place and usually never
+    /// never touched, because Pam verifies a GGUF in place and usually never
     /// owned the file.
     ///
     /// # Errors
@@ -891,7 +891,7 @@ impl RequestEnvelope {
     ///
     /// Deleting weights and unregistering are two different effects, and this
     /// is the only one that removes bytes. The daemon gates it on provenance:
-    /// it deletes only an artifact PAM itself downloaded that still sits
+    /// it deletes only an artifact Pam itself downloaded that still sits
     /// inside the models directory in effect right now. A GGUF `pam model
     /// import` verified in place belongs to its owner and is refused.
     ///
@@ -1944,9 +1944,9 @@ pub struct ModelVerification {
     /// The failure's own sentence, absent when the model verified.
     pub detail: Option<String>,
     /// Provenance the registry recorded: `local` for a GGUF verified in
-    /// place, `https` for one PAM downloaded.
+    /// place, `https` for one Pam downloaded.
     pub source: String,
-    /// True only when PAM downloaded this artifact and it still sits inside
+    /// True only when Pam downloaded this artifact and it still sits inside
     /// the models directory in effect right now — the exact gate
     /// `model.delete-weights` applies. Computed by the daemon so no caller
     /// has to re-derive the rule.
@@ -1979,7 +1979,7 @@ pub struct OrphanWeightsSummary {
 ///
 /// Reporting is separate from acting: a sweep removes nothing. A dangling row
 /// is cleared with `model.unregister`, and an orphaned file is removed by its
-/// owner or, when PAM downloaded it, through `model.delete-weights`.
+/// owner or, when Pam downloaded it, through `model.delete-weights`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelSweepResult {
     /// The models directory the sweep looked at, resolved.

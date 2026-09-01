@@ -32,7 +32,7 @@ mod skills_test;
 use clap::Parser;
 use command::{Cli, Mode};
 
-/// Runs the PAM client CLI to completion and returns its exit code.
+/// Runs the Pam client CLI to completion and returns its exit code.
 ///
 /// # Panics
 ///
@@ -42,7 +42,7 @@ pub fn run() -> i32 {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("PAM could not start its async runtime")
+        .expect("Pam could not start its async runtime")
         .block_on(run_async())
 }
 
@@ -50,7 +50,7 @@ pub fn run() -> i32 {
 async fn run_async() -> i32 {
     match Cli::parse().mode() {
         Mode::Client => {
-            println!("PAM client ready. Run `pam status` to inspect the daemon.");
+            println!("Pam client ready. Run `pam status` to inspect the daemon.");
             0
         }
         Mode::Status { approval_id } => app::status(approval_id).await,

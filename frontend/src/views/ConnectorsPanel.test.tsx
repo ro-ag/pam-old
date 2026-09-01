@@ -48,7 +48,7 @@ describe("ConnectorsPanel", () => {
     const offline = connectorsProps("offline");
     render(<ConnectorsPanel {...offline} />);
     expect(await screen.findByText(/connector registry is not being served/)).toBeInTheDocument();
-    expect(screen.getByText(/Start PAM to read the connectors/)).toBeInTheDocument();
+    expect(screen.getByText(/Start Pam to read the connectors/)).toBeInTheDocument();
   });
 
   it("saves the enabled switch and base URL through configure with exact params", async () => {

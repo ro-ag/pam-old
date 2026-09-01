@@ -463,7 +463,7 @@ describe("SkillLibraryPanel", () => {
     }
     expect(screen.queryByRole("combobox", { name: "Library entry" })).not.toBeInTheDocument();
     expect(within(entries).queryByText("not inspected")).not.toBeInTheDocument();
-    expect(screen.getByText(/PAM has none open/)).toBeInTheDocument();
+    expect(screen.getByText(/Pam has none open/)).toBeInTheDocument();
     // No project identity anywhere: the gate explains itself, it never offers a pick.
     expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
     expect(fences.every((requestFence) => requestFence.projectHandle === "daemon" && requestFence.generation === "daemon")).toBe(true);

@@ -14,7 +14,7 @@ describe("ConsolePanel", () => {
     render(<ConsolePanel {...props} />);
 
     expect(screen.getByRole("heading", { name: "Debug console" })).toBeInTheDocument();
-    expect(await screen.findByText(/PAM daemon ready/)).toBeInTheDocument();
+    expect(await screen.findByText(/Pam daemon ready/)).toBeInTheDocument();
     expect(screen.getByText(/queued operation failed/)).toBeInTheDocument();
     expect(screen.getAllByText("info", { selector: ".state-pill" })).toHaveLength(2);
     expect(screen.getByText("warn", { selector: ".state-pill" })).toBeInTheDocument();
@@ -27,17 +27,17 @@ describe("ConsolePanel", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const props = consoleProps();
     render(<ConsolePanel {...props} />);
-    await screen.findByText(/PAM daemon ready/);
+    await screen.findByText(/Pam daemon ready/);
 
     await user.click(screen.getByRole("button", { name: "error" }));
     expect(screen.getByText(/queued operation failed/)).toBeInTheDocument();
-    expect(screen.queryByText(/PAM daemon ready/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pam daemon ready/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Copy visible console lines" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied).toContain("ERROR queued operation failed");
-    expect(copied).not.toContain("PAM daemon ready");
+    expect(copied).not.toContain("Pam daemon ready");
   });
 
   it("always loads the log under the exact daemon authority and refreshes on demand", async () => {
@@ -45,7 +45,7 @@ describe("ConsolePanel", () => {
     const props = consoleProps();
     const spy = vi.spyOn(props.bridge, "daemonLogs");
     render(<ConsolePanel {...props} />);
-    await screen.findByText(/PAM daemon ready/);
+    await screen.findByText(/Pam daemon ready/);
 
     expect(spy.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
     await user.click(screen.getByRole("button", { name: "Refresh console" }));

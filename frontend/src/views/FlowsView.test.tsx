@@ -362,7 +362,7 @@ describe("FlowsView runs", () => {
     const bridge = fixtureBridge();
     bridge.flowRunProgress = vi.fn(async (requestFence, run) => ({
       fence: requestFence,
-      data: { runId: run, cursor: 2, facts: [{ kind: "request" as const, label: "Run started", summary: "PAM began the run.", verified: false, evidence: [] }], truncated: false, terminal: false, outcome: null, detailError: null },
+      data: { runId: run, cursor: 2, facts: [{ kind: "request" as const, label: "Run started", summary: "Pam began the run.", verified: false, evidence: [] }], truncated: false, terminal: false, outcome: null, detailError: null },
     }));
     const flowRunCancel = vi.spyOn(bridge, "flowRunCancel");
     const { user } = await openAfterMerge(bridge);
@@ -386,7 +386,7 @@ describe("FlowsView runs", () => {
 
   it("surfaces a refused run without leaving the view polling", async () => {
     const bridge = fixtureBridge();
-    bridge.flowRun = vi.fn(async () => { throw new Error("PAM policy denied flow.run for this caller."); });
+    bridge.flowRun = vi.fn(async () => { throw new Error("Pam policy denied flow.run for this caller."); });
     const flowRunProgress = vi.spyOn(bridge, "flowRunProgress");
     const { user } = await openAfterMerge(bridge);
 

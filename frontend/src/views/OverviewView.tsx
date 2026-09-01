@@ -331,7 +331,7 @@ export function OverviewPanel({ daemon, stats, loadError, modelStatus, onOpenMod
             {loadError}
           </PanelError>
         ) : offline ? (
-          <PanelEmpty>The activity picture returns when PAM is back on watch.</PanelEmpty>
+          <PanelEmpty>The activity picture returns when Pam is back on watch.</PanelEmpty>
         ) : stats && stats.status !== "ok" ? (
           <PanelEmpty>
             {[stats.failure.detail, stats.failure.recovery].filter(Boolean).join(" ")}
@@ -402,7 +402,7 @@ export interface ProjectUsageRow {
 }
 
 // The whole known fleet, not just the active project: every catalog project
-// appears (zero-usage ones included), plus any usage row PAM reports for a
+// appears (zero-usage ones included), plus any usage row Pam reports for a
 // project the catalog does not (yet) know about.
 export function aggregateProjectUsage(
   catalog: ProjectSummaryDto[],
@@ -440,7 +440,7 @@ interface ProjectsPanelProps {
   loadError: string | null;
 }
 
-// The fleet overview: every project PAM knows about, at a glance, with no
+// The fleet overview: every project Pam knows about, at a glance, with no
 // selector — this screen never scopes to one project.
 function ProjectsPanel({ daemon, catalog, stats, loadError }: ProjectsPanelProps) {
   const offline = daemon.state === "stopped";
@@ -463,13 +463,13 @@ function ProjectsPanel({ daemon, catalog, stats, loadError }: ProjectsPanelProps
           {loadError}
         </PanelError>
       ) : offline ? (
-        <PanelEmpty>Project usage returns when PAM is back on watch.</PanelEmpty>
+        <PanelEmpty>Project usage returns when Pam is back on watch.</PanelEmpty>
       ) : stats && stats.status !== "ok" ? (
         <PanelEmpty>
           {[stats.failure.detail, stats.failure.recovery].filter(Boolean).join(" ")}
         </PanelEmpty>
       ) : rows.length === 0 ? (
-        <PanelEmpty>No projects are known to PAM yet.</PanelEmpty>
+        <PanelEmpty>No projects are known to Pam yet.</PanelEmpty>
       ) : (
         <div className="project-usage-list">
           {rows.map((row) => (
@@ -523,7 +523,7 @@ export function OverviewView({
       <header className="project-header compact">
         <div>
           <h1>Overview</h1>
-          <p>Everything PAM watches, at a glance.</p>
+          <p>Everything Pam watches, at a glance.</p>
         </div>
       </header>
       <OverviewPanel

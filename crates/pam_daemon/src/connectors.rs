@@ -420,7 +420,7 @@ impl ConnectorRuntime {
 
     /// Builds the AWS CLI connector for an optional stored profile name.
     ///
-    /// PAM stores no AWS keys: the optional stored value is only a profile
+    /// Pam stores no AWS keys: the optional stored value is only a profile
     /// name passed to the CLI as `--profile`; when absent the CLI resolves
     /// the operator's default credential chain.
     ///

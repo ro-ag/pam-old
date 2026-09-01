@@ -127,7 +127,7 @@ describe("Toolbar", () => {
 const daemonViews: Record<DaemonState, DaemonView> = {
   running: { state: "running", detail: "Running", model: "Daemon 0.9.0", modelMemory: null, queueDepth: 0 },
   stopped: { state: "stopped", detail: "Stopped", model: null, modelMemory: null, queueDepth: null },
-  unavailable: { state: "unavailable", detail: "Checking on PAM…", model: null, modelMemory: null, queueDepth: null },
+  unavailable: { state: "unavailable", detail: "Checking on Pam…", model: null, modelMemory: null, queueDepth: null },
 };
 
 function renderSidebar({
@@ -159,17 +159,17 @@ describe("Sidebar daemon lifecycle", () => {
   it("labels the control with the action and keeps the state as separate status text", () => {
     renderSidebar({ state: "running" });
 
-    const stop = screen.getByRole("button", { name: "Stop PAM" });
+    const stop = screen.getByRole("button", { name: "Stop Pam" });
     expect(stop).not.toHaveAttribute("aria-pressed");
-    expect(screen.queryByRole("button", { name: "Start PAM" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Pam" })).not.toBeInTheDocument();
     expect(document.querySelector(".daemon-status")).toHaveTextContent("Running");
   });
 
   it("labels the control Start while the daemon is stopped", () => {
     renderSidebar({ state: "stopped" });
 
-    expect(screen.getByRole("button", { name: "Start PAM" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Stop PAM" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Pam" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop Pam" })).not.toBeInTheDocument();
     expect(document.querySelector(".daemon-status")).toHaveTextContent("Stopped");
   });
 
@@ -177,7 +177,7 @@ describe("Sidebar daemon lifecycle", () => {
     const user = userEvent.setup();
     const { onToggleDaemon } = renderSidebar({ state: "stopped" });
 
-    await user.click(screen.getByRole("button", { name: "Start PAM" }));
+    await user.click(screen.getByRole("button", { name: "Start Pam" }));
 
     expect(onToggleDaemon).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/unloads the loaded model/)).not.toBeInTheDocument();
@@ -187,10 +187,10 @@ describe("Sidebar daemon lifecycle", () => {
     const user = userEvent.setup();
     const { onToggleDaemon } = renderSidebar({ state: "running" });
 
-    await user.click(screen.getByRole("button", { name: "Stop PAM" }));
+    await user.click(screen.getByRole("button", { name: "Stop Pam" }));
     expect(onToggleDaemon).not.toHaveBeenCalled();
     expect(
-      screen.getByText("Stop PAM? It unloads the loaded model and drops queued work."),
+      screen.getByText("Stop Pam? It unloads the loaded model and drops queued work."),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Keep running" }));
@@ -203,7 +203,7 @@ describe("Sidebar daemon lifecycle", () => {
     const user = userEvent.setup();
     const { onToggleDaemon } = renderSidebar({ state: "running" });
 
-    await user.click(screen.getByRole("button", { name: "Stop PAM" }));
+    await user.click(screen.getByRole("button", { name: "Stop Pam" }));
     await user.click(screen.getByRole("button", { name: "Stop" }));
 
     expect(onToggleDaemon).toHaveBeenCalledTimes(1);
@@ -214,7 +214,7 @@ describe("Sidebar daemon lifecycle", () => {
     const user = userEvent.setup();
     const { onRestartDaemon } = renderSidebar({ state: "stopped" });
 
-    const restart = screen.getByRole("button", { name: "Restart PAM (unavailable while PAM is stopped)" });
+    const restart = screen.getByRole("button", { name: "Restart Pam (unavailable while Pam is stopped)" });
     expect(restart).toBeDisabled();
 
     await user.click(restart);
@@ -224,8 +224,8 @@ describe("Sidebar daemon lifecycle", () => {
   it("keeps the verb in the accessible name while the sidebar is collapsed", () => {
     renderSidebar({ state: "stopped", collapsed: true });
 
-    const start = screen.getByRole("button", { name: "Start PAM" });
-    expect(start).toHaveAttribute("title", "Start PAM");
+    const start = screen.getByRole("button", { name: "Start Pam" });
+    expect(start).toHaveAttribute("title", "Start Pam");
     // The status stays in the accessibility tree; only its glyph is visible.
     expect(document.querySelector(".daemon-status")).toHaveTextContent("Stopped");
   });

@@ -24,7 +24,7 @@ use crate::llama_cpp_macos::{
 };
 
 const GIB: u64 = 1024 * 1024 * 1024;
-/// PAM's documented minimum Mac; its ceiling is the safety floor no host
+/// Pam's documented minimum Mac; its ceiling is the safety floor no host
 /// derivation may loosen.
 const MIN_HOST_BYTES: u64 = 32 * GIB;
 const OWNER_HOST_BYTES: u64 = 64 * GIB;
@@ -94,7 +94,7 @@ fn calibrated_profile_accepts_every_calibrated_artifact() {
     }
 }
 
-/// PAM ships a calibrated artifact its own documented minimum Mac cannot run.
+/// Pam ships a calibrated artifact its own documented minimum Mac cannot run.
 /// Calibration means "measured end to end", not "fits every supported host",
 /// so the honest assertion is per-host: every calibrated artifact clears
 /// admission on a host that can hold it, and the Q6\_K is refused on the
@@ -142,7 +142,7 @@ fn every_calibrated_artifact_passes_admission_on_a_host_that_can_hold_it() {
 #[test]
 fn host_ceiling_scales_with_physical_memory_and_never_loosens_the_minimum_mac() {
     // Physical minus this host's OS reserve — max(8 GiB, 20%), the same rule
-    // the exact accounting enforces — minus PAM's 1 GiB budget.
+    // the exact accounting enforces — minus Pam's 1 GiB budget.
     assert_eq!(host_model_ceiling_bytes(MIN_HOST_BYTES), 24_696_061_952);
     assert_eq!(host_model_ceiling_bytes(OWNER_HOST_BYTES), 53_901_839_564);
     // The retired product-wide constant is the floor's upper bound: the
@@ -439,7 +439,7 @@ fn finish_reason_remains_model_neutral() {
     assert_ne!(RuntimeFinishReason::Stop, RuntimeFinishReason::Length);
 }
 
-/// PAM's own largest calibrated artifact, the Q6\_K in `CALIBRATED_ARTIFACTS`.
+/// Pam's own largest calibrated artifact, the Q6\_K in `CALIBRATED_ARTIFACTS`.
 const LARGEST_CALIBRATED_BYTES: u64 = 25_092_535_456;
 /// Measured M4 Max Metal recommended maximum working set.
 const METAL_WORKING_SET_BYTES: u64 = 55_662_788_608;
@@ -564,7 +564,7 @@ fn largest_calibrated_artifact_is_refused_by_the_minimum_mac_ceiling_not_by_a_la
         } if projected_bytes == admitted && maximum_bytes == min_ceiling
     ));
     // Weights alone are already over: no contingency or projection detail
-    // can rescue 25.09 GB on a Mac that owes 8 GiB to the OS and 1 GiB to PAM.
+    // can rescue 25.09 GB on a Mac that owes 8 GiB to the OS and 1 GiB to Pam.
     assert!(LARGEST_CALIBRATED_BYTES > min_ceiling);
 
     // A 64 GiB Mac admits the same artifact and projection end to end.

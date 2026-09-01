@@ -38,13 +38,13 @@ impl fmt::Display for ExchangeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Correlation(_) => {
-                formatter.write_str("PAM daemon returned an uncorrelated response.")
+                formatter.write_str("Pam daemon returned an uncorrelated response.")
             }
-            Self::DeadlineExceeded => formatter.write_str("PAM daemon request timed out."),
+            Self::DeadlineExceeded => formatter.write_str("Pam daemon request timed out."),
             Self::EventLimitExceeded => {
-                formatter.write_str("PAM daemon response exceeded the event limit.")
+                formatter.write_str("Pam daemon response exceeded the event limit.")
             }
-            Self::Protocol(_) => formatter.write_str("PAM daemon returned an invalid response."),
+            Self::Protocol(_) => formatter.write_str("Pam daemon returned an invalid response."),
             Self::Transport(error) => error.fmt(formatter),
         }
     }

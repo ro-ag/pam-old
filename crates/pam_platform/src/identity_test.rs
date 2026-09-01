@@ -476,7 +476,7 @@ fn initialize_repository(path: &Path) {
     fs::create_dir_all(path).unwrap();
     git(path, &["init", "--quiet", "--initial-branch=main"]);
     git(path, &["config", "user.email", "pam-tests@example.invalid"]);
-    git(path, &["config", "user.name", "PAM Tests"]);
+    git(path, &["config", "user.name", "Pam Tests"]);
     fs::write(path.join("README.md"), "test project\n").unwrap();
     git(path, &["add", "README.md"]);
     git(path, &["commit", "--quiet", "-m", "test fixture"]);

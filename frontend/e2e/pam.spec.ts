@@ -492,7 +492,7 @@ test.describe("Settings view", () => {
     await page.setViewportSize({ width: 1_180, height: 800 });
     await openFixture(page, "solved", "settings");
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Where PAM keeps things" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Where Pam keeps things" })).toBeVisible();
     await expect(page).toHaveScreenshot("settings-light-1180x800.png");
 
     await page.evaluate(() => localStorage.setItem("pam-theme-mode", "dark"));
@@ -573,7 +573,7 @@ test.describe("Skills audit tab", () => {
     await openSkills(page, "Audit", "skill-audit-no-evaluator");
 
     await expect(page.getByText(
-      "Deterministic footprint only — no supported evaluator was available, so PAM did not produce a qualitative verdict.",
+      "Deterministic footprint only — no supported evaluator was available, so Pam did not produce a qualitative verdict.",
     )).toBeVisible();
     await expect(page.getByRole("heading", { name: "Evaluator verdict" })).toHaveCount(0);
     await expect(page.getByText("Saturation grade")).toHaveCount(0);
@@ -675,7 +675,7 @@ test.describe("Skills library tab", () => {
     const panel = page.getByRole("region", { name: "Skill library" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Assignment needs a project; the library above stays global.")).toBeVisible();
-    await expect(panel.getByText(/PAM has none open/)).toBeVisible();
+    await expect(panel.getByText(/Pam has none open/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Enable target" })).toHaveCount(0);
     // Skills is global: no switcher, no picker, no project name in the canvas.
     await expect(page.getByRole("button", { name: /payments-api/ })).toHaveCount(0);

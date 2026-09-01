@@ -53,23 +53,23 @@ impl fmt::Display for TransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             TransportErrorKind::ClientDisconnected => {
-                formatter.write_str("PAM client disconnected before receiving its response.")
+                formatter.write_str("Pam client disconnected before receiving its response.")
             }
             TransportErrorKind::Unavailable => {
-                formatter.write_str("PAM daemon is not reachable. Start it with `pam daemon`.")
+                formatter.write_str("Pam daemon is not reachable. Start it with `pam daemon`.")
             }
             TransportErrorKind::EndpointInUse => formatter
-                .write_str("PAM daemon ownership is already claimed. Check it with `pam status`."),
+                .write_str("Pam daemon ownership is already claimed. Check it with `pam status`."),
             TransportErrorKind::FrameTooLarge => {
-                formatter.write_str("PAM rejected an oversized local protocol message.")
+                formatter.write_str("Pam rejected an oversized local protocol message.")
             }
             TransportErrorKind::StaleEndpoint => formatter.write_str(
-                "PAM daemon endpoint is stale. Restart PAM from the control center (`pam gui`).",
+                "Pam daemon endpoint is stale. Restart Pam from the control center (`pam gui`).",
             ),
             TransportErrorKind::InvalidMessage => {
-                formatter.write_str("PAM received an invalid local protocol message.")
+                formatter.write_str("Pam received an invalid local protocol message.")
             }
-            TransportErrorKind::Internal => formatter.write_str("PAM local transport failed."),
+            TransportErrorKind::Internal => formatter.write_str("Pam local transport failed."),
         }
     }
 }

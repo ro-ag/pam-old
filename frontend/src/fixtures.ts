@@ -105,7 +105,7 @@ const activityEvents: ActivityEventDto[] = [
 ];
 
 const daemonLogEntries: DaemonLogEntryDto[] = [
-  { timestampMs: 1_777_001_300_000, severity: "info", message: "PAM daemon ready (version fixture-0.1.0, protocol 8)." },
+  { timestampMs: 1_777_001_300_000, severity: "info", message: "Pam daemon ready (version fixture-0.1.0, protocol 8)." },
   { timestampMs: 1_777_001_405_000, severity: "warn", message: "rejected malformed client frame: expected identity and body frames, received 3" },
   { timestampMs: 1_777_001_500_000, severity: "error", message: "queued operation failed: store row for request gui-flow-7 vanished mid-lease" },
   { timestampMs: 1_777_001_521_000, severity: "info", message: "request handler completed project.current in 12 ms" },
@@ -329,8 +329,8 @@ export function fixtureScenario(value: string | null | undefined): FixtureScenar
 
 const FIXTURE_MODELS_DIR = "/Users/example/llm";
 // Provenance decides which row may offer Delete weights: the 14B was
-// downloaded by PAM into its models directory, the 4B was imported in place
-// from somewhere the user owns and is never PAM's to delete.
+// downloaded by Pam into its models directory, the 4B was imported in place
+// from somewhere the user owns and is never Pam's to delete.
 const fixtureModelPaths: Record<string, { path: string; source: string }> = {
   "qwen/qwen3-14b-instruct-q4": { path: `${FIXTURE_MODELS_DIR}/qwen/qwen3-14b-instruct-q4.gguf`, source: "https" },
   "qwen/qwen3-4b-instruct-q4": { path: "/Users/example/Downloads/qwen3-4b-instruct-q4.gguf", source: "local" },
@@ -342,7 +342,7 @@ const registeredModels: ModelSummaryDto[] = [
   { modelId: "qwen/qwen3-4b-instruct-q4", sizeBytes: 2_800_000_000 },
 ];
 
-// A real 32 GB Mac (hw.memsize reports binary GiB) — PAM's supported system
+// A real 32 GB Mac (hw.memsize reports binary GiB) — Pam's supported system
 // minimum. Tests that need the below-minimum banner override hostMemory.
 const FIXTURE_HOST_MEMORY_BYTES = 34_359_738_368;
 const FIXTURE_SUPPORTED_MINIMUM_BYTES = 34_359_738_368;
@@ -406,7 +406,7 @@ const unavailableFailure = {
   kind: "unavailable" as const,
   code: null,
   detail: "The authenticated daemon is unavailable for this project.",
-  recovery: "Start PAM, then retry the authenticated project refresh.",
+  recovery: "Start Pam, then retry the authenticated project refresh.",
 };
 
 function solvedSnapshot(project: ProjectSummaryDto, daemonRunning: boolean): SnapshotDataDto {
@@ -679,15 +679,15 @@ function snapshot(project: ProjectSummaryDto, daemonRunning: boolean, scenario: 
   }
 
   if (scenario === "missing-credential") {
-    const detail = "PAM has no native caller credential for this caller.";
-    const recovery = "Use Register GUI caller in PAM.";
+    const detail = "Pam has no native caller credential for this caller.";
+    const recovery = "Use Register GUI caller in Pam.";
     const failure = { kind: "unavailable" as const, code: "gui_registration_required", detail, recovery };
     data.health = { status: "degraded", detail, recovery };
     data.current = { status: "unavailable", failure };
     data.access = { status: "unavailable", failure };
   }
   if (scenario === "offline") {
-    // The daemon can be started from a paused fixture (e.g. "Start PAM with
+    // The daemon can be started from a paused fixture (e.g. "Start Pam with
     // this model"); snapshots then report the now-running daemon.
     return solvedSnapshot(project, daemonRunning);
   }
@@ -760,7 +760,7 @@ function refusePastedDownload(
   const urlRecovery = "Paste the direct https:// URL of the .gguf file itself.";
   if (!source.accepted) {
     return refuse(
-      "PAM records the exact license you accept before it downloads anything.",
+      "Pam records the exact license you accept before it downloads anything.",
       "Accept this model's license, then start the download.",
     );
   }
@@ -776,34 +776,34 @@ function refusePastedDownload(
   try {
     parsed = new URL(raw);
   } catch {
-    return refuse("PAM could not read that as a URL.", urlRecovery);
+    return refuse("Pam could not read that as a URL.", urlRecovery);
   }
   if (parsed.protocol !== "https:") {
     return refuse(
-      `PAM downloads models over HTTPS only; this URL uses the ${parsed.protocol.replace(":", "")} scheme.`,
+      `Pam downloads models over HTTPS only; this URL uses the ${parsed.protocol.replace(":", "")} scheme.`,
       urlRecovery,
     );
   }
   if (parsed.username !== "" || parsed.password !== "") {
     return refuse(
-      "PAM refuses a download URL that carries embedded credentials.",
+      "Pam refuses a download URL that carries embedded credentials.",
       "Remove the user:password@ part of the URL and paste it again.",
     );
   }
   if (parsed.search !== "" || parsed.hash !== "") {
     return refuse(
-      "PAM refuses a download URL with a query string or fragment; provenance records only the plain URL.",
+      "Pam refuses a download URL with a query string or fragment; provenance records only the plain URL.",
       "Paste the URL with everything from the ? or # onward removed.",
     );
   }
   if (parsed.port !== "" && parsed.port !== "443") {
     return refuse(
-      `PAM downloads models from port 443 only; this URL uses port ${parsed.port}.`,
+      `Pam downloads models from port 443 only; this URL uses port ${parsed.port}.`,
       "Paste a plain https:// URL with no explicit port.",
     );
   }
   if (!/\/[^/]+\.gguf$/i.test(parsed.pathname)) {
-    return refuse("That URL does not end in a .gguf file name PAM can save.", urlRecovery);
+    return refuse("That URL does not end in a .gguf file name Pam can save.", urlRecovery);
   }
   if (!/^(sha256:)?[0-9a-f]{64}$/i.test(source.sha256.trim())) {
     return refuse(
@@ -819,7 +819,7 @@ function refusePastedDownload(
   }
   if (source.licenseNoticeText.trim() === "") {
     return refuse(
-      "PAM records the exact license notice you accept, so it cannot be empty.",
+      "Pam records the exact license notice you accept, so it cannot be empty.",
       "Paste the license notice text exactly as the publisher states it.",
     );
   }
@@ -969,11 +969,11 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     { capability: "model.infer", name: "Model inference", summary: "Chat and the Models view model check ask the loaded model to generate.", granted: scenario !== "model-infer-blocked" },
     { capability: "model.register", name: "Model registration", summary: "Models registers an imported or downloaded GGUF in the daemon's registry.", granted: true },
     { capability: "model.load", name: "Model loading", summary: "Models brings a registered model into the running daemon, replacing whatever it was serving.", granted: scenario !== "model-load-blocked" },
-    { capability: "model.unload", name: "Model unloading", summary: "Models drops the loaded model and frees its memory; PAM keeps serving.", granted: scenario !== "model-load-blocked" },
+    { capability: "model.unload", name: "Model unloading", summary: "Models drops the loaded model and frees its memory; Pam keeps serving.", granted: scenario !== "model-load-blocked" },
     { capability: "model.unregister", name: "Model removal", summary: "Models removes a registered model from the daemon's registry; the weights stay on disk.", granted: scenario !== "model-unregister-blocked" },
     { capability: "model.verify", name: "Model verification", summary: "Models re-reads registered weights and reports what no longer matches the registry.", granted: scenario !== "model-verify-blocked" },
     { capability: "model.sweep", name: "Model directory sweep", summary: "Models reconciles the registry against the models directory and reports what it costs.", granted: scenario !== "model-verify-blocked" },
-    { capability: "model.delete-weights", name: "Model weights deletion", summary: "Models deletes a GGUF PAM downloaded into its own models directory and unregisters it.", granted: true },
+    { capability: "model.delete-weights", name: "Model weights deletion", summary: "Models deletes a GGUF Pam downloaded into its own models directory and unregisters it.", granted: true },
     { capability: "network.diagnostics", name: "Access boundary read", summary: "Access reads the daemon's observed TLS roots, proxy environment, and PAC state.", granted: true },
     { capability: "connector.configure", name: "Connector configuration", summary: "Access saves a connector's enablement, base URL, and credential.", granted: scenario !== "connector-blocked" },
     { capability: "connector.test", name: "Connector self-test", summary: "Access runs a connector's self-test against its configured host.", granted: scenario !== "connector-blocked" },
@@ -1025,7 +1025,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     runId,
     cursor: 4,
     facts: [
-      { kind: "request", label: "Run started", summary: "PAM began the run.", verified: false, evidence: [] },
+      { kind: "request", label: "Run started", summary: "Pam began the run.", verified: false, evidence: [] },
       { kind: "evidence", label: "Evidence found", summary: "Step observe-revision recorded 1 evidence item(s).", verified: false, evidence: [evidenceHandles[0]] },
       { kind: "verification", label: "Verification passed", summary: "All checks green on PR #1842", verified: true, evidence: [evidenceHandles[1]] },
     ],
@@ -1051,7 +1051,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     mode: "fixture",
     async bootstrap() {
       if (scenario === "loading") return new Promise(() => {});
-      if (scenario === "startup-error") throw new Error("The PAM daemon fixture is unavailable.");
+      if (scenario === "startup-error") throw new Error("The Pam daemon fixture is unavailable.");
       return {
         catalog: { projects: clone(catalogProjects), warning: null },
         snapshot: active
@@ -1073,8 +1073,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           status: "unavailable",
           failure: {
             code: "daemon_offline",
-            detail: "PAM is paused, so no daemon activity is being recorded.",
-            recovery: "Start PAM to resume the activity feed.",
+            detail: "Pam is paused, so no daemon activity is being recorded.",
+            recovery: "Start Pam to resume the activity feed.",
           },
         };
       }
@@ -1088,8 +1088,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           status: "unavailable",
           failure: {
             code: "daemon_offline",
-            detail: "PAM is paused, so no daemon diagnostics are being recorded.",
-            recovery: "Start PAM to resume the console.",
+            detail: "Pam is paused, so no daemon diagnostics are being recorded.",
+            recovery: "Start Pam to resume the console.",
           },
         };
       }
@@ -1103,8 +1103,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           status: "unavailable",
           failure: {
             code: "daemon_offline",
-            detail: "PAM is paused, so activity statistics are unavailable.",
-            recovery: "Start PAM to see the activity overview.",
+            detail: "Pam is paused, so activity statistics are unavailable.",
+            recovery: "Start Pam to see the activity overview.",
           },
         };
       }
@@ -1147,8 +1147,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: "daemon_offline",
-            detail: "PAM is paused, so the local model cannot answer.",
-            recovery: "Start PAM to chat with the local model.",
+            detail: "Pam is paused, so the local model cannot answer.",
+            recovery: "Start Pam to chat with the local model.",
           },
         };
       }
@@ -1185,8 +1185,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: "daemon_offline",
-            detail: "PAM is paused, so it cannot load a model.",
-            recovery: "Start PAM, then load the model.",
+            detail: "Pam is paused, so it cannot load a model.",
+            recovery: "Start Pam, then load the model.",
           },
         };
       }
@@ -1333,7 +1333,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     },
     async modelDeleteWeights(_fence, model): Promise<ModelDeleteWeightsDto> {
       const provenance = fixtureModelPaths[model];
-      // PAM refuses any artifact it did not download, in the daemon's own
+      // Pam refuses any artifact it did not download, in the daemon's own
       // words, and says what the user can do instead.
       if (!provenance || provenance.source !== "https") {
         return {
@@ -1341,7 +1341,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: null,
-            detail: `PAM did not download this model, so it will not delete the file at ${provenance?.path ?? model}`,
+            detail: `Pam did not download this model, so it will not delete the file at ${provenance?.path ?? model}`,
             recovery: `Run \`pam model unregister ${model} --yes\` to drop the registry entry, then delete ${provenance?.path ?? "the file"} yourself.`,
           },
         };
@@ -1374,8 +1374,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: "daemon_offline",
-            detail: "PAM is paused, so the model registry is not accepting imports.",
-            recovery: "Start PAM, then import the model again.",
+            detail: "Pam is paused, so the model registry is not accepting imports.",
+            recovery: "Start Pam, then import the model again.",
           },
         };
       }
@@ -1488,7 +1488,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         failure: {
           kind: "unavailable",
           code: "model_invalid",
-          detail: "Point PAM at a downloaded .gguf file.",
+          detail: "Point Pam at a downloaded .gguf file.",
           recovery: null,
         },
       });
@@ -1518,8 +1518,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: "daemon_offline",
-            detail: "PAM is paused, so it cannot start a download.",
-            recovery: "Start PAM, then try the download again.",
+            detail: "Pam is paused, so it cannot start a download.",
+            recovery: "Start Pam, then try the download again.",
           },
         };
       }
@@ -1529,7 +1529,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
         if (!preset) {
           return {
             status: "unavailable",
-            failure: { kind: "unavailable", code: "unknown_preset", detail: "This preset is not offered by PAM.", recovery: null },
+            failure: { kind: "unavailable", code: "unknown_preset", detail: "This preset is not offered by Pam.", recovery: null },
           };
         }
         started = { downloadId: preset.id, downloadKind: "preset", model: preset.model, totalBytes: preset.expectedSizeBytes };
@@ -1652,9 +1652,9 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: null,
-            detail: "a running daemon still owns PAM's durable state",
+            detail: "a running daemon still owns Pam's durable state",
             recovery:
-              "Stop PAM first -- quit the running `pam daemon`, or press Stop in the PAM control center -- then run the reset again.",
+              "Stop Pam first -- quit the running `pam daemon`, or press Stop in the Pam control center -- then run the reset again.",
           },
         };
       }
@@ -1675,7 +1675,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     },
     async revealPath(_fence, path): Promise<void> {
       const known = [modelsDir, FIXTURE_DATA_DIR, FIXTURE_FLOWS_DIR, FIXTURE_LOGS_DIR];
-      if (!known.includes(path)) throw new Error("This path is not a PAM Settings location.");
+      if (!known.includes(path)) throw new Error("This path is not a Pam Settings location.");
     },
     async callerRegistry(_fence): Promise<CallersDto> {
       if (!daemonRunning) {
@@ -1683,8 +1683,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           status: "unavailable",
           failure: {
             code: "daemon_offline",
-            detail: "PAM is paused, so the caller registry is not being served.",
-            recovery: "Start PAM to read the registered callers.",
+            detail: "Pam is paused, so the caller registry is not being served.",
+            recovery: "Start Pam to read the registered callers.",
           },
         };
       }
@@ -1696,20 +1696,20 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
       if (!daemonRunning) {
         return clone({
           status: "unavailable" as const,
-          failure: { kind: "unavailable" as const, code: "daemon_offline", detail: "PAM is paused, so no access boundary is being reported.", recovery: "Start PAM to read the observed boundary." },
+          failure: { kind: "unavailable" as const, code: "daemon_offline", detail: "Pam is paused, so no access boundary is being reported.", recovery: "Start Pam to read the observed boundary." },
         });
       }
       if (scenario === "access-blocked") {
         return clone({
           status: "blocked" as const,
-          failure: { kind: "blocked" as const, code: "Forbidden", detail: "Network diagnostics are blocked by policy for this PAM window.", recovery: "Grant network.diagnostics for this GUI caller, then retry." },
+          failure: { kind: "blocked" as const, code: "Forbidden", detail: "Network diagnostics are blocked by policy for this Pam window.", recovery: "Grant network.diagnostics for this GUI caller, then retry." },
           approvalId: null,
           expiresAtMs: null,
         });
       }
       return clone({
         status: "available" as const,
-        truth: "System trust and proxy discovery are available to this PAM window.",
+        truth: "System trust and proxy discovery are available to this Pam window.",
         platformRootsEnabled: true,
         systemProxyDiscoveryEnabled: true,
         proxyEnvironment: "not configured",
@@ -1722,7 +1722,7 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
     },
     async setDaemonAccess(_fence, capability, granted): Promise<DaemonAccessDto> {
       const row = daemonCapabilities.find((candidate) => candidate.capability === capability);
-      if (!row) throw new Error("This is not a daemon-scoped capability the PAM window uses.");
+      if (!row) throw new Error("This is not a daemon-scoped capability the Pam window uses.");
       row.granted = granted;
       return { capabilities: clone(daemonCapabilities) };
     },
@@ -1733,8 +1733,8 @@ export function fixtureBridge(scenario: FixtureScenario = "solved"): PamBridge {
           failure: {
             kind: "unavailable",
             code: "daemon_offline",
-            detail: "PAM is paused, so the connector registry is not being served.",
-            recovery: "Start PAM to read the connectors.",
+            detail: "Pam is paused, so the connector registry is not being served.",
+            recovery: "Start Pam to read the connectors.",
           },
         };
       }

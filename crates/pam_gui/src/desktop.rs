@@ -107,7 +107,7 @@ const DAEMON_STOP_GRACE: Duration = Duration::from_secs(5);
 const DAEMON_STOP_POLL: Duration = Duration::from_millis(50);
 const GUI_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const GUI_REGISTRATION_ARGS: [&str; 4] = ["caller", "register", "--kind", "gui"];
-const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in PAM.";
+const GUI_REGISTRATION_RECOVERY: &str = "Use Register GUI caller in Pam.";
 const MODEL_INFER_DEFAULT_OUTPUT_TOKENS: u32 = 512;
 /// The reserved client-side authority literal for daemon-scoped commands.
 const DAEMON_AUTHORITY: &str = "daemon";
@@ -962,10 +962,10 @@ pub struct ModelHealthDto {
     pub health: String,
     /// The failure's own sentence, absent when the model verified.
     pub detail: Option<String>,
-    /// `local` for a GGUF PAM verified in place, `https` for one it
+    /// `local` for a GGUF Pam verified in place, `https` for one it
     /// downloaded.
     pub source: String,
-    /// True only when PAM downloaded this artifact and it still sits inside
+    /// True only when Pam downloaded this artifact and it still sits inside
     /// the models directory in effect right now — the daemon's own gate, so
     /// the view never re-derives it.
     pub weights_deletable: bool,
@@ -1070,7 +1070,7 @@ pub struct ModelImportStatusDto {
     pub hashed_bytes: u64,
     pub total_bytes: u64,
     pub failure: Option<FailureDto>,
-    /// True when the completed artifact is one of PAM's calibrated GGUFs.
+    /// True when the completed artifact is one of Pam's calibrated GGUFs.
     /// Only meaningful on `complete`; false while idle, running, or failed.
     pub calibrated: bool,
 }
@@ -1132,11 +1132,11 @@ pub struct ModelPresetDto {
     pub license_id: String,
     pub license_url: String,
     pub license_notice_text: String,
-    /// True when this exact artifact is in PAM's measured, known-good set.
+    /// True when this exact artifact is in Pam's measured, known-good set.
     /// False is not a refusal — the picker warns, it does not hide.
     pub calibrated: bool,
     /// Whether this Mac can run the preset, by the daemon's own admission
-    /// arithmetic. True when the host memory probe is unavailable: PAM
+    /// arithmetic. True when the host memory probe is unavailable: Pam
     /// refuses nothing it could not measure.
     pub fits_host: bool,
     pub params_label: String,
@@ -1237,11 +1237,11 @@ pub struct DaemonStartupProgressDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostMemoryDto {
     pub total_bytes: u64,
-    /// PAM's supported system minimum: local AI needs a 32 GiB machine.
+    /// Pam's supported system minimum: local AI needs a 32 GiB machine.
     pub supported_minimum_bytes: u64,
 }
 
-/// Settings v1: visibility into where PAM keeps things, and the one
+/// Settings v1: visibility into where Pam keeps things, and the one
 /// persisted preference so far. Global, like [`Self::model_presets`] and
 /// [`Self::host_memory`] — it works under the daemon authority with zero
 /// active projects.
@@ -1255,7 +1255,7 @@ pub struct AppSettingsDto {
     pub models_dir: String,
     pub models_dir_is_default: bool,
     /// The `vendor/name` a daemon start loads when the GUI asks for no
-    /// specific model, or `null` when PAM starts with no model at all. It is
+    /// specific model, or `null` when Pam starts with no model at all. It is
     /// a pin, not a promise: a model that is later unregistered stays pinned
     /// here until it is changed, and the daemon says plainly that it is gone.
     pub default_model: Option<String>,
@@ -1598,10 +1598,10 @@ impl DesktopCore {
             }
             return Err(DesktopErrorDto::unavailable(
                 last_error.unwrap_or_else(|| {
-                    "PAM could not find a project in the launch context or ptrack catalog."
+                    "Pam could not find a project in the launch context or ptrack catalog."
                         .to_owned()
                 }),
-                Some("Open PAM from a Git repository or initialized PAM project.".to_owned()),
+                Some("Open Pam from a Git repository or initialized Pam project.".to_owned()),
             ));
         };
         let surfaces =
@@ -1678,7 +1678,7 @@ impl DesktopCore {
                 }
                 return Err(DesktopErrorDto::unavailable(
                     error.to_string(),
-                    Some("Choose a Git repository or initialized PAM project.".to_owned()),
+                    Some("Choose a Git repository or initialized Pam project.".to_owned()),
                 ));
             }
         };
@@ -1723,7 +1723,7 @@ impl DesktopCore {
         self.finish_snapshot(fence, active, surfaces).await
     }
 
-    /// Starts the configured PAM daemon. Under a project fence it returns a
+    /// Starts the configured Pam daemon. Under a project fence it returns a
     /// newly fenced snapshot; under the daemon authority it returns no
     /// snapshot and spawns from the user home directory.
     ///
@@ -1759,7 +1759,7 @@ impl DesktopCore {
         let endpoint = LocalEndpoint::default_for_user();
         let grant = pam_platform::issue_launch_grant(endpoint.runtime_dir()).map_err(|error| {
             DesktopErrorDto::unavailable(
-                "PAM could not authorize a daemon launch.",
+                "Pam could not authorize a daemon launch.",
                 Some(error.to_string()),
             )
         })?;
@@ -1767,7 +1767,7 @@ impl DesktopCore {
             .spawn()
             .map_err(|error| {
                 DesktopErrorDto::unavailable(
-                    "PAM could not start the local daemon.",
+                    "Pam could not start the local daemon.",
                     Some(error.to_string()),
                 )
             })?;
@@ -1978,7 +1978,7 @@ impl DesktopCore {
         }
     }
 
-    /// Registers the GUI caller through the bundled PAM helper and refreshes
+    /// Registers the GUI caller through the bundled Pam helper and refreshes
     /// the authenticated project snapshot.
     ///
     /// # Errors
@@ -2121,7 +2121,7 @@ impl DesktopCore {
         let legacy_root = scope.project_root();
         let (model, migrated) = tokio::task::spawn_blocking(move || {
             // The global library root is not a project directory a user
-            // creates; it is PAM's own user-data directory, so it may not
+            // creates; it is Pam's own user-data directory, so it may not
             // exist yet on a fresh install. Unlike a missing project root
             // (a real error), a missing global root is created on first use.
             std::fs::create_dir_all(&root).map_err(FlowEditorError::ProjectRoot)?;
@@ -2136,7 +2136,7 @@ impl DesktopCore {
         .map_err(|_| {
             DesktopErrorDto::new(
                 DesktopErrorKind::Internal,
-                "PAM could not join the flow catalog worker.",
+                "Pam could not join the flow catalog worker.",
                 None,
             )
         })?
@@ -2383,7 +2383,7 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Starts a guided background import of a user-owned GGUF: PAM hashes
+    /// Starts a guided background import of a user-owned GGUF: Pam hashes
     /// the file and the accepted license notice itself, verifies the
     /// artifact through the shared import path, and registers it durably —
     /// all off the command gate, so hashing a multi-GB file never starves
@@ -2451,7 +2451,7 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Drops the loaded model and frees its memory, leaving PAM serving.
+    /// Drops the loaded model and frees its memory, leaving Pam serving.
     ///
     /// Nothing durable goes: the registration and the weights both stay, and
     /// [`Self::model_load`] brings the same model back. Inference afterwards
@@ -2515,7 +2515,7 @@ impl DesktopCore {
     /// This is the registry's health, not the loaded model's: it is the
     /// standalone form of the check the runtime runs before it maps a model,
     /// so a moved, truncated or drifted artifact is discoverable without
-    /// starting PAM on it. Distinct from the panel's model check, which asks
+    /// starting Pam on it. Distinct from the panel's model check, which asks
     /// the loaded model to answer.
     ///
     /// # Errors
@@ -2547,7 +2547,7 @@ impl DesktopCore {
     ///
     /// Reporting is separate from acting: nothing is removed here. A dangling
     /// row is cleared with [`Self::model_unregister`], and an orphaned file
-    /// PAM downloaded goes through [`Self::model_delete_weights`].
+    /// Pam downloaded goes through [`Self::model_delete_weights`].
     ///
     /// # Errors
     ///
@@ -2565,10 +2565,10 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Deletes one PAM-downloaded model's weights and unregisters it.
+    /// Deletes one Pam-downloaded model's weights and unregisters it.
     ///
     /// Unregistering and deleting weights stay two operations, and only this
-    /// one removes bytes. The daemon owns the provenance gate: a GGUF PAM only
+    /// one removes bytes. The daemon owns the provenance gate: a GGUF Pam only
     /// ever verified in place belongs to its owner and is refused with an
     /// explanation, never silently.
     ///
@@ -2721,7 +2721,7 @@ impl DesktopCore {
     ///
     /// The fit verdict is computed here, not in the frontend, so the picker
     /// and the daemon's load-time admission share one rule. A failed probe
-    /// leaves the budget `None` and every preset marked as fitting — PAM
+    /// leaves the budget `None` and every preset marked as fitting — Pam
     /// refuses nothing it could not measure.
     ///
     /// # Errors
@@ -2867,7 +2867,7 @@ impl DesktopCore {
         Ok(data)
     }
 
-    /// Reports Settings v1: where models download to, where PAM's local
+    /// Reports Settings v1: where models download to, where Pam's local
     /// data lives, and the daemon's on-disk log location and size.
     ///
     /// Daemon-authority only, like [`Self::daemon_health`]: Settings has no
@@ -2877,7 +2877,7 @@ impl DesktopCore {
     ///
     /// Returns a bounded error when the fence is not the exact daemon
     /// authority, its operation UUID was replayed, or the home directory or
-    /// PAM's local data directory cannot be resolved.
+    /// Pam's local data directory cannot be resolved.
     pub async fn app_settings(&self, fence: CommandFence) -> DesktopResult<AppSettingsDto> {
         let _command = self.command_gate.lock().await;
         self.begin_daemon(&fence).await?;
@@ -2892,7 +2892,7 @@ impl DesktopCore {
     ///
     /// Returns a bounded error when the fence is not the exact daemon
     /// authority, its operation UUID was replayed, or `models_dir` is
-    /// relative, escapes with `..`, or names a directory PAM cannot create.
+    /// relative, escapes with `..`, or names a directory Pam cannot create.
     pub async fn settings_update(
         &self,
         fence: CommandFence,
@@ -3048,7 +3048,7 @@ impl DesktopCore {
     /// this only guards against revealing an arbitrary filesystem path chosen
     /// by the frontend.
     ///
-    /// Registered weights are on the list because PAM refuses to delete a GGUF
+    /// Registered weights are on the list because Pam refuses to delete a GGUF
     /// it never downloaded: showing the owner where their own file is, is the
     /// only thing the app can honestly offer instead.
     ///
@@ -3067,7 +3067,7 @@ impl DesktopCore {
             Ok(())
         } else {
             Err(DesktopErrorDto::invalid_input(
-                "This path is not a PAM Settings location or a registered model.",
+                "This path is not a Pam Settings location or a registered model.",
             ))
         }
     }
@@ -3335,7 +3335,7 @@ impl DesktopCore {
             .await
             .map_err(|_| {
                 DesktopErrorDto::unavailable(
-                    "PAM could not join the bounded skill library action.",
+                    "Pam could not join the bounded skill library action.",
                     Some("Retry the exact skill library action.".to_owned()),
                 )
             })?
@@ -3510,7 +3510,7 @@ impl DesktopCore {
         Ok(FlowSaveDto { fence, data })
     }
 
-    /// Runs one global flow definition against the project PAM is open on.
+    /// Runs one global flow definition against the project Pam is open on.
     ///
     /// The definition is daemon-global; the run it starts is not. The project
     /// is bound here, at invocation time, mirroring the CLI's own rule that
@@ -3537,7 +3537,7 @@ impl DesktopCore {
             ensure_scope_matches(&state, &scope, &fence)?;
             let active = state.active.clone().ok_or_else(|| {
                 DesktopErrorDto::stale(
-                    "PAM has no open project to bind this run to. Open a project and run the flow again.",
+                    "Pam has no open project to bind this run to. Open a project and run the flow again.",
                 )
             })?;
             let workspace = workspace_mut(&mut state)?;
@@ -3561,7 +3561,7 @@ impl DesktopCore {
         };
         let Some(project_root) = project_root.to_str().map(str::to_owned) else {
             return Err(DesktopErrorDto::unavailable(
-                "PAM cannot bind a run to a project root that is not valid UTF-8.",
+                "Pam cannot bind a run to a project root that is not valid UTF-8.",
                 None,
             ));
         };
@@ -3571,7 +3571,7 @@ impl DesktopCore {
                 |error| {
                     DesktopErrorDto::new(
                         DesktopErrorKind::InvalidInput,
-                        format!("PAM could not construct the bounded flow request: {error}"),
+                        format!("Pam could not construct the bounded flow request: {error}"),
                         Some("Validate the flow definition and try the run again.".to_owned()),
                     )
                 },
@@ -3861,7 +3861,7 @@ fn daemon_stderr_capture() -> Stdio {
 /// file when the data directory cannot be resolved.
 fn daemon_stderr_log_hint() -> String {
     let location = user_data_dir().map_or_else(
-        |_| "logs/daemon-stderr.log under the PAM data directory".to_owned(),
+        |_| "logs/daemon-stderr.log under the Pam data directory".to_owned(),
         |dir| {
             dir.join("logs")
                 .join("daemon-stderr.log")
@@ -4151,7 +4151,7 @@ where
 fn startup_exit_status(child: &mut Child) -> DesktopResult<Option<std::process::ExitStatus>> {
     child.try_wait().map_err(|error| {
         DesktopErrorDto::unavailable(
-            "PAM could not inspect the local daemon process.",
+            "Pam could not inspect the local daemon process.",
             Some(error.to_string()),
         )
     })
@@ -4172,7 +4172,7 @@ fn still_starting_notice(budget: Duration) -> DesktopErrorDto {
             "The local daemon is still starting: it is running but had not finished loading after {} seconds.",
             budget.as_secs()
         ),
-        Some("Leave PAM running; the model panel reports the load when it finishes.".to_owned()),
+        Some("Leave Pam running; the model panel reports the load when it finishes.".to_owned()),
     )
 }
 
@@ -4220,20 +4220,20 @@ async fn run_gui_registration(executable: &Path, root: &Path) -> DesktopResult<(
         .await
         .map_err(|_| {
             DesktopErrorDto::unavailable(
-                "PAM GUI caller registration exceeded its 15 second deadline.",
+                "Pam GUI caller registration exceeded its 15 second deadline.",
                 Some("Retry GUI caller registration.".to_owned()),
             )
         })?
         .map_err(|error| {
             DesktopErrorDto::unavailable(
-                "PAM could not start its bundled caller-registration helper.",
+                "Pam could not start its bundled caller-registration helper.",
                 Some(error.to_string()),
             )
         })?;
     if !output.status.success() {
         return Err(DesktopErrorDto::unavailable(
             registration_failure_detail(&output),
-            Some("Retry registration or inspect the local PAM data store.".to_owned()),
+            Some("Retry registration or inspect the local Pam data store.".to_owned()),
         ));
     }
     Ok(())
@@ -4242,8 +4242,8 @@ async fn run_gui_registration(executable: &Path, root: &Path) -> DesktopResult<(
 pub(crate) fn registration_failure_detail(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
-        Some(reason) => format!("PAM GUI caller registration failed: {reason}"),
-        None => format!("PAM GUI caller registration failed with {}.", output.status),
+        Some(reason) => format!("Pam GUI caller registration failed: {reason}"),
+        None => format!("Pam GUI caller registration failed with {}.", output.status),
     }
 }
 
@@ -4989,7 +4989,7 @@ async fn resolve_download_source(
             let preset = model_presets::find(&preset_id).ok_or_else(|| {
                 unavailable_failure(
                     Some("unknown_preset".to_owned()),
-                    "This preset is not offered by PAM.",
+                    "This preset is not offered by Pam.",
                     Some("Reload the preset list and select it again.".to_owned()),
                 )
             })?;
@@ -5013,7 +5013,7 @@ async fn resolve_download_source(
         .map_err(|_| {
             unavailable_failure(
                 Some("download_source_unchecked".to_owned()),
-                "PAM could not check that download URL.",
+                "Pam could not check that download URL.",
                 Some("Retry the download.".to_owned()),
             )
         })?
@@ -5066,7 +5066,7 @@ async fn registered_model_catalog() -> Option<Vec<ModelSummaryDto>> {
 
 /// True when `path` is exactly the recorded path of one registered model.
 ///
-/// The allowlist is durable state PAM already trusts, read straight from the
+/// The allowlist is durable state Pam already trusts, read straight from the
 /// registry, so the frontend can never widen it by naming a path itself.
 async fn registered_model_path(path: &str) -> bool {
     let Ok(state_path) = user_data_dir().map(|dir| dir.join("state.sqlite3")) else {
@@ -5629,7 +5629,7 @@ fn unavailable_failure(
 fn settings_data_dir() -> DesktopResult<PathBuf> {
     user_data_dir().map_err(|error| {
         DesktopErrorDto::unavailable(
-            "PAM could not resolve its local data directory.",
+            "Pam could not resolve its local data directory.",
             Some(error.to_string()),
         )
     })
@@ -5720,7 +5720,7 @@ fn workspace_mut(state: &mut DesktopState) -> DesktopResult<&mut FlowWorkspaceSt
 
 fn flow_library_unavailable() -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not resolve the global flow-definition library.",
+        "Pam could not resolve the global flow-definition library.",
         Some("Verify the operating system user data directory, then retry Flows.".to_owned()),
     )
 }
@@ -5913,7 +5913,7 @@ fn flow_error(error: &FlowEditorError) -> DesktopErrorDto {
 fn post_save_reload_error(error: &FlowEditorError) -> DesktopErrorDto {
     DesktopErrorDto::new(
         DesktopErrorKind::Unavailable,
-        format!("The flow was saved, but PAM could not refresh the flow workspace: {error}"),
+        format!("The flow was saved, but Pam could not refresh the flow workspace: {error}"),
         Some("Reload the flow workspace before opening or saving another definition.".to_owned()),
     )
 }

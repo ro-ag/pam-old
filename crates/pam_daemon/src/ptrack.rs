@@ -131,7 +131,7 @@ impl BriefProvider for PtrackBriefProvider {
             };
             if let Err(error) = store.put_evidence(evidence, now_ms()).await {
                 return unavailable(bounded_detail(format!(
-                    "ptrack context was read, but PAM could not retain its exact evidence: {error}"
+                    "ptrack context was read, but Pam could not retain its exact evidence: {error}"
                 )));
             }
 
@@ -424,7 +424,7 @@ pub(super) fn validate_registered_project(bytes: &[u8], directory: &Path) -> Res
     if registered {
         Ok(())
     } else {
-        Err("ptrack does not report this PAM project root through its supported projects interface."
+        Err("ptrack does not report this Pam project root through its supported projects interface."
             .to_owned())
     }
 }
@@ -538,11 +538,11 @@ async fn run_command(
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "PAM could not capture ptrack output.".to_owned())?;
+        .ok_or_else(|| "Pam could not capture ptrack output.".to_owned())?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "PAM could not capture ptrack diagnostics.".to_owned())?;
+        .ok_or_else(|| "Pam could not capture ptrack diagnostics.".to_owned())?;
     let mut stdout_task = tokio::spawn(read_bounded(stdout, MAX_STDOUT_BYTES));
     let mut stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
@@ -550,7 +550,7 @@ async fn run_command(
         Ok(Ok(status)) => status,
         Ok(Err(_)) => {
             abort_readers(&mut stdout_task, &mut stderr_task).await;
-            return Err("PAM could not wait for ptrack context.".to_owned());
+            return Err("Pam could not wait for ptrack context.".to_owned());
         }
         Err(_) => {
             let _ = child.kill().await;
@@ -612,7 +612,7 @@ async fn join_reader(
 ) -> Result<BoundedOutput, String> {
     match timeout(OUTPUT_DRAIN_TIMEOUT, &mut *task).await {
         Ok(Ok(Ok(output))) => Ok(output),
-        Ok(Ok(Err(_)) | Err(_)) => Err(format!("PAM could not read ptrack {label}.")),
+        Ok(Ok(Err(_)) | Err(_)) => Err(format!("Pam could not read ptrack {label}.")),
         Err(_) => {
             task.abort();
             Err(format!("ptrack {label} did not close after exit."))

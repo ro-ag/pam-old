@@ -485,7 +485,7 @@ fn only_a_pass_over_a_non_empty_catalog_is_verified() {
     let ok = model_verification(&downloaded, &Ok(()), true);
     let failed = model_verification(&downloaded, &Err(ModelError::DigestMismatch), true);
 
-    // Re-reading every artifact and finding them intact is the one thing PAM
+    // Re-reading every artifact and finding them intact is the one thing Pam
     // can honestly call verified.
     assert_eq!(
         model_verify_truth(&[ok.clone(), ok.clone()]),
@@ -540,7 +540,7 @@ fn refusing_a_weights_deletion_says_why_and_what_the_user_can_do_instead() {
     assert_eq!(code, FailureCode::InvalidRequest);
     assert_eq!(
         message,
-        "PAM did not download this model, so it will not delete the file at /elsewhere/model.gguf"
+        "Pam did not download this model, so it will not delete the file at /elsewhere/model.gguf"
     );
     assert_eq!(
         recovery,
@@ -555,7 +555,7 @@ fn refusing_a_weights_deletion_says_why_and_what_the_user_can_do_instead() {
     );
     assert_eq!(
         message,
-        "this model's weights are no longer inside PAM's models directory at /elsewhere/model.gguf"
+        "this model's weights are no longer inside Pam's models directory at /elsewhere/model.gguf"
     );
     assert!(
         recovery.contains("Move the file back under /models"),
@@ -566,7 +566,7 @@ fn refusing_a_weights_deletion_says_why_and_what_the_user_can_do_instead() {
         weights_refusal_failure(WeightsRefusal::Unsafe, "vendor/model", &path, &models_dir);
     assert_eq!(
         message,
-        "this model's path is not a regular file PAM can remove at /elsewhere/model.gguf"
+        "this model's path is not a regular file Pam can remove at /elsewhere/model.gguf"
     );
     assert!(recovery.contains("pam model sweep"), "{recovery}");
 }
@@ -995,7 +995,7 @@ fn approval_recovery_matches_each_capability_retry_surface() {
         evidence_recovery
     );
 
-    let protocol_recovery = "pam approval approve approval-1; PAM has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request";
+    let protocol_recovery = "pam approval approve approval-1; Pam has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request";
     let stop = RequestEnvelope::stop(
         RequestId::from("stop"),
         caller.clone(),

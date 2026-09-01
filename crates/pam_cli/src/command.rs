@@ -108,7 +108,7 @@ enum Command {
         #[command(subcommand)]
         command: RetentionCommand,
     },
-    /// Clear PAM's local state, one scope at a time.
+    /// Clear Pam's local state, one scope at a time.
     Reset {
         #[command(subcommand)]
         command: ResetCommand,
@@ -469,7 +469,7 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
-    /// Load a registered model into the running PAM daemon, without a restart.
+    /// Load a registered model into the running Pam daemon, without a restart.
     Load {
         /// Stable model identity.
         #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
@@ -478,7 +478,7 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
-    /// Drop the loaded model and free its memory; PAM keeps serving.
+    /// Drop the loaded model and free its memory; Pam keeps serving.
     Unload {
         /// Confirm dropping the model. Any answer it is generating right now
         /// is cancelled, and loading it again takes as long as the first load.
@@ -521,12 +521,12 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
-    /// Delete a PAM-downloaded model's weights and unregister it.
+    /// Delete a Pam-downloaded model's weights and unregister it.
     DeleteWeights {
         /// Stable model identity.
         #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
         model: ModelKey,
-        /// Confirm deleting the file on disk. PAM refuses any model it did not
+        /// Confirm deleting the file on disk. Pam refuses any model it did not
         /// download into its own models directory.
         #[arg(long)]
         yes: bool,

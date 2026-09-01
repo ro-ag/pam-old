@@ -139,7 +139,7 @@ fn reports_a_missing_file_without_raw_internals() {
     assert!(
         failure
             .detail
-            .starts_with("PAM could not open the model file")
+            .starts_with("Pam could not open the model file")
     );
     assert!(failure.recovery.is_some());
 }

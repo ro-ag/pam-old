@@ -78,7 +78,7 @@ describe("OverviewView", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("reports an unreachable model while PAM is paused", async () => {
+  it("reports an unreachable model while Pam is paused", async () => {
     const props = await overviewProps("offline");
     render(<OverviewView {...props} />);
 
@@ -86,12 +86,12 @@ describe("OverviewView", () => {
     expect(within(tile).getByText("UNREACHABLE")).toBeInTheDocument();
   });
 
-  it("keeps the overview calm while PAM is paused", async () => {
+  it("keeps the overview calm while Pam is paused", async () => {
     const props = await overviewProps("offline");
     render(<OverviewView {...props} />);
 
     expect(
-      screen.getByText("The activity picture returns when PAM is back on watch."),
+      screen.getByText("The activity picture returns when Pam is back on watch."),
     ).toBeInTheDocument();
   });
 

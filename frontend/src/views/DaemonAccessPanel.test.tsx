@@ -49,13 +49,13 @@ describe("DaemonAccessPanel", () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge("connector-blocked");
     bridge.setDaemonAccess = vi.fn(async () => {
-      throw new Error("PAM could not record this capability grant.");
+      throw new Error("Pam could not record this capability grant.");
     });
     render(<DaemonAccessPanel bridge={bridge} />);
 
     await user.click((await row("connector.test")).getByRole("button", { name: "Grant" }));
 
-    expect((await row("connector.test")).getByRole("alert")).toHaveTextContent("PAM could not record this capability grant.");
+    expect((await row("connector.test")).getByRole("alert")).toHaveTextContent("Pam could not record this capability grant.");
     expect((await row("connector.test")).getByText("not granted")).toBeInTheDocument();
   });
 

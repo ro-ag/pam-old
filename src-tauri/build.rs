@@ -66,5 +66,5 @@ const COMMANDS: &[&str] = &[
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(COMMANDS);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
-        .expect("failed to build the PAM desktop shell");
+        .expect("failed to build the Pam desktop shell");
 }

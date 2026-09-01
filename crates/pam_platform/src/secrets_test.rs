@@ -209,7 +209,7 @@ fn backend_failures_are_mapped_to_sanitized_error_kinds() {
     assert_eq!(error.kind(), SecretStoreErrorKind::Unavailable);
     assert_eq!(
         error.to_string(),
-        "PAM's native credential store is unavailable."
+        "Pam's native credential store is unavailable."
     );
 
     let backend = MemoryBackend::default();

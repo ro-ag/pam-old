@@ -75,7 +75,7 @@ describe("sidebar layout policy", () => {
 });
 
 describe("sidebar layout persistence", () => {
-  it("uses PAM-specific keys", () => {
+  it("uses Pam-specific keys", () => {
     expect(sidebarWidthStorageKey).toBe("pam-sidebar-width");
     expect(sidebarCollapsedStorageKey).toBe("pam-sidebar-collapsed");
   });

@@ -71,7 +71,7 @@ pub(crate) async fn load_access_config(
     if !exchange.events.is_empty() {
         return AccessConfigState::Unavailable {
             code: None,
-            detail: "PAM returned events for a configuration read.".to_owned(),
+            detail: "Pam returned events for a configuration read.".to_owned(),
             recovery: None,
         };
     }
@@ -83,7 +83,7 @@ pub(crate) async fn load_access_config(
         ResultBody::Failure(failure) => access_failure(failure),
         ResultBody::Success { .. } => AccessConfigState::Unavailable {
             code: None,
-            detail: "PAM returned an unexpected configuration response.".to_owned(),
+            detail: "Pam returned an unexpected configuration response.".to_owned(),
             recovery: None,
         },
     }

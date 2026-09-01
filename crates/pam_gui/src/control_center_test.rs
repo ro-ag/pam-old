@@ -56,7 +56,7 @@ fn project_catalog_keeps_current_first_and_deduplicates_canonical_roots() {
         current,
         vec![
             project("other", "/projects/other", None),
-            project("PAM renamed", "/projects/pam", None),
+            project("Pam renamed", "/projects/pam", None),
             project("other duplicate", "/projects/other", None),
         ],
     );
@@ -100,7 +100,7 @@ fn timeout_with_an_unreadable_probe_keeps_the_original_error() {
     );
     match state {
         HealthState::Degraded { detail, .. } => {
-            assert_eq!(detail, "PAM daemon request timed out.");
+            assert_eq!(detail, "Pam daemon request timed out.");
         }
         other => panic!("expected degraded, got {other:?}"),
     }
