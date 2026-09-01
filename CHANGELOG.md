@@ -4,6 +4,45 @@ All notable changes to PAM are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and PAM adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-01
+
+### Fixed
+
+- Destructive actions in the desktop app now confirm, fail, and report
+  legibly. Every confirmation - unregistering a model, deleting weights,
+  clearing logs, the danger-zone resets, stopping Pam - is one shared
+  full-width block with a danger-styled confirm, instead of a text span
+  squeezed into the row of buttons that armed it (which wrapped the model
+  identity vertically and clipped the confirm button off the canvas).
+- The factory reset's "Type RESET to confirm" field and the Settings
+  models-directory field were invisible: no CSS rule styled bare text
+  inputs, so they rendered borderless and transparent. Both are styled now.
+- A daemon refusal renders as a refusal - detail and its recovery line on
+  separate lines in one alert surface with an icon and danger tint -
+  instead of muted grey body copy identical to the surrounding notes.
+- Reset previews list what leaves as labeled rows ("Capability grants - 6")
+  with zero-count kinds collapsed and flows named, instead of one
+  snake_case sentence straight off the wire.
+- Unregister and Check weights are daemon calls, so while Pam is paused
+  they disable with the reason instead of offering a click that can only
+  end in a refusal - which read as "the model stayed in the list". An
+  already-armed confirmation disarms when Pam stops under it.
+- Switching views no longer shows a blank beat, and the canvas can no
+  longer keep the previous view on screen while the sidebar highlights the
+  new one.
+
+### Changed
+
+- CI tolerates runner-load test timeouts without hiding real hangs: a
+  missed test deadline is classified by process CPU versus wall time at
+  the moment it fires, timeout-shaped failures retry once individually,
+  and the same test timing out twice fails the build. Every downgrade is
+  surfaced as a workflow annotation. Pushes to main whose exact tree was
+  already proven green on the merged pull request skip the redundant
+  re-run; direct pushes and stale-base merges still run everything.
+- The one remaining load-sensitive test assertion now proves ordering
+  (status answers while active work is still leased) rather than latency.
+
 ## [0.10.0] - 2026-09-01
 
 ### Added
