@@ -208,8 +208,16 @@ jobs:
 
   desktop-packages:
     name: ${{ matrix.name }}
-    needs: [rust, frontend]
-    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+    needs: [foundation, rust, frontend]
+    # The release workflow reuses this run's artifacts, so packages must build
+    # on every main push even when the already-tested gate skipped the test
+    # jobs — a skipped rust/frontend under the gate counts as satisfied, any
+    # other non-success does not.
+    if: >-
+      ${{ !cancelled()
+        && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+        && (needs.rust.result == 'success' || (needs.rust.result == 'skipped' && needs.foundation.outputs.already_tested == 'true'))
+        && (needs.frontend.result == 'success' || (needs.frontend.result == 'skipped' && needs.foundation.outputs.already_tested == 'true')) }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -455,10 +463,16 @@ jobs:
 
   macos-package:
     name: macOS arm64 package
-    needs: [rust, frontend]
+    needs: [foundation, rust, frontend]
     # Unsigned preview on main only; signing + notarization happen in the
-    # release workflow on tags.
-    if: github.ref == 'refs/heads/main'
+    # release workflow on tags. Same gate carve-out as desktop-packages: the
+    # release reuses these artifacts, so a gate-skipped rust/frontend must not
+    # skip the build.
+    if: >-
+      ${{ !cancelled()
+        && github.ref == 'refs/heads/main'
+        && (needs.rust.result == 'success' || (needs.rust.result == 'skipped' && needs.foundation.outputs.already_tested == 'true'))
+        && (needs.frontend.result == 'success' || (needs.frontend.result == 'skipped' && needs.foundation.outputs.already_tested == 'true')) }}
     runs-on: macos-15
     timeout-minutes: 45
     steps:
