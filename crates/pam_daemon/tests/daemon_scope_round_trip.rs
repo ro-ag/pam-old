@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use pam_client::request_exchange;
 use pam_core::{
     CallerCredential, CallerId, ContentDigest, GrantId, IdempotencyKey, ProjectId, RequestId,
 };
@@ -16,6 +15,7 @@ use pam_protocol::{
     ResultPayload,
 };
 use pam_store::Store;
+use pam_testkit::request_exchange;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 const TEST_CREDENTIAL: &str = "daemon-scope-caller-credential";

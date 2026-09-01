@@ -41,7 +41,7 @@ use super::{
     },
     lifecycle::{DaemonConfig, decode_stored_result, serve_until_with_delay},
 };
-use pam_client::request_exchange;
+use pam_testkit::request_exchange;
 
 /// How long a test waits for one exchange to come back.
 ///

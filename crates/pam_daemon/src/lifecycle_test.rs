@@ -2802,22 +2802,28 @@ async fn status_reports_only_queued_project_work_without_waiting_for_active_work
         async {
             let _ = shutdown_rx.await;
         },
-        Duration::from_secs(1),
+        // Far longer than the test will run: the active work must still be in
+        // flight when status answers. Shutdown aborts the worker mid-delay, so
+        // this never adds wall-clock time on the happy path.
+        Duration::from_secs(10),
     ));
     wait_until_ready(&endpoint).await;
     let observer = Store::open(&state_path).unwrap();
     wait_for_state(&observer, &first.request_id, RequestState::Leased).await;
     wait_for_state(&observer, &second.request_id, RequestState::Queued).await;
 
-    let started = Instant::now();
+    // TEST_TIMEOUT is patience for a loaded host, not an assertion on latency.
     let exchange = request_status(
         &endpoint,
         &request("honest-project", "status"),
-        Duration::from_millis(250),
+        TEST_TIMEOUT,
     )
     .await
     .unwrap();
-    assert!(started.elapsed() < Duration::from_millis(250));
+    // Status returning while the first request's lease is still held proves it
+    // never waited on the active work; the payload asserts carry the rest.
+    let active = observer.snapshot(first.request_id.clone()).await.unwrap();
+    assert_eq!(active.state, RequestState::Leased);
     assert!(exchange.events.is_empty());
     assert_eq!(status_queue_depth(&exchange), 1);
 

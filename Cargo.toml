@@ -14,6 +14,7 @@ members = [
     "crates/pam_skills",
     "crates/pam_model",
     "crates/pam_flow",
+    "crates/pam_testkit",
     "src-tauri",
 ]
 resolver = "3"
@@ -62,6 +63,7 @@ pam_connectors = { path = "crates/pam_connectors" }
 pam_skills = { path = "crates/pam_skills" }
 pam_model = { path = "crates/pam_model" }
 pam_flow = { path = "crates/pam_flow" }
+pam_testkit = { path = "crates/pam_testkit" }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }

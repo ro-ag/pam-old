@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, GrantId, ProjectId, RequestId};
 use pam_daemon::{DaemonConfig, serve_until};
 use pam_flow::RunOutcome;
@@ -14,6 +13,7 @@ use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceScope};
 use pam_protocol::{Capability, FailureCode, RequestEnvelope, RequestPayload, ResultBody};
 use pam_store::{FlowRunSummary, PutGrant, RequestState, Store};
+use pam_testkit::request_exchange;
 use tokio::sync::oneshot;
 
 use super::*;

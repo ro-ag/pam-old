@@ -27,6 +27,7 @@ nix = { workspace = true, features = ["process", "signal", "user"] }
 
 [dev-dependencies]
 pam_client.workspace = true
+pam_testkit.workspace = true
 rusqlite.workspace = true
 zeromq.workspace = true
 

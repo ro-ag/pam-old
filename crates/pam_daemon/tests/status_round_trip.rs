@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use pam_client::{request_exchange, request_status};
 use pam_core::{
     ApprovalId, CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId,
 };
@@ -20,6 +19,7 @@ use pam_store::{
     AcceptRequest, ApprovalDecision, AuthorizationOutcome, AuthorizationRequest,
     CallerAuthentication, PutGrant, Store, StoreError, TerminalState,
 };
+use pam_testkit::{request_exchange, request_status};
 use tokio::{sync::oneshot, task::JoinHandle};
 use zeromq::{DealerSocket, Socket, SocketSend, ZmqMessage};
 

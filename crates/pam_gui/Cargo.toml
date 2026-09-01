@@ -27,5 +27,8 @@ pam_store.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+pam_testkit.workspace = true
+
 [lints]
 workspace = true
