@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use pam_client::{request_exchange, request_status};
@@ -12,9 +12,9 @@ use pam_daemon::{DaemonConfig, serve_until};
 use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceName, ResourceScope};
 use pam_protocol::{
-    ApprovalDecision as ProtocolApprovalDecision, ApprovalDecisionDisposition, FailureCode,
-    MAX_FRAME_SIZE, OperationTruth, PROTOCOL_VERSION, RequestEnvelope, ResultBody, ResultPayload,
-    SourceAvailability, encode,
+    ApprovalDecision as ProtocolApprovalDecision, ApprovalDecisionDisposition, Capability,
+    FailureCode, MAX_FRAME_SIZE, OperationTruth, PROTOCOL_VERSION, RequestEnvelope, ResultBody,
+    ResultPayload, SourceAvailability, encode,
 };
 use pam_store::{
     AcceptRequest, ApprovalDecision, AuthorizationOutcome, AuthorizationRequest,
@@ -24,6 +24,77 @@ use tokio::{sync::oneshot, task::JoinHandle};
 use zeromq::{DealerSocket, Socket, SocketSend, ZmqMessage};
 
 const TEST_CREDENTIAL: &str = "integration-caller-credential";
+
+/// How long a test waits for a freshly started daemon to answer.
+///
+/// The endpoint is bound last: the store opens and migrates, the credential
+/// store warms and any configured model loads first. A shared CI runner
+/// stretches every one of those, so readiness is given far more patience than
+/// any single exchange.
+const READY_TIMEOUT: Duration = Duration::from_mins(1);
+/// How long one readiness probe waits before it is retried.
+const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long readiness pauses between probes.
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Waits until the daemon answers, not merely until its socket file appears.
+///
+/// A socket file proves the listener is bound, never that the daemon serves,
+/// and the cost of that gap lands on whichever exchange goes first. The
+/// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
+/// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
+/// seconds and one that is late by ten exhausts a fifteen-second deadline
+/// outright. Waiting for a complete round trip here keeps startup out of the
+/// exchange deadlines, which then cover only the exchange they are spent on.
+///
+/// The probe is deliberately inert. Its capability and payload do not match, so
+/// the daemon answers on shape alone — before authentication, policy or the
+/// audit ledger — and leaves nothing behind for any test to observe.
+///
+/// Readiness that never arrives panics here, naming the endpoint and the wait,
+/// instead of falling through into a confusing deadline further down.
+async fn wait_until_ready(endpoint: &LocalEndpoint) {
+    let started = Instant::now();
+    let mut probes = 0_u32;
+    loop {
+        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
+            probes += 1;
+            if let Ok(exchange) =
+                request_exchange(endpoint, &readiness_probe(probes), READY_PROBE_TIMEOUT).await
+            {
+                assert!(
+                    matches!(
+                        &exchange.result.body,
+                        ResultBody::Failure(failure) if failure.code == FailureCode::InvalidRequest
+                    ),
+                    "the readiness probe must stay inert: {:?}",
+                    exchange.result.body
+                );
+                return;
+            }
+        }
+        assert!(
+            started.elapsed() < READY_TIMEOUT,
+            "daemon at {} answered no readiness probe within {READY_TIMEOUT:?} ({probes} tried)",
+            endpoint.address()
+        );
+        tokio::time::sleep(READY_POLL_INTERVAL).await;
+    }
+}
+
+/// A request the daemon must answer and must not record.
+fn readiness_probe(probe: u32) -> RequestEnvelope {
+    let mut request = RequestEnvelope::status(
+        RequestId::new(format!("readiness-probe-{probe}")),
+        CallerId::from("readiness-probe"),
+        ProjectId::from("readiness-probe"),
+        IdempotencyKey::new(format!("readiness-probe-{probe}")),
+    );
+    // `Status` pairs only with `DaemonStatus`; under any other capability the
+    // daemon rejects the request for its shape without touching the store.
+    request.capability = Capability::CallerList;
+    request
+}
 
 fn test_runtime(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -47,12 +118,7 @@ async fn brief_crosses_transport_with_explicit_unavailable_provenance() {
     let runtime = test_runtime("brief-round-trip");
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
     let request = RequestEnvelope::brief(
         RequestId::from("brief-round-trip"),
         CallerId::from("integration-test"),
@@ -90,12 +156,7 @@ async fn network_diagnostics_require_an_authenticated_project_grant() {
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let state_path = endpoint.runtime_dir().join("state.sqlite3");
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
     let request = |suffix: &str| {
         RequestEnvelope::network_diagnostics(
             RequestId::new(format!("network-{suffix}")),
@@ -356,12 +417,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
 
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
 
     let mut malformed_client = DealerSocket::new();
     malformed_client.connect(endpoint.address()).await.unwrap();
@@ -414,12 +470,7 @@ async fn status_crosses_transport_and_returns_an_immediate_result() {
     assert!(endpoint.socket_path().is_none_or(|path| !path.exists()));
 
     let (second_shutdown, second_daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
     request_status(&endpoint, &status_request(), Duration::from_secs(15))
         .await
         .unwrap();
@@ -435,12 +486,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let state_path = endpoint.runtime_dir().join("state.sqlite3");
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
 
     let store = Store::open(&state_path).unwrap();
     store
@@ -521,12 +567,7 @@ async fn stop_denies_unauthorized_callers_acknowledges_before_teardown_and_allow
     assert!(endpoint.socket_path().is_none_or(|path| !path.exists()));
 
     let (second_shutdown, second_daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
     request_status(&endpoint, &status_request(), Duration::from_secs(15))
         .await
         .unwrap();
@@ -568,12 +609,7 @@ async fn authentication_rejects_missing_wrong_and_revoked_credentials() {
     let endpoint = LocalEndpoint::ipc(runtime.clone());
     let state_path = endpoint.runtime_dir().join("state.sqlite3");
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
 
     let missing = RequestEnvelope::status(
         RequestId::from("auth-missing"),
@@ -691,12 +727,7 @@ async fn project_current_and_remote_approval_decisions_are_scoped_and_fail_close
     seed.shutdown().await.unwrap();
 
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
 
     // project.current is a baseline read: an authenticated caller with no
     // matching grant is served instead of rejected. Explicit deny and
@@ -1116,12 +1147,7 @@ async fn exact_approval_is_required_bound_to_effect_and_consumed_once() {
     seed_approval_caller(&state_path).await;
 
     let (shutdown, daemon) = start_daemon(endpoint.clone()).await;
-    for _ in 0..40 {
-        if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until_ready(&endpoint).await;
 
     let challenge_result = request_status(
         &endpoint,

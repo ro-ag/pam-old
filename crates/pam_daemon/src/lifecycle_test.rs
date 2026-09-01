@@ -22,7 +22,7 @@ use pam_policy::{
     ResourceScope,
 };
 use pam_protocol::{
-    BriefProvenance, BriefResult, CancellationDisposition, Event, EvidenceRedaction,
+    BriefProvenance, BriefResult, CancellationDisposition, Capability, Event, EvidenceRedaction,
     EvidenceRetention, ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FRAME_SIZE,
     ModelMessage, ModelRole, ModelSummary, ModelTransition, ModelTransitionPhase, OperationTruth,
     ProjectRequestState, RequestEnvelope, RequestPayload, ResultBody, ResultPayload, ServerMessage,
@@ -53,6 +53,15 @@ use pam_client::{ExchangeError, request_exchange, request_exchange_streaming, re
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How long a test waits for a freshly started daemon to answer.
+///
+/// The endpoint is bound last: the store opens and migrates, the credential
+/// store warms and any configured model loads first. A shared CI runner
+/// stretches every one of those, so readiness is given far more patience than
+/// any single exchange.
+const READY_TIMEOUT: Duration = Duration::from_mins(1);
+/// How long one readiness probe waits before it is retried.
+const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Stands in for the minutes a multi-GB model takes to load.
 const MODEL_LOAD_WINDOW: Duration = Duration::from_secs(2);
 
@@ -1177,23 +1186,64 @@ async fn the_endpoint_is_not_advertised_until_the_model_has_loaded() {
     fs::remove_dir_all(runtime).unwrap();
 }
 
+/// Waits until the daemon answers, not merely until its socket file appears.
+///
+/// A socket file proves the listener is bound, never that the daemon serves,
+/// and the cost of that gap lands on whichever exchange goes first. The
+/// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
+/// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
+/// seconds and one that is late by ten exhausts a fifteen-second deadline
+/// outright. Waiting for a complete round trip here keeps startup out of the
+/// exchange deadlines, which then cover only the exchange they are spent on.
+///
+/// The probe is deliberately inert. Its capability and payload do not match, so
+/// the daemon answers on shape alone — before authentication, policy or the
+/// audit ledger — and leaves nothing behind for any test to observe.
 async fn wait_until_ready(endpoint: &LocalEndpoint) {
-    let deadline = Instant::now() + TEST_TIMEOUT;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut probes = 0_u32;
     loop {
         if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            return;
+            probes += 1;
+            if let Ok(exchange) =
+                request_exchange(endpoint, &readiness_probe(probes), READY_PROBE_TIMEOUT).await
+            {
+                assert!(
+                    matches!(
+                        &exchange.result.body,
+                        ResultBody::Failure(failure) if failure.code == FailureCode::InvalidRequest
+                    ),
+                    "the readiness probe must stay inert: {:?}",
+                    exchange.result.body
+                );
+                return;
+            }
         }
 
         let now = Instant::now();
         assert!(
             now < deadline,
-            "daemon did not create endpoint {} within {TEST_TIMEOUT:?}; runtime_dir={} ownership_exists={}",
+            "daemon at {} answered none of {probes} readiness probes within {READY_TIMEOUT:?}; runtime_dir={} ownership_exists={}",
             endpoint.address(),
             endpoint.runtime_dir().display(),
             endpoint.ownership_path().exists(),
         );
         tokio::time::sleep(TEST_POLL_INTERVAL.min(deadline - now)).await;
     }
+}
+
+/// A request the daemon must answer and must not record.
+fn readiness_probe(probe: u32) -> RequestEnvelope {
+    let mut request = RequestEnvelope::status(
+        RequestId::new(format!("readiness-probe-{probe}")),
+        CallerId::from("readiness-probe"),
+        ProjectId::from("readiness-probe"),
+        IdempotencyKey::new(format!("readiness-probe-{probe}")),
+    );
+    // `Status` pairs only with `DaemonStatus`; under any other capability the
+    // daemon rejects the request for its shape without touching the store.
+    request.capability = Capability::CallerList;
+    request
 }
 
 fn start_daemon(
