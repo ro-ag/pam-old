@@ -808,7 +808,7 @@ impl Store {
         })
     }
 
-    /// Registers verified model metadata without copying weight bytes into PAM state.
+    /// Registers verified model metadata without copying weight bytes into Pam state.
     ///
     /// An identical record is idempotent (registration time aside). Re-importing
     /// the exact same verified artifact under a new license snapshot updates the
@@ -847,7 +847,7 @@ impl Store {
 
     /// Removes one model's registration and returns the record that was removed.
     ///
-    /// This deletes the registry row only. The weights stay on disk: PAM
+    /// This deletes the registry row only. The weights stay on disk: Pam
     /// verifies a GGUF in place and usually never owned the file, so deleting
     /// bytes is a separate, explicit operation.
     ///
@@ -8033,7 +8033,7 @@ fn recent_flow_runs(
         .collect()
 }
 
-/// Largest project root PAM will remember, matching the protocol's own
+/// Largest project root Pam will remember, matching the protocol's own
 /// bound on a flow run's project root (`MAX_FLOW_PROJECT_ROOT_BYTES`).
 const MAX_PROJECT_ROOT_BYTES: usize = 4 * 1024;
 

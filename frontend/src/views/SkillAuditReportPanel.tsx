@@ -79,7 +79,7 @@ function Evaluation({ data }: { data: SkillAuditDataDto }) {
           <span className="state-pill">deterministic only</span>
         </div>
         <p className="skill-audit-fallback">
-          Deterministic footprint only — no supported evaluator was available, so PAM did not produce a qualitative verdict.
+          Deterministic footprint only — no supported evaluator was available, so Pam did not produce a qualitative verdict.
         </p>
       </section>
     );

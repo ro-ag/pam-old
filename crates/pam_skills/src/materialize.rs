@@ -276,7 +276,7 @@ impl MaterializationDriftConflict {
     const fn description(self) -> &'static str {
         match self {
             Self::Disabled => "the exact materialization key is disabled",
-            Self::Unowned => "the exact materialization key is not owned by PAM",
+            Self::Unowned => "the exact materialization key is not owned by Pam",
             Self::UnsafeRoot => "the materialization root is unsafe",
             Self::UnsafePath => "the materialization path is unsafe",
             Self::Symlink => "the materialization path contains a symlink",
@@ -575,7 +575,7 @@ impl fmt::Display for MaterializationError {
                 )
             }
             Self::Library(error) => error.fmt(formatter),
-            Self::Io(operation) => write!(formatter, "PAM could not {}", operation.description()),
+            Self::Io(operation) => write!(formatter, "Pam could not {}", operation.description()),
         }
     }
 }

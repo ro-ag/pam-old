@@ -24,10 +24,10 @@ use crate::{
     observatory::{ObservatoryState, run_grant_revoke, run_model_register},
 };
 
-const STORE_RECOVERY: &str = "Verify the local PAM data store, then retry.";
-const REGISTRATION_RECOVERY: &str = "Retry the registration once the PAM daemon is reachable.";
-const REVOCATION_RECOVERY: &str = "Retry the revocation once the PAM daemon is reachable.";
-const CALLER_RECOVERY: &str = "Use Register GUI caller in PAM, then retry.";
+const STORE_RECOVERY: &str = "Verify the local Pam data store, then retry.";
+const REGISTRATION_RECOVERY: &str = "Retry the registration once the Pam daemon is reachable.";
+const REVOCATION_RECOVERY: &str = "Retry the revocation once the Pam daemon is reachable.";
+const CALLER_RECOVERY: &str = "Use Register GUI caller in Pam, then retry.";
 
 /// A bounded, user-facing durable-write failure.
 #[derive(Clone, Debug)]
@@ -83,7 +83,7 @@ pub(crate) async fn register_model(
         Ok(model)
     } else {
         Err(StoreWriteFailure::new(
-            "PAM registered a different model than the one submitted.",
+            "Pam registered a different model than the one submitted.",
             REGISTRATION_RECOVERY,
         ))
     }
@@ -176,7 +176,7 @@ async fn put_model_directly(model: RegisteredModel) -> Result<RegisteredModel, S
     let state_path = user_data_dir()
         .map_err(|_| {
             StoreWriteFailure::new(
-                "PAM could not resolve its local data store.",
+                "Pam could not resolve its local data store.",
                 "Verify the operating system user data directory, then retry.",
             )
         })?

@@ -156,7 +156,7 @@ async fn daemon_scope_serves_daemon_reads_without_any_project() {
             assert!(
                 logs.entries
                     .iter()
-                    .any(|entry| entry.message.contains("PAM daemon ready"))
+                    .any(|entry| entry.message.contains("Pam daemon ready"))
             );
         }
         other => panic!("daemon logs read failed: {other:?}"),
@@ -1023,7 +1023,7 @@ async fn grant_revoke_drops_only_the_requesting_callers_own_grants() {
 /// most important thing about them is what they refuse. This drives all three
 /// real envelopes through the daemon's own dispatch against a registration
 /// whose file was never there: verification reports the exact failure, the
-/// sweep sees the dangling row, and deleting the weights of a GGUF PAM only
+/// sweep sees the dangling row, and deleting the weights of a GGUF Pam only
 /// ever verified in place is refused in words that say why.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)] // One fixture proves all three health capabilities.
@@ -1115,7 +1115,7 @@ async fn registry_health_verifies_sweeps_and_refuses_to_delete_a_file_pam_never_
     assert_eq!(entry.source, "local");
     assert!(
         !entry.weights_deletable,
-        "a GGUF PAM verified in place is never PAM's to delete"
+        "a GGUF Pam verified in place is never Pam's to delete"
     );
 
     // The sweep sees the same row from the other direction.
@@ -1149,7 +1149,7 @@ async fn registry_health_verifies_sweeps_and_refuses_to_delete_a_file_pam_never_
     );
 
     // Deleting the weights of a locally imported model is refused, and the
-    // refusal says PAM did not download the file plus what to do instead.
+    // refusal says Pam did not download the file plus what to do instead.
     let refused = request_exchange(
         &endpoint,
         &authenticated(
@@ -1167,13 +1167,13 @@ async fn registry_health_verifies_sweeps_and_refuses_to_delete_a_file_pam_never_
     .await
     .unwrap();
     let ResultBody::Failure(failure) = refused.result.body else {
-        panic!("PAM must refuse to delete a file it never downloaded");
+        panic!("Pam must refuse to delete a file it never downloaded");
     };
     assert_eq!(failure.code, FailureCode::InvalidRequest);
     assert!(
         failure
             .message
-            .starts_with("PAM did not download this model, so it will not delete the file at"),
+            .starts_with("Pam did not download this model, so it will not delete the file at"),
         "the refusal must explain itself: {}",
         failure.message
     );

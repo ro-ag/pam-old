@@ -1147,7 +1147,7 @@ fn noncooperating_writer_between_revalidation_and_publish_is_never_overwritten()
     let replace_old = b"replace old\n";
     let writer = b"writer won replace race\n";
     replace_root.write("prompts/replace-race.md", replace_old);
-    let (replace_id, replace_version) = insert(&library, "replace-race", b"PAM replace\n");
+    let (replace_id, replace_version) = insert(&library, "replace-race", b"Pam replace\n");
     let replace_plan = plan_materialization(
         &library,
         &[MaterializationRequest::new(
@@ -1174,7 +1174,7 @@ fn noncooperating_writer_between_revalidation_and_publish_is_never_overwritten()
     );
 
     let create_root = TestDirectory::new("materialization-pre-publish-create-race");
-    let (create_id, create_version) = insert(&library, "create-race", b"PAM create\n");
+    let (create_id, create_version) = insert(&library, "create-race", b"Pam create\n");
     let create_plan = plan_materialization(
         &library,
         &[MaterializationRequest::new(
@@ -1204,11 +1204,11 @@ fn rollback_exhausts_the_batch_without_deleting_a_post_publish_writer() {
     let root = TestDirectory::new("materialization-post-publish-replace-race");
     let first_old = b"first old bytes\n";
     let second_old = b"second old bytes\n";
-    let writer = b"writer after PAM publish\n";
+    let writer = b"writer after Pam publish\n";
     root.write("rules/first-race.mdc", first_old);
     root.write("rules/second-race.mdc", second_old);
-    let (first_id, first_version) = insert(&library, "first-race", b"first PAM bytes\n");
-    let (second_id, second_version) = insert(&library, "second-race", b"second PAM bytes\n");
+    let (first_id, first_version) = insert(&library, "first-race", b"first Pam bytes\n");
+    let (second_id, second_version) = insert(&library, "second-race", b"second Pam bytes\n");
     let plan = plan_materialization(
         &library,
         &[
@@ -1264,7 +1264,7 @@ fn rollback_exhausts_the_batch_without_deleting_a_post_publish_writer() {
 fn create_rollback_preserves_a_post_publish_writer() {
     let (_home, library) = library();
     let root = TestDirectory::new("materialization-post-publish-create-race");
-    let (id, version) = insert(&library, "create-writer", b"PAM create bytes\n");
+    let (id, version) = insert(&library, "create-writer", b"Pam create bytes\n");
     let plan = plan_materialization(
         &library,
         &[MaterializationRequest::new(

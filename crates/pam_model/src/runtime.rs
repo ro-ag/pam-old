@@ -213,12 +213,12 @@ pub enum RuntimeSampling {
     TopKTopPTemperature,
 }
 
-/// Whether the loaded GGUF is one PAM has actually measured.
+/// Whether the loaded GGUF is one Pam has actually measured.
 ///
 /// An [`ArtifactCalibration::Uncalibrated`] artifact still loads when it fits
 /// the host-derived model ceiling; only its memory and quality profile are
 /// untested. Callers must say so rather than presenting it as a blessed
-/// preset — the GUI already words this as "not in PAM's calibrated set".
+/// preset — the GUI already words this as "not in Pam's calibrated set".
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactCalibration {
@@ -296,7 +296,7 @@ impl RuntimeProfile {
         &self.model_digest
     }
 
-    /// Whether the loaded artifact is one PAM has measured. Surface
+    /// Whether the loaded artifact is one Pam has measured. Surface
     /// `Uncalibrated` to the user; do not present it as a tested profile.
     #[must_use]
     pub const fn calibration(&self) -> ArtifactCalibration {
@@ -397,7 +397,7 @@ impl RuntimeHostSnapshot {
     ///
     /// The macOS adapter obtains Metal's working-set ceiling from the same
     /// llama.cpp projection used for runtime admission; callers provide only
-    /// operating-system memory facts, a bounded swap-activity trend, and PAM's
+    /// operating-system memory facts, a bounded swap-activity trend, and Pam's
     /// explicit reserve policy.
     ///
     /// # Errors
@@ -559,7 +559,7 @@ impl fmt::Display for RuntimeError {
                 maximum_bytes,
             } => write!(
                 formatter,
-                "registered model of {size_bytes} bytes is not in PAM's calibrated set and does not fit this Mac's {maximum_bytes}-byte model ceiling"
+                "registered model of {size_bytes} bytes is not in Pam's calibrated set and does not fit this Mac's {maximum_bytes}-byte model ceiling"
             ),
             Self::AdmissionRejected {
                 projected_bytes,

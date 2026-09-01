@@ -60,6 +60,6 @@ describe("SkillsView", () => {
     // Assignment stays gated without a project scope, but nothing offers a pick.
     expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/PAM has none open/)).toBeInTheDocument();
+    expect(screen.getByText(/Pam has none open/)).toBeInTheDocument();
   });
 });

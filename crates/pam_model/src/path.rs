@@ -27,7 +27,7 @@ pub fn validate_model_filename(filename: &str) -> Result<(), ModelError> {
 }
 
 /// Returns `<root>/<vendor>/<filename>` without creating it. `root` is
-/// caller-chosen: [`default_model_path`] passes `<home>/llm`, and PAM's
+/// caller-chosen: [`default_model_path`] passes `<home>/llm`, and Pam's
 /// Settings-configured custom download directory passes its own root
 /// directly.
 ///
@@ -45,7 +45,7 @@ pub fn model_path_under(
     Ok(root.join(key.vendor()).join(filename))
 }
 
-/// PAM's default models root, `<home>/llm`, before any Settings override.
+/// Pam's default models root, `<home>/llm`, before any Settings override.
 #[must_use]
 pub fn default_models_dir(home: &Path) -> PathBuf {
     home.join("llm")
@@ -113,7 +113,7 @@ pub fn default_model_path(
 }
 
 /// Validates an absolute, non-parent-traversing Unicode path. Shared by the
-/// default `<home>/llm` model root and PAM's Settings-configured custom
+/// default `<home>/llm` model root and Pam's Settings-configured custom
 /// models directory.
 ///
 /// # Errors

@@ -370,19 +370,19 @@ impl fmt::Display for SecretStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             SecretStoreErrorKind::InvalidLocator => {
-                formatter.write_str("PAM refused an invalid native credential locator.")
+                formatter.write_str("Pam refused an invalid native credential locator.")
             }
             SecretStoreErrorKind::InvalidCredential => {
-                formatter.write_str("PAM refused an invalid caller credential.")
+                formatter.write_str("Pam refused an invalid caller credential.")
             }
             SecretStoreErrorKind::Unavailable => {
-                formatter.write_str("PAM's native credential store is unavailable.")
+                formatter.write_str("Pam's native credential store is unavailable.")
             }
             SecretStoreErrorKind::NotFound => {
-                formatter.write_str("PAM has no native caller credential for this caller.")
+                formatter.write_str("Pam has no native caller credential for this caller.")
             }
             SecretStoreErrorKind::BackendDenied => {
-                formatter.write_str("PAM was denied access to the native credential store.")
+                formatter.write_str("Pam was denied access to the native credential store.")
             }
         }
     }

@@ -1650,11 +1650,11 @@ pub enum FlowEditorError {
 impl fmt::Display for FlowEditorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProjectRoot(_) => formatter.write_str("PAM could not resolve the project root."),
+            Self::ProjectRoot(_) => formatter.write_str("Pam could not resolve the project root."),
             Self::ReadDirectory(_) | Self::ReadEntry(_) => {
-                formatter.write_str("PAM could not read the project flow catalog.")
+                formatter.write_str("Pam could not read the project flow catalog.")
             }
-            Self::Write(_) => formatter.write_str("PAM could not safely save the flow definition."),
+            Self::Write(_) => formatter.write_str("Pam could not safely save the flow definition."),
             Self::UnsafeDirectory(name) => write!(
                 formatter,
                 "Flow catalog directory {name} must be a real directory, not a symlink."

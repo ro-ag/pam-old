@@ -21,7 +21,7 @@ export interface AccessViewProps {
   onRegisterCaller?: () => void;
 }
 
-// Access is global: every panel describes this PAM window, never a project.
+// Access is global: every panel describes this Pam window, never a project.
 // The observed boundary is daemon TLS/proxy truth, so it is read over the
 // daemon authority and renders with or without an active project.
 export function AccessView({
@@ -66,7 +66,7 @@ export function AccessView({
   return (
     <main className="canvas" id="main-content">
       <section className="project-detail-view">
-        <header className="project-header compact"><div><h1>Access</h1><p>Who PAM listens to, what it may do, and where it reaches out.</p></div></header>
+        <header className="project-header compact"><div><h1>Access</h1><p>Who Pam listens to, what it may do, and where it reaches out.</p></div></header>
         <DaemonAccessPanel bridge={bridge} onGrantsChanged={() => void load()} />
         <section className="panel access-panel" aria-labelledby="access-heading">
           <div className="panel-title"><div><span className="eyebrow">Observed boundary</span><h2 id="access-heading">Authorized capabilities</h2></div><LockSimple size={22} /></div>

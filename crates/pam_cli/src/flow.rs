@@ -280,9 +280,9 @@ pub(crate) enum FlowCatalogError {
 impl fmt::Display for FlowCatalogError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProjectRoot(_) => formatter.write_str("PAM could not resolve the project root."),
+            Self::ProjectRoot(_) => formatter.write_str("Pam could not resolve the project root."),
             Self::ReadDirectory(_) | Self::ReadEntry(_) => {
-                formatter.write_str("PAM could not read the project flow catalog.")
+                formatter.write_str("Pam could not read the project flow catalog.")
             }
             Self::UnsafeDirectory(path) => write!(
                 formatter,

@@ -16,7 +16,7 @@ export interface DaemonAccessPanelProps {
   onGrantsChanged?: () => void;
 }
 
-// Daemon-scope grants belong to this PAM window, not to any project, so this
+// Daemon-scope grants belong to this Pam window, not to any project, so this
 // panel always speaks the daemon authority and carries no project identity.
 // Nothing here is written until the owner presses Grant.
 export function DaemonAccessPanel({ bridge, onGrantsChanged }: DaemonAccessPanelProps) {
@@ -68,7 +68,7 @@ export function DaemonAccessPanel({ bridge, onGrantsChanged }: DaemonAccessPanel
         <LockKey size={22} />
       </div>
       <PanelEmpty>
-        These grants belong to this PAM window across every project. PAM never grants one on its own; revoking returns the capability to denied.
+        These grants belong to this Pam window across every project. Pam never grants one on its own; revoking returns the capability to denied.
       </PanelEmpty>
       {loadError && <PanelError>{loadError}</PanelError>}
       {capabilities === null && !loadError && <PanelLoading>Loading the capability grants…</PanelLoading>}

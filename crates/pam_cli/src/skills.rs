@@ -1582,15 +1582,15 @@ impl std::fmt::Display for SkillsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CurrentDirectory(_) => {
-                formatter.write_str("PAM could not locate the current working directory.")
+                formatter.write_str("Pam could not locate the current working directory.")
             }
             Self::Identity(_) => {
-                formatter.write_str("PAM could not resolve the current project identity.")
+                formatter.write_str("Pam could not resolve the current project identity.")
             }
             Self::HomeUnavailable => {
-                formatter.write_str("PAM could not locate the current user's home directory.")
+                formatter.write_str("Pam could not locate the current user's home directory.")
             }
-            Self::Clock => formatter.write_str("PAM could not read the current system time."),
+            Self::Clock => formatter.write_str("Pam could not read the current system time."),
             Self::LocalInventory(error) => write!(formatter, "Skill scan failed: {error}."),
             Self::IncompleteScan(diagnostics) => write!(
                 formatter,
@@ -1600,12 +1600,12 @@ impl std::fmt::Display for SkillsError {
             Self::Audit(error) => write!(formatter, "Skills audit failed: {error}."),
             Self::Store(error) => write!(formatter, "Skills store failed: {error}."),
             Self::PTrackHomeUnavailable => {
-                formatter.write_str("PAM could not resolve a safe p-track home directory.")
+                formatter.write_str("Pam could not resolve a safe p-track home directory.")
             }
             Self::ProjectKey(error) => error.fmt(formatter),
             Self::AgentRootUnavailable(agent) => write!(
                 formatter,
-                "PAM could not resolve a safe {} agent root.",
+                "Pam could not resolve a safe {} agent root.",
                 agent.materialization_agent().as_str()
             ),
             Self::NotEnabled => {
@@ -1615,7 +1615,7 @@ impl std::fmt::Display for SkillsError {
             Self::Install(error) => write!(formatter, "Skill install failed: {error}."),
             Self::Materialize(_) => formatter
                 .write_str("Skill materialization failed; no local path details were emitted."),
-            Self::Json(_) => formatter.write_str("PAM could not encode skills JSON."),
+            Self::Json(_) => formatter.write_str("Pam could not encode skills JSON."),
         }
     }
 }

@@ -46,7 +46,7 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 15] = [
     (
         "model.unload",
         "Model unloading",
-        "Models drops the loaded model and frees its memory; PAM keeps serving.",
+        "Models drops the loaded model and frees its memory; Pam keeps serving.",
     ),
     (
         "model.unregister",
@@ -66,7 +66,7 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 15] = [
     (
         "model.delete-weights",
         "Model weights deletion",
-        "Models deletes a GGUF PAM downloaded into its own models directory and unregisters it.",
+        "Models deletes a GGUF Pam downloaded into its own models directory and unregisters it.",
     ),
     (
         "network.diagnostics",
@@ -265,7 +265,7 @@ fn known_capability(capability: &str) -> DesktopResult<CapabilityName> {
         .any(|(known, _, _)| *known == capability)
     {
         return Err(DesktopErrorDto::invalid_input(
-            "This is not a daemon-scoped capability the PAM window uses.",
+            "This is not a daemon-scoped capability the Pam window uses.",
         ));
     }
     CapabilityName::parse(capability)
@@ -291,8 +291,8 @@ fn now_ms() -> DesktopResult<u64> {
 
 fn store_error(_error: StoreError) -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not read its durable capability grants.",
-        Some("Verify the local PAM state directory and retry.".to_owned()),
+        "Pam could not read its durable capability grants.",
+        Some("Verify the local Pam state directory and retry.".to_owned()),
     )
 }
 
@@ -304,7 +304,7 @@ fn revoke_error(failure: StoreWriteFailure) -> DesktopErrorDto {
 
 fn write_error(_error: StoreError) -> DesktopErrorDto {
     DesktopErrorDto::unavailable(
-        "PAM could not record this capability grant.",
-        Some("Register this PAM window as a caller from Access, then retry.".to_owned()),
+        "Pam could not record this capability grant.",
+        Some("Register this Pam window as a caller from Access, then retry.".to_owned()),
     )
 }

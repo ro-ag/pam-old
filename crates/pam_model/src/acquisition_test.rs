@@ -737,7 +737,7 @@ async fn a_same_host_redirect_is_followed_with_no_extra_allowed_hosts() {
 
 /// The other half of that policy: with no extra allowed hosts, a hop onto a
 /// different host is refused outright, which is what stops a pasted URL from
-/// bouncing anywhere PAM never checked.
+/// bouncing anywhere Pam never checked.
 #[tokio::test]
 async fn a_cross_host_redirect_is_refused_with_no_extra_allowed_hosts() {
     let directory = TestDirectory::new("cross-host-redirect");

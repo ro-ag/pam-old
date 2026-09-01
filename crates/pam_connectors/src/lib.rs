@@ -217,7 +217,7 @@ impl fmt::Debug for CancellationToken {
     }
 }
 
-/// Per-attempt controls supplied by PAM to a connector.
+/// Per-attempt controls supplied by Pam to a connector.
 #[derive(Clone)]
 pub struct InvocationContext {
     deadline: Instant,

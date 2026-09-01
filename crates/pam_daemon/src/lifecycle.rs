@@ -318,7 +318,7 @@ impl BriefProvider for UnavailableBriefProvider {
 /// Runs the foreground daemon until an operating-system shutdown signal arrives.
 ///
 /// The daemon never runs itself: launching requires the single-use grant the
-/// control center issues before spawning (`pam gui` → Start PAM).
+/// control center issues before spawning (`pam gui` → Start Pam).
 ///
 /// # Errors
 ///
@@ -504,10 +504,10 @@ where
     let mut subscriptions = HashMap::<RequestId, Vec<Subscription>>::new();
 
     let ready_message = ready_model.as_ref().map_or_else(
-        || format!("PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION})."),
+        || format!("Pam daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION})."),
         |model| {
             format!(
-                "PAM daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {model})."
+                "Pam daemon ready (version {APPLICATION_VERSION}, protocol {PROTOCOL_VERSION}, model {model})."
             )
         },
     );
@@ -613,8 +613,8 @@ where
         }
     };
     match &result {
-        Ok(()) => log.info("PAM daemon stopping (orderly shutdown)."),
-        Err(error) => log.error(format!("PAM daemon exiting on fatal error: {error}")),
+        Ok(()) => log.info("Pam daemon stopping (orderly shutdown)."),
+        Err(error) => log.error(format!("Pam daemon exiting on fatal error: {error}")),
     }
 
     handlers.abort_all();
@@ -742,7 +742,7 @@ pub(super) fn model_load_failure_message(error: &RuntimeError) -> String {
 /// The sentence for a persisted default model that is no longer registered.
 ///
 /// It says the plain thing rather than a store error: the pin is stale, and
-/// PAM is serving without a model because of it.
+/// Pam is serving without a model because of it.
 pub(super) fn missing_default_model_message(model: &str) -> String {
     format!(
         "the default model {model} is no longer registered; the daemon will serve without a model"
@@ -2040,7 +2040,7 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::ConnectorTest
         | Capability::CancelRequest
         | Capability::ReplayEvents => format!(
-            "pam approval approve {approval_id}; PAM has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request"
+            "pam approval approve {approval_id}; Pam has no CLI retry surface for this capability, so a protocol client must attach this one-request receipt to the exact challenged request"
         ),
     }
 }
@@ -3342,7 +3342,7 @@ pub(super) fn model_unregister_loaded_refusal(
 /// Removes one model's registration from the durable registry the daemon owns.
 ///
 /// The weights are never touched. `pam model import` verifies a GGUF where its
-/// owner already keeps it, so the file on disk is usually not PAM's to delete;
+/// owner already keeps it, so the file on disk is usually not Pam's to delete;
 /// removing bytes is a separate, explicit operation.
 async fn handle_model_unregister(
     request: &RequestEnvelope,
@@ -3446,7 +3446,7 @@ fn daemon_models_dir() -> Option<PathBuf> {
 
 /// Message for a request the daemon cannot answer without a models directory.
 pub(super) const MODELS_DIR_UNRESOLVED_MESSAGE: &str =
-    "PAM could not resolve the models directory to reconcile against";
+    "Pam could not resolve the models directory to reconcile against";
 
 fn models_dir_unresolved(request: &RequestEnvelope) -> ResultEnvelope {
     let mut failure = failure_result(
@@ -3456,7 +3456,7 @@ fn models_dir_unresolved(request: &RequestEnvelope) -> ResultEnvelope {
     );
     if let ResultBody::Failure(body) = &mut failure.body {
         body.recovery = Some(
-            "Verify the operating system user profile and PAM's Settings, then retry.".to_owned(),
+            "Verify the operating system user profile and Pam's Settings, then retry.".to_owned(),
         );
     }
     failure
@@ -3489,9 +3489,9 @@ pub(super) fn model_verification(
 /// The truth a verification pass reports.
 ///
 /// A pass that re-read every artifact and found them all intact is the one
-/// thing PAM can honestly call `Verified` — the same standing the connector
+/// thing Pam can honestly call `Verified` — the same standing the connector
 /// self-test earns by actually reaching its host. Any artifact that no longer
-/// matches its registration leaves the catalog `Unresolved`: PAM knows the
+/// matches its registration leaves the catalog `Unresolved`: Pam knows the
 /// registry is wrong but cannot say what the truth is. Verifying an empty
 /// catalog verified nothing, so it is a plain `Observed` read.
 pub(super) fn model_verify_truth(models: &[ModelVerification]) -> OperationTruth {
@@ -3660,7 +3660,7 @@ pub(super) fn model_sweep_result(sweep: ModelsDirectorySweep) -> ModelSweepResul
 ///
 /// The sweep reports and never acts: a dangling row is cleared with
 /// `model.unregister`, and an orphaned file is removed by its owner or,
-/// when PAM downloaded it, through `model.delete-weights`.
+/// when Pam downloaded it, through `model.delete-weights`.
 async fn handle_model_sweep(
     request: &RequestEnvelope,
     incoming: IncomingRequest,
@@ -3746,11 +3746,11 @@ pub(super) fn model_delete_weights_loaded_refusal(
     Some(failure)
 }
 
-/// The exact words PAM refuses a weights deletion in, and what the user can do
+/// The exact words Pam refuses a weights deletion in, and what the user can do
 /// instead.
 ///
 /// The provenance refusal is the important one: `pam model import` verifies a
-/// GGUF where its owner already keeps it, so PAM never owned that file and
+/// GGUF where its owner already keeps it, so Pam never owned that file and
 /// deleting it would destroy a user's own data. The refusal says so, and
 /// points at the two things the user can still do — drop the registry entry,
 /// and remove the file themselves.
@@ -3777,11 +3777,11 @@ pub(super) fn weights_refusal_failure(
     (FailureCode::InvalidRequest, message, recovery)
 }
 
-/// Deletes one PAM-downloaded model's weights and unregisters it.
+/// Deletes one Pam-downloaded model's weights and unregisters it.
 ///
 /// Two gates stand in front of the removal, and both are the daemon's to
 /// enforce: the model must not be the one this daemon has mapped, and the
-/// registration must say PAM downloaded the artifact into the models
+/// registration must say Pam downloaded the artifact into the models
 /// directory it is still sitting in. The removal itself is confined to that
 /// directory and never follows a symlink out of it.
 ///

@@ -223,7 +223,7 @@ fn an_imported_in_place_model_is_refused_because_pam_never_downloaded_it() {
     );
     assert_eq!(
         weights_refusal_message(WeightsRefusal::NotDownloadedByPam),
-        "PAM did not download this model, so it will not delete the file"
+        "Pam did not download this model, so it will not delete the file"
     );
     // The refusal never removes anything: the user's file is still theirs.
     assert!(model.path.exists());

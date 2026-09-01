@@ -66,7 +66,7 @@ impl EvaluatorKind {
                 "--tools",
                 "",
             ]),
-            // PAM retains these stable enum values for persisted report compatibility, but does
+            // Pam retains these stable enum values for persisted report compatibility, but does
             // not execute these evaluators: their current headless interfaces cannot guarantee a
             // tool-free audit invocation.
             Self::Codex | Self::CursorAgent => None,
@@ -126,7 +126,7 @@ impl Error for EvaluatorDetectionError {}
 /// Only absolute, canonical directories and canonical regular executable files are considered.
 /// Entries and executable targets inside the audited project are ignored; a `None` audited project
 /// is a global audit with no untrusted project tree, so nothing is filtered out. On Unix, Claude is
-/// the only evaluator whose current headless interface provides PAM's required tool-free mode.
+/// the only evaluator whose current headless interface provides Pam's required tool-free mode.
 /// Other platforms return no evaluator because `std` alone cannot contain the complete descendant
 /// tree.
 ///

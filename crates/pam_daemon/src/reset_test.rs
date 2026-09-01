@@ -58,7 +58,7 @@ impl Scratch {
         self.root.join("data").join(relative)
     }
 
-    /// A path beside the data root: model weights normally live outside PAM's
+    /// A path beside the data root: model weights normally live outside Pam's
     /// data directory, and so does anything a reset must never reach.
     fn outside(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
@@ -510,7 +510,7 @@ async fn factory_reset_refuses_while_a_daemon_owns_the_store() {
         error
             .recovery()
             .expect("a refusal must carry a recovery line")
-            .contains("Stop PAM first")
+            .contains("Stop Pam first")
     );
     assert!(
         scratch.path("state.sqlite3").exists(),

@@ -69,7 +69,7 @@ describe("SkillAuditReportPanel", () => {
     render(<SkillAuditReportPanel bridge={fixtureBridge("skill-audit-no-evaluator")} fence={firstFence} />);
 
     expect(await screen.findByText(
-      "Deterministic footprint only — no supported evaluator was available, so PAM did not produce a qualitative verdict.",
+      "Deterministic footprint only — no supported evaluator was available, so Pam did not produce a qualitative verdict.",
     )).toBeInTheDocument();
     expect(screen.getByText("deterministic only")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Evaluator verdict" })).not.toBeInTheDocument();

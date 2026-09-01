@@ -7,7 +7,7 @@ use crate::{ModelDescriptor, RegisteredModel};
 /// Runtime-produced memory projection for one exact artifact and context.
 ///
 /// The selected model runtime owns architecture-specific KV, recurrent-state,
-/// cache-precision, batch, flash-attention, and offload calculations. PAM keeps
+/// cache-precision, batch, flash-attention, and offload calculations. Pam keeps
 /// only their model-neutral component totals and binds them to the exact model
 /// digest. A separate projection is required for every runtime configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]

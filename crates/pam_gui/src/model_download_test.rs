@@ -690,7 +690,7 @@ fn a_pasted_url_never_inherits_the_preset_redirect_allowlist() {
         4096,
     );
     // Empty here means `pam_model` allows only the pasted URL's own host,
-    // which it appends itself — no cross-host hop for a source PAM did not
+    // which it appends itself — no cross-host hop for a source Pam did not
     // hand-check.
     assert!(pasted.allowed_redirect_hosts.is_empty());
     assert!(

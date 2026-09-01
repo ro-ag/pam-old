@@ -14,7 +14,7 @@ use pam_gui::DesktopCore;
 #[cfg(target_os = "macos")]
 use tauri::{Manager, TitleBarStyle};
 
-/// Runs the local PAM Tauri application.
+/// Runs the local Pam Tauri application.
 ///
 /// # Errors
 ///
@@ -111,6 +111,6 @@ fn daemon_executable() -> Result<PathBuf, std::io::Error> {
     let directory = std::env::current_exe()?
         .parent()
         .map(PathBuf::from)
-        .ok_or_else(|| std::io::Error::other("PAM executable has no parent directory"))?;
+        .ok_or_else(|| std::io::Error::other("Pam executable has no parent directory"))?;
     Ok(directory.join(if cfg!(windows) { "pam.exe" } else { "pam" }))
 }

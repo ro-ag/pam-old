@@ -138,10 +138,10 @@ describe("daemon observatory", () => {
     const refreshProject = vi.spyOn(bridge, "refreshProject");
     render(<App bridge={bridge} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Stop PAM" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Stop Pam" }));
     await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
 
-    expect(await screen.findByRole("button", { name: "Start PAM" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Start Pam" })).toBeEnabled();
     expect(stop).toHaveBeenCalledTimes(1);
     expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
     // Bootstrap probes once; the lifecycle action re-probes.
@@ -190,17 +190,17 @@ describe("daemon observatory", () => {
   it("keeps a calm paused Activity view while the daemon is offline", async () => {
     render(<App bridge={fixtureBridge("offline")} initialView="activity" />);
 
-    expect(await screen.findByRole("heading", { name: "PAM is paused" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Pam is paused" })).toBeInTheDocument();
     expect(screen.getByText(/pick up where it left off/)).toBeInTheDocument();
-    expect(within(screen.getByRole("main")).getByRole("button", { name: "Start PAM" })).toBeEnabled();
+    expect(within(screen.getByRole("main")).getByRole("button", { name: "Start Pam" })).toBeEnabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("renders startup transport failure in the bounded recovery shell", async () => {
     render(<App bridge={fixtureBridge("startup-error")} />);
 
-    expect(await screen.findByRole("heading", { name: "PAM needs a moment" })).toBeInTheDocument();
-    expect(screen.getByText("The PAM daemon fixture is unavailable.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Pam needs a moment" })).toBeInTheDocument();
+    expect(screen.getByText("The Pam daemon fixture is unavailable.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry safely" })).toBeEnabled();
   });
 
@@ -277,17 +277,17 @@ describe("daemon observatory", () => {
     // a synchronous read races the panel's own fetch on a loaded runner.
     expect(await screen.findByText("Access policy")).toBeInTheDocument();
     expect(screen.getByText("policy-gated")).toBeInTheDocument();
-    expect(screen.getByText(/Network diagnostics are blocked by policy for this PAM window/)).toBeInTheDocument();
+    expect(screen.getByText(/Network diagnostics are blocked by policy for this Pam window/)).toBeInTheDocument();
     expect(screen.queryByText("Certificates")).not.toBeInTheDocument();
   });
 
   it("surfaces a failed observed-boundary read without losing the daemon-scope grants", async () => {
     const bridge = fixtureBridge();
-    bridge.daemonAccessConfig = vi.fn(async () => { throw new Error("PAM could not read the observed boundary."); });
+    bridge.daemonAccessConfig = vi.fn(async () => { throw new Error("Pam could not read the observed boundary."); });
     render(<App bridge={bridge} initialView="access" />);
 
     expect(await screen.findByRole("heading", { name: "Capabilities this window uses" })).toBeInTheDocument();
-    expect(await screen.findByText("PAM could not read the observed boundary.")).toBeInTheDocument();
+    expect(await screen.findByText("Pam could not read the observed boundary.")).toBeInTheDocument();
     expect(screen.queryByText("Certificates")).not.toBeInTheDocument();
   });
 
@@ -799,14 +799,14 @@ describe("daemon observatory", () => {
     const bridge = fixtureBridge("missing-credential");
     bridge.registerGuiCaller = vi.fn().mockRejectedValue({
       kind: "unavailable",
-      message: "PAM GUI caller registration failed: PAM's native credential store is unavailable.",
-      recovery: "Retry registration or inspect the local PAM data store.",
+      message: "Pam GUI caller registration failed: Pam's native credential store is unavailable.",
+      recovery: "Retry registration or inspect the local Pam data store.",
     });
     render(<App bridge={bridge} initialView="access" />);
 
     await user.click(await screen.findByRole("button", { name: "Register GUI caller" }));
 
-    expect(await screen.findByText(/PAM's native credential store is unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Pam's native credential store is unavailable/)).toBeInTheDocument();
     expect(screen.queryByText("GUI caller registration could not be completed. Retry from this screen.")).not.toBeInTheDocument();
     expect(bridge.registerGuiCaller).toHaveBeenCalledTimes(1);
   });
@@ -816,7 +816,7 @@ describe("daemon observatory", () => {
     bridge.bootstrap = vi.fn().mockRejectedValue(new Error("daemon socket unavailable"));
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByRole("heading", { name: "PAM needs a moment" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Pam needs a moment" })).toBeInTheDocument();
     expect(screen.getByText("daemon socket unavailable")).toBeInTheDocument();
     expect(screen.queryByText("payments-api")).not.toBeInTheDocument();
   });
@@ -832,19 +832,19 @@ describe("daemon observatory", () => {
     render(<App bridge={bridge} />);
     await screen.findByRole("heading", { name: "Overview" });
 
-    await user.click(screen.getByRole("button", { name: "Restart PAM (unloads the loaded model)" }));
+    await user.click(screen.getByRole("button", { name: "Restart Pam (unloads the loaded model)" }));
 
     expect(calls).toEqual(["stop", "start"]);
-    expect(await screen.findByText("PAM restarted")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop PAM" })).toBeInTheDocument();
+    expect(await screen.findByText("Pam restarted")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop Pam" })).toBeInTheDocument();
   });
 
   it("keeps the restart control in place, disabled, while the daemon is stopped", async () => {
     render(<App bridge={fixtureBridge("offline")} />);
     await screen.findByRole("heading", { name: "Overview" });
-    await screen.findByText("The activity picture returns when PAM is back on watch.");
+    await screen.findByText("The activity picture returns when Pam is back on watch.");
 
-    expect(screen.getByRole("button", { name: "Restart PAM (unavailable while PAM is stopped)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart Pam (unavailable while Pam is stopped)" })).toBeDisabled();
   });
 
   it("chats with the local model in an ephemeral drawer with usage lines", async () => {
@@ -966,10 +966,10 @@ describe("global-first workspace", () => {
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Daemon overview" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Usage by project" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "PAM needs a moment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pam needs a moment" })).not.toBeInTheDocument();
     expect(document.querySelector(".breadcrumb")).toHaveTextContent(/^Daemon observatory$/);
     // The daemon-health probe feeds the sidebar pill without any project.
-    expect(await screen.findByRole("button", { name: "Stop PAM" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Stop Pam" })).toBeEnabled();
   });
 
   it("keeps the breadcrumb project-free even while a project is active", async () => {
@@ -1098,7 +1098,7 @@ describe("global-first workspace", () => {
 
     await user.click(screen.getByRole("tab", { name: "Library" }));
     // Assignment stays gated without a project scope, and nothing offers one.
-    expect(await screen.findByText(/PAM has none open/)).toBeInTheDocument();
+    expect(await screen.findByText(/Pam has none open/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Enable target" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /payments-api/ })).not.toBeInTheDocument();
     expect(activate).not.toHaveBeenCalled();
@@ -1129,19 +1129,19 @@ describe("global-first workspace", () => {
     const health = vi.spyOn(bridge, "daemonHealth");
     render(<App bridge={bridge} />);
 
-    await user.click(await screen.findByRole("button", { name: "Stop PAM" }));
+    await user.click(await screen.findByRole("button", { name: "Stop Pam" }));
     await user.click(await screen.findByRole("button", { name: "Stop" }));
-    expect(await screen.findByRole("button", { name: "Start PAM" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Start Pam" })).toBeEnabled();
     expect(stop.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
 
-    await user.click(screen.getByRole("button", { name: "Start PAM" }));
-    expect(await screen.findByRole("button", { name: "Stop PAM" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Start Pam" }));
+    expect(await screen.findByRole("button", { name: "Stop Pam" })).toBeEnabled();
     expect(start.mock.calls[0][0]).toMatchObject({ projectHandle: "daemon", generation: "daemon" });
     // Bootstrap probe plus one re-probe per lifecycle action.
     await waitFor(() => expect(health).toHaveBeenCalledTimes(3));
   });
 
-  // #238: a running PAM changes models in place. The restart dance is gone —
+  // #238: a running Pam changes models in place. The restart dance is gone —
   // nothing is stopped, nothing is started, and the copy no longer promises
   // a restart that does not happen.
   it("loads a registered model into the running daemon without restarting it", async () => {
@@ -1154,7 +1154,7 @@ describe("global-first workspace", () => {
 
     const panel = await screen.findByRole("region", { name: "Model runtime" });
     expect(
-      within(panel).queryByRole("button", { name: "Restart PAM with this model" }),
+      within(panel).queryByRole("button", { name: "Restart Pam with this model" }),
     ).not.toBeInTheDocument();
     await user.click((await within(panel).findAllByRole("button", { name: "Load" }))[0]);
 
@@ -1167,7 +1167,7 @@ describe("global-first workspace", () => {
   });
 
   // The other half of the same capability: the loaded model can be dropped
-  // and PAM keeps serving.
+  // and Pam keeps serving.
   it("unloads the loaded model and keeps the daemon running", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge("solved");
@@ -1198,7 +1198,7 @@ describe("global-first workspace", () => {
     ).toBeInTheDocument();
   });
 
-  it("starts the daemon with a registered model while PAM is paused", async () => {
+  it("starts the daemon with a registered model while Pam is paused", async () => {
     const user = userEvent.setup();
     const bridge = fixtureBridge("offline");
     const stop = vi.spyOn(bridge, "stopDaemon");
@@ -1207,7 +1207,7 @@ describe("global-first workspace", () => {
 
     const panel = await screen.findByRole("region", { name: "Model runtime" });
     await user.click(
-      (await within(panel).findAllByRole("button", { name: "Start PAM with this model" }))[0],
+      (await within(panel).findAllByRole("button", { name: "Start Pam with this model" }))[0],
     );
 
     await waitFor(() => expect(start).toHaveBeenCalled());

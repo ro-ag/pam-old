@@ -44,7 +44,7 @@ interface DownloadProgress {
 // The one uncalibrated wording, shared by the download picker and the manual
 // import result so a user never meets two phrasings for the same fact.
 export const UNCALIBRATED_NOTICE =
-  "Not in PAM's calibrated set — it may fail to load under this Mac's runtime profile.";
+  "Not in Pam's calibrated set — it may fail to load under this Mac's runtime profile.";
 
 // The reason a preset is out of reach, naming both numbers: what the artifact
 // needs, and what this Mac can devote to a model after the OS reserve.
@@ -52,7 +52,7 @@ export function tooLargeReason(expectedSizeBytes: number, hostModelBudgetBytes: 
   return `Needs ${formatModelSize(expectedSizeBytes)}; this Mac can devote ${formatModelSize(hostModelBudgetBytes)} to a model.`;
 }
 
-// The curated path: pick a preset, review its license, download it. PAM
+// The curated path: pick a preset, review its license, download it. Pam
 // verifies, hashes, and registers it once the bytes land — no terminal
 // round-trip, and no floor warning here since every curated preset is
 // comfortably large (>= 4.9 GB).
@@ -222,12 +222,12 @@ function PresetDownload({
       {loadError ? (
         <p className="model-verify is-fail" role="alert">{loadError}</p>
       ) : !presets ? (
-        <p className="model-note">Looking at the curated models PAM can fetch for you…</p>
+        <p className="model-note">Looking at the curated models Pam can fetch for you…</p>
       ) : (
         <>
           {hostMemory !== null && hostMemory.totalBytes < hostMemory.supportedMinimumBytes && (
             <p className="model-fit-warn model-host-notice">
-              PAM's local model is built for machines with {formatHostMemory(hostMemory.supportedMinimumBytes)} of
+              Pam's local model is built for machines with {formatHostMemory(hostMemory.supportedMinimumBytes)} of
               memory or more; this Mac reports {formatHostMemory(hostMemory.totalBytes)}
               {hostModelBudgetBytes === null
                 ? "."
@@ -348,7 +348,7 @@ function PresetDownload({
                     Cancel
                   </button>
                 )}
-                {busy && <small>PAM fetches, hashes, and registers this model, all from this screen.</small>}
+                {busy && <small>Pam fetches, hashes, and registers this model, all from this screen.</small>}
               </div>
               {phase === "running" && progress && (
                 <div className="model-download-progress">
@@ -386,8 +386,8 @@ function PresetDownload({
 // it, and the digest is the only thing standing between the user and whatever
 // the source sends.
 export const PASTED_SOURCE_NOTICE =
-  "PAM has not checked this source. By pasting it you are vouching for it, and the SHA-256 you " +
-  "enter is what protects you: PAM refuses to register the file unless the bytes it receives " +
+  "Pam has not checked this source. By pasting it you are vouching for it, and the SHA-256 you " +
+  "enter is what protects you: Pam refuses to register the file unless the bytes it receives " +
   "hash to exactly that digest.";
 
 // The pasted path: a URL outside the curated catalog, with the same fields
@@ -513,12 +513,12 @@ function UrlDownload({
       form.licenseUrl.trim() === "" && "license URL",
       form.licenseNoticeText.trim() === "" && "license notice",
     ].filter((field): field is string => Boolean(field));
-    if (missing.length > 0) return `Fill in the ${missing.join(", ")} — PAM verifies every one of them.`;
+    if (missing.length > 0) return `Fill in the ${missing.join(", ")} — Pam verifies every one of them.`;
     if (!/^[^/\s]+\/[^/\s]+$/.test(form.model.trim())) {
       return "Name the model as vendor/name, e.g. qwen/qwen3-4b-instruct-q4.";
     }
     if (!form.url.trim().startsWith("https://")) {
-      return "PAM downloads models over HTTPS only. Paste the direct https:// URL of the .gguf file itself.";
+      return "Pam downloads models over HTTPS only. Paste the direct https:// URL of the .gguf file itself.";
     }
     if (!/^(sha256:)?[0-9a-fA-F]{64}$/.test(form.sha256.trim())) {
       return "The expected digest must be a 64-character hex SHA-256.";
@@ -674,7 +674,7 @@ function UrlDownload({
               </button>
             )}
             {phase === "running" && (
-              <small>PAM fetches, hashes, and registers this model, all from this screen.</small>
+              <small>Pam fetches, hashes, and registers this model, all from this screen.</small>
             )}
           </div>
           {phase === "running" && progress && (
@@ -727,7 +727,7 @@ function canonicalSpdxId(licenseId: string): string {
   );
 }
 
-// The manual path: point PAM at an already-downloaded GGUF. License fields
+// The manual path: point Pam at an already-downloaded GGUF. License fields
 // collapse behind Advanced since most imports reuse the same license across
 // re-imports; drag-drop still fills the path on the native shell.
 function ManualImport({
@@ -751,7 +751,7 @@ function ManualImport({
   const [allowSmall, setAllowSmall] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [importState, setImportState] = useState<ImportState>({ state: "idle" });
-  // Set when an import completes against an artifact outside PAM's calibrated
+  // Set when an import completes against an artifact outside Pam's calibrated
   // set — the registration succeeded, but loading it is not a tested path.
   const [uncalibrated, setUncalibrated] = useState(false);
   const [inspect, setInspect] = useState<ModelInspectDto | null>(null);
@@ -1006,7 +1006,7 @@ function ManualImport({
       setAdvancedOpen(true);
       setImportState({
         state: "fail",
-        detail: `Fill in the ${missingLicenseFields.join(", ")} under Advanced — PAM records exactly which license you accept.`,
+        detail: `Fill in the ${missingLicenseFields.join(", ")} under Advanced — Pam records exactly which license you accept.`,
       });
       return;
     }
@@ -1094,7 +1094,7 @@ function ManualImport({
           </small>
           {inspect.belowFloor && (
             <p className="model-fit-warn" role="status">
-              Below PAM's recommended minimum of {formatModelSize(inspect.floorBytes)} — override this
+              Below Pam's recommended minimum of {formatModelSize(inspect.floorBytes)} — override this
               under Advanced if you want to import it anyway.
             </p>
           )}
@@ -1147,7 +1147,7 @@ function ManualImport({
                 disabled={busy}
                 onChange={(event) => setAllowSmall(event.target.checked)}
               />
-              Allow a model below PAM's recommended minimum size (results will fall short in real flows).
+              Allow a model below Pam's recommended minimum size (results will fall short in real flows).
             </label>
           </div>
         )}
@@ -1165,7 +1165,7 @@ function ManualImport({
         <button type="submit" className="button button--primary button--small" disabled={!ready || busy}>
           {busy ? "Verifying and registering…" : "Import model"}
         </button>
-        {busy && <small>PAM reads and hashes the whole file in the background; the rest of the app stays responsive.</small>}
+        {busy && <small>Pam reads and hashes the whole file in the background; the rest of the app stays responsive.</small>}
       </div>
       {importState.state === "running" && importState.stage === "hashing" && importState.totalBytes > 0 && (
         <div className="model-download-progress">
@@ -1191,7 +1191,7 @@ function ManualImport({
       )}
       {uncalibrated && (
         <p className="model-fit-warn" role="status">
-          Registered, but this artifact is not in PAM's calibrated set — it may fail to load under
+          Registered, but this artifact is not in Pam's calibrated set — it may fail to load under
           this Mac's runtime profile. The calibrated presets in the download list above are the
           tested path.
         </p>
@@ -1200,8 +1200,8 @@ function ManualImport({
   );
 }
 
-// The whole setup happens here: a curated preset PAM downloads for you, or
-// point PAM at a GGUF you already have — no terminal round-trip either way.
+// The whole setup happens here: a curated preset Pam downloads for you, or
+// point Pam at a GGUF you already have — no terminal round-trip either way.
 function ModelImportForm({
   bridge,
   onImported,
@@ -1218,11 +1218,11 @@ function ModelImportForm({
     <div className="model-runtime model-setup">
       <p className="model-note">
         {registered === 0
-          ? "No local model is registered yet. Choose a curated model for PAM to download, or import one you already have."
-          : "Add another model: choose a curated one for PAM to download, or import one you already have. Registering a model never disturbs the one running."}
+          ? "No local model is registered yet. Choose a curated model for Pam to download, or import one you already have."
+          : "Add another model: choose a curated one for Pam to download, or import one you already have. Registering a model never disturbs the one running."}
       </p>
       <p className="model-note">
-        Every model in the list below is hand-checked: PAM ships its URL, size and digest as
+        Every model in the list below is hand-checked: Pam ships its URL, size and digest as
         checked-in constants and confines its download to the publisher's own hosts.
       </p>
       <PresetDownload bridge={bridge} onImported={onImported} refreshTick={refreshTick} />
@@ -1254,7 +1254,7 @@ const WEIGHTS_HEALTH_LABELS: Record<ModelHealthDto["health"], string> = {
   size_mismatch: "Weights resized since registration",
   digest_mismatch: "Weights changed since registration",
   metadata_mismatch: "Weights are no longer the registered GGUF",
-  unsafe_path: "Weights path is no longer a plain file PAM can read",
+  unsafe_path: "Weights path is no longer a plain file Pam can read",
   unreadable: "Weights could not be read",
 };
 
@@ -1265,7 +1265,7 @@ export interface ModelPanelProps {
   /** True while a daemon lifecycle command is in flight. */
   modelBusy: boolean;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
-  /** Brings a model into PAM: a plain load when it is already running, and a
+  /** Brings a model into Pam: a plain load when it is already running, and a
    *  start carrying the model when it is not. */
   onStartWithModel: (modelId: string) => void;
   /** The model was dropped from the running daemon; the surface needs
@@ -1320,7 +1320,7 @@ export function ModelPanel({
   }, [loaded?.modelId]);
   // A running daemon loads in place; only a paused one needs starting. The
   // copy stops promising a restart the moment there is nothing to restart.
-  const loadLabel = offline ? "Start PAM with this model" : "Load";
+  const loadLabel = offline ? "Start Pam with this model" : "Load";
   // The daemon's own load or unload, distinct from the startup load the
   // desktop infers above: this is the running daemon changing models.
   const transition = !offline && modelStatus?.status === "ok" ? modelStatus.transition : null;
@@ -1417,7 +1417,7 @@ export function ModelPanel({
     }
   };
 
-  // Unloading frees the model's memory and leaves PAM serving. Nothing
+  // Unloading frees the model's memory and leaves Pam serving. Nothing
   // durable goes — the registration and the weights both stay — so unlike
   // unregistering it needs no in-row confirmation, only its own busy state
   // and a place for a refusal to land.
@@ -1441,7 +1441,7 @@ export function ModelPanel({
     }
   };
 
-  // Which model a PAM start loads when nothing else is asked for. Read once
+  // Which model a Pam start loads when nothing else is asked for. Read once
   // per mount and after every change, from the same Settings file the daemon
   // reads at start.
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
@@ -1456,7 +1456,7 @@ export function ModelPanel({
         if (!cancelled) setDefaultModel(settings.defaultModel);
       } catch {
         // A pin that cannot be read leaves every row unpinned rather than
-        // claiming a default PAM might not actually start with.
+        // claiming a default Pam might not actually start with.
         if (!cancelled) setDefaultModel(null);
       }
     })();
@@ -1480,7 +1480,7 @@ export function ModelPanel({
     }
   };
 
-  // The pin decides which model a later PAM start loads. It is the same
+  // The pin decides which model a later Pam start loads. It is the same
   // control wherever a model appears — a catalog row, or the loaded identity
   // above it — because the model you are running is the one you are most
   // likely to want back next time.
@@ -1558,7 +1558,7 @@ export function ModelPanel({
 
   // Deleting weights removes bytes and unregisters in one operation, so it is
   // confirmed in the row exactly like unregistering, and only ever offered for
-  // a row PAM has just re-read and found to be its own download.
+  // a row Pam has just re-read and found to be its own download.
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
 
@@ -1614,7 +1614,7 @@ export function ModelPanel({
         <div>
           <strong title={model.modelId}>{model.modelId}</strong>
           <p>{formatModelSize(model.sizeBytes)} on disk</p>
-          {pinned && <p className="model-note">PAM starts with this model.</p>}
+          {pinned && <p className="model-note">Pam starts with this model.</p>}
           {transition?.model === model.modelId && (
             <p className="model-note" role="status">
               {transition.phase === "loading" ? "Loading…" : "Unloading…"}
@@ -1650,7 +1650,7 @@ export function ModelPanel({
             <Power size={17} /> {loadLabel}
           </button>
           {/* The pin is a preference, not an action on the daemon: clicking a
-              pinned row clears it, so PAM can be told to start with no model
+              pinned row clears it, so Pam can be told to start with no model
               at all. */}
           {defaultModelPin(model.modelId)}
           <button
@@ -1661,9 +1661,9 @@ export function ModelPanel({
           >
             <Stethoscope size={17} /> {weightsBusy === model.modelId ? "Checking weights…" : "Check weights"}
           </button>
-          {/* Deleting weights is offered only for a file PAM downloaded into its
+          {/* Deleting weights is offered only for a file Pam downloaded into its
               own models directory, and only after the check that proved it. A
-              GGUF PAM verified in place belongs to whoever put it there: the
+              GGUF Pam verified in place belongs to whoever put it there: the
               honest offer for that row is to show them where it is. */}
           {health && health.weightsDeletable && (
             confirmingDelete === model.modelId ? (
@@ -1707,7 +1707,7 @@ export function ModelPanel({
           )}
           {confirmingUnregister === model.modelId ? (
             <span className="connector-confirm">
-              Remove {model.modelId} from PAM&apos;s registry? The GGUF file stays on disk.
+              Remove {model.modelId} from Pam&apos;s registry? The GGUF file stays on disk.
               <button
                 type="button"
                 className="button button--secondary button--small"
@@ -1741,7 +1741,7 @@ export function ModelPanel({
 
   // What the models directory holds that the registry cannot account for, and
   // the other way round. Reporting only: clearing a dangling row is
-  // unregistering it, and an orphaned file is the user's to remove unless PAM
+  // unregistering it, and an orphaned file is the user's to remove unless Pam
   // downloaded it, in which case its own row offers Delete weights.
   const weightsOnDisk = sweep?.status === "ok" ? sweep : null;
   const sweepSection = weightsOnDisk && (
@@ -1848,17 +1848,17 @@ export function ModelPanel({
         registered.length > 0 ? (
           <div className="model-runtime">
             <p className="model-note">
-              PAM is paused, so nothing is loaded right now. Start it with a registered model to
+              Pam is paused, so nothing is loaded right now. Start it with a registered model to
               chat and verify.
             </p>
             <div className="access-list model-rows">{registered.map(catalogRow)}</div>
           </div>
         ) : (
-          <PanelEmpty>PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</PanelEmpty>
+          <PanelEmpty>Pam is paused, so the local model runtime is not reachable. Start Pam to check on it.</PanelEmpty>
         )
       ) : loading ? (
         <PanelLoading>
-          PAM is starting: the model is still loading. Checking and loading a large model takes a
+          Pam is starting: the model is still loading. Checking and loading a large model takes a
           few minutes, and this panel updates when it finishes.
         </PanelLoading>
       ) : !modelStatus ? (
@@ -1889,7 +1889,7 @@ export function ModelPanel({
             >
               Chat
             </button>
-            {/* Unloading returns the model's memory and leaves PAM serving.
+            {/* Unloading returns the model's memory and leaves Pam serving.
                 The registration and the weights both stay, so this is not a
                 disposal: the same model loads again from its catalog row. */}
             <button
@@ -1905,7 +1905,7 @@ export function ModelPanel({
                 most likely to want back on the next start. */}
             {defaultModelPin(loaded.modelId)}
           </div>
-          {defaultModel === loaded.modelId && <p className="model-note">PAM starts with this model.</p>}
+          {defaultModel === loaded.modelId && <p className="model-note">Pam starts with this model.</p>}
           {unloadFailure && <p className="model-verify is-fail" role="alert">{unloadFailure}</p>}
           {pinFailure?.modelId === loaded.modelId && (
             <p className="model-verify is-fail" role="alert">{pinFailure.detail}</p>
@@ -1958,7 +1958,7 @@ export function ModelsView(props: ModelPanelProps) {
       <header className="project-header compact">
         <div>
           <h1>Models</h1>
-          <p>The local model PAM runs on, and how to get another one.</p>
+          <p>The local model Pam runs on, and how to get another one.</p>
         </div>
       </header>
       <ModelPanel {...props} />

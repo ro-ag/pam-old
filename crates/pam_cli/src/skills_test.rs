@@ -849,7 +849,7 @@ fn git_install_output_omits_repository_url_path_and_source_body() {
         std::process::Command::new("git")
             .args([
                 "-c",
-                "user.name=PAM Test",
+                "user.name=Pam Test",
                 "-c",
                 "user.email=pam@example.invalid",
                 "commit",

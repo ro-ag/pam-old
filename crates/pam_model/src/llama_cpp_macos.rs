@@ -31,7 +31,7 @@ const PHYSICAL_BATCH_TOKENS: u32 = 512;
 const PARALLEL_SEQUENCES: u32 = 1;
 const GIB: u64 = 1024 * 1024 * 1024;
 const MIN_OS_RESERVE_BYTES: u64 = 8 * GIB;
-/// PAM's own daemon/API/UI budget, held out of the model ceiling so it cannot
+/// Pam's own daemon/API/UI budget, held out of the model ceiling so it cannot
 /// disappear inside a model estimate. The host snapshot reports it separately,
 /// from this one definition.
 pub const APPLICATION_RESERVE_BYTES: u64 = GIB;
@@ -261,7 +261,7 @@ fn prepare_model(
     let calibration = artifact_calibration(registered, ceiling_bytes)?;
     if calibration == ArtifactCalibration::Uncalibrated {
         eprintln!(
-            "pam_model: loading {} — this artifact is not in PAM's calibrated set, so its runtime profile is untested; it fits this Mac's {ceiling_bytes}-byte model ceiling",
+            "pam_model: loading {} — this artifact is not in Pam's calibrated set, so its runtime profile is untested; it fits this Mac's {ceiling_bytes}-byte model ceiling",
             registered.key.id()
         );
     }
@@ -335,16 +335,16 @@ pub(crate) fn calibrated_runtime_profile(
 }
 
 /// This host's model-allocation ceiling: physical memory minus the
-/// operating-system reserve and PAM's own application budget. It replaces the
+/// operating-system reserve and Pam's own application budget. It replaces the
 /// former product-wide 27,000,000,000-byte constant, which assumed every Mac
-/// was PAM's 32 GiB minimum.
+/// was Pam's 32 GiB minimum.
 ///
 /// The OS share is [`required_os_reserve`] — the same `max(8 GiB, 20% of
 /// physical)` the exact accounting in [`validate_host_admission`] enforces —
 /// so one reserve rule applies everywhere and the ceiling can never advertise
 /// capacity the exact accounting will refuse. On a 32 GiB Mac the absolute
 /// 8 GiB floor binds, not the 20% share, and folding it in closes the
-/// 1.72 GB gap that let PAM's own Q6\_K artifact clear this gate and then be
+/// 1.72 GB gap that let Pam's own Q6\_K artifact clear this gate and then be
 /// refused by physical reality at load.
 ///
 /// Availability, pressure, and the Metal working-set limit are still *not*
@@ -554,7 +554,7 @@ pub(crate) fn validate_host_admission(
     }
     if snapshot.reserved_application_bytes() == 0 {
         return Err(RuntimeError::AdmissionUnavailable(
-            "PAM application memory reserve is missing",
+            "Pam application memory reserve is missing",
         ));
     }
     let required_contingency = calibrated_contingency(projected_runtime_bytes(projection)?);

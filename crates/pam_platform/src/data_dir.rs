@@ -2,7 +2,7 @@
 //! legacy `dev.PAM.PAM` location.
 //!
 //! Pam's per-user directories used to be derived from
-//! `ProjectDirs::from("dev", "PAM", "PAM")`. The `directories` crate composes
+//! `ProjectDirs::from("dev", "Pam", "Pam")`. The `directories` crate composes
 //! that triple differently per platform, so the lowercase rename is
 //! asymmetric: Linux already lowercased the application name, Windows composes
 //! `pam\pam` on a case-insensitive volume, and macOS composes `dev.pam.pam`
@@ -28,8 +28,8 @@ use directories::ProjectDirs;
 const QUALIFIER: &str = "dev";
 const ORGANIZATION: &str = "pam";
 const APPLICATION: &str = "pam";
-const LEGACY_ORGANIZATION: &str = "PAM";
-const LEGACY_APPLICATION: &str = "PAM";
+const LEGACY_ORGANIZATION: &str = "Pam";
+const LEGACY_APPLICATION: &str = "Pam";
 
 /// Outcome of the single legacy data-directory migration attempted per
 /// process.

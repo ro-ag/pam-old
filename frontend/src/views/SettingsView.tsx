@@ -192,7 +192,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
   return (
     <main className="canvas" id="main-content">
       <header className="project-header compact">
-        <div><h1>Settings</h1><p>Where PAM keeps things, and how to clear its logs.</p></div>
+        <div><h1>Settings</h1><p>Where Pam keeps things, and how to clear its logs.</p></div>
       </header>
       {loadError ? (
         <section className="panel"><PanelError>{loadError}</PanelError></section>
@@ -202,7 +202,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
         <>
           <section className="panel" aria-labelledby="storage-heading">
             <div className="panel-title">
-              <div><span className="eyebrow">Storage</span><h2 id="storage-heading">Where PAM keeps things</h2></div>
+              <div><span className="eyebrow">Storage</span><h2 id="storage-heading">Where Pam keeps things</h2></div>
               <button
                 type="button"
                 className="button button--secondary button--small"
@@ -287,7 +287,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
             </div>
             <div className="panel-body">
             <p className="connector-note">
-              {formatBytes(settings.logsSizeBytes)} on disk today. PAM also keeps a live, bounded window
+              {formatBytes(settings.logsSizeBytes)} on disk today. Pam also keeps a live, bounded window
               of recent lines in memory — see it in{" "}
               <button type="button" className="button button--secondary button--small" onClick={onOpenConsole}>
                 Console
@@ -306,7 +306,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
               </button>
             ) : (
               <span className="connector-confirm">
-                Delete PAM&apos;s on-disk log files? The in-memory console keeps working either way.
+                Delete Pam&apos;s on-disk log files? The in-memory console keeps working either way.
                 <button type="button" className="button button--secondary button--small" disabled={deleteBusy} onClick={() => void deleteLogs()}>
                   Delete
                 </button>
@@ -322,7 +322,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
             <div className="panel-title">
               <div>
                 <span className="eyebrow">Danger zone</span>
-                <h2 id="danger-heading">Reset PAM</h2>
+                <h2 id="danger-heading">Reset Pam</h2>
               </div>
             </div>
             <div className="panel-body">
@@ -393,7 +393,7 @@ export function SettingsView({ bridge, onOpenConsole }: SettingsViewProps) {
               <article className="panel-body">
                 <p className="connector-note">
                   <strong>Factory reset.</strong> Every scope above, settings back to their defaults,
-                  and the authored flow library at {settings.flowsDir}. PAM has to be stopped first.
+                  and the authored flow library at {settings.flowsDir}. Pam has to be stopped first.
                 </p>
                 <label className="connector-note">
                   <input

@@ -352,7 +352,7 @@ pub(crate) async fn observe_at(
         ResultBody::Success { .. } => {
             return RunProgress {
                 cursor: after,
-                detail_error: Some("PAM returned an unexpected flow replay response.".to_owned()),
+                detail_error: Some("Pam returned an unexpected flow replay response.".to_owned()),
                 ..RunProgress::default()
             };
         }
@@ -402,7 +402,7 @@ async fn terminal_result(
             ..
         } if exchange.events.is_empty() => Ok(outcome_view(&result)),
         ResultBody::Failure(failure) => Err(failure.message),
-        ResultBody::Success { .. } => Err("PAM returned an unexpected flow result.".to_owned()),
+        ResultBody::Success { .. } => Err("Pam returned an unexpected flow result.".to_owned()),
     }
 }
 
@@ -449,7 +449,7 @@ pub(crate) async fn cancel_at(
         } if result.target_request_id == run_id => Ok(cancellation_label(&result.disposition)),
         ResultBody::Failure(failure) => Err(failure.message),
         ResultBody::Success { .. } => {
-            Err("PAM returned an unexpected cancellation response.".to_owned())
+            Err("Pam returned an unexpected cancellation response.".to_owned())
         }
     }
 }

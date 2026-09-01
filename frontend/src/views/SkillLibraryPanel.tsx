@@ -558,7 +558,7 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
       <div className="skill-library-truth" aria-label="Library state definitions">
         <div><strong>Observed</strong><span>Shown in inventory above; detection alone grants no management.</span></div>
         <div><strong>Enabled</strong><span>Selected for this exact project and agent.</span></div>
-        <div><strong>Managed</strong><span>Owned only after verified PAM publication.</span></div>
+        <div><strong>Managed</strong><span>Owned only after verified Pam publication.</span></div>
         <div><strong>Drift</strong><span>Read-only comparison with retained canonical bytes.</span></div>
       </div>
       {busy === "load" && !entries ? (
@@ -610,7 +610,7 @@ export function SkillLibraryPanel({ bridge, fence, onMutated }: SkillLibraryPane
           <section aria-labelledby="skill-library-target-heading">
             <div className="skill-library-section-title"><div><HardDrives size={19} /><h3 id="skill-library-target-heading">Manage exact target</h3></div><span>{projectScoped ? "Every action is fenced to the active project generation." : "Assignment needs a project; the library above stays global."}</span></div>
             {!projectScoped ? (
-              <PanelEmpty>Enabling, materializing, and inspecting drift belong to one project scope, and PAM has none open. Everything above stays readable.</PanelEmpty>
+              <PanelEmpty>Enabling, materializing, and inspecting drift belong to one project scope, and Pam has none open. Everything above stays readable.</PanelEmpty>
             ) : selection ? (
               <>
                 <div className="skill-library-selectors">

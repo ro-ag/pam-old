@@ -590,7 +590,7 @@ impl LibraryIoOperation {
     const fn description(self) -> &'static str {
         match self {
             Self::OpenHome => "open the p-track home",
-            Self::InitializeDirectories => "initialize the PAM library directories",
+            Self::InitializeDirectories => "initialize the Pam library directories",
             Self::ReadManifest => "read the canonical library manifest",
             Self::WriteManifest => "write the canonical library manifest",
             Self::ReadBlob => "read canonical library bytes",
@@ -643,7 +643,7 @@ impl fmt::Display for LibraryError {
         match self {
             Self::InvalidHome => formatter.write_str("p-track home must be an absolute directory"),
             Self::UnsafePath => formatter.write_str("canonical library path is unsafe"),
-            Self::Io(operation) => write!(formatter, "PAM could not {}", operation.description()),
+            Self::Io(operation) => write!(formatter, "Pam could not {}", operation.description()),
             Self::LockUnavailable => formatter.write_str("canonical library lock is unavailable"),
             Self::ArtifactTooLarge => {
                 formatter.write_str("canonical library artifact is too large")
@@ -945,7 +945,7 @@ impl fmt::Debug for CanonicalLibrary {
 }
 
 impl CanonicalLibrary {
-    /// Opens or initializes PAM's isolated canonical library below a resolved p-track home.
+    /// Opens or initializes Pam's isolated canonical library below a resolved p-track home.
     ///
     /// # Errors
     ///

@@ -116,7 +116,7 @@ describe("model runtime panel", () => {
     );
   });
 
-  // #238: a running PAM loads in place, so the row action is a plain "Load"
+  // #238: a running Pam loads in place, so the row action is a plain "Load"
   // and the copy no longer promises a restart that will not happen.
   it("offers a plain load with a registered model when nothing is loaded", async () => {
     const props = await modelProps("model-on-deck");
@@ -125,7 +125,7 @@ describe("model runtime panel", () => {
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(within(panel).getByText("on deck")).toBeInTheDocument();
     expect(
-      within(panel).queryByRole("button", { name: /Restart PAM with this model/ }),
+      within(panel).queryByRole("button", { name: /Restart Pam with this model/ }),
     ).not.toBeInTheDocument();
     await userEvent.click(within(panel).getAllByRole("button", { name: "Load" })[0]);
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
@@ -160,7 +160,7 @@ describe("model runtime panel", () => {
 
   // #239: the pin decides which model a later start loads. It is set from a
   // row, shown on that row, and taken back off from the same control.
-  it("pins a model as the one PAM starts with, and clears the pin again", async () => {
+  it("pins a model as the one Pam starts with, and clears the pin again", async () => {
     const props = await modelProps("model-on-deck");
     const pin = vi.spyOn(props.bridge, "settingsSetDefaultModel");
     render(<ModelsView {...props} />);
@@ -172,13 +172,13 @@ describe("model runtime panel", () => {
 
     await userEvent.click(within(row).getByRole("button", { name: "Start with this" }));
     expect(pin).toHaveBeenCalledWith(expect.anything(), "qwen/qwen3-14b-instruct-q4");
-    expect(await within(row).findByText("PAM starts with this model.")).toBeInTheDocument();
+    expect(await within(row).findByText("Pam starts with this model.")).toBeInTheDocument();
 
-    // The same control takes it back off, so PAM can be told to start with no
+    // The same control takes it back off, so Pam can be told to start with no
     // model at all.
     await userEvent.click(within(row).getByRole("button", { name: "Don't start with this" }));
     await waitFor(() => expect(pin).toHaveBeenLastCalledWith(expect.anything(), null));
-    expect(within(row).queryByText("PAM starts with this model.")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Pam starts with this model.")).not.toBeInTheDocument();
   });
 
   // The loaded model has no catalog row of its own, so its pin lives beside
@@ -197,7 +197,7 @@ describe("model runtime panel", () => {
     await waitFor(() =>
       expect(pin).toHaveBeenCalledWith(expect.anything(), "qwen/qwen3-14b-instruct-q4"),
     );
-    expect(await within(panel).findByText("PAM starts with this model.")).toBeInTheDocument();
+    expect(await within(panel).findByText("Pam starts with this model.")).toBeInTheDocument();
   });
 
   it("offers an unregister action on every registered catalog row", async () => {
@@ -223,7 +223,7 @@ describe("model runtime panel", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Unregister" }));
 
     expect(
-      within(row).getByText(/Remove qwen\/qwen3-14b-instruct-q4 from PAM's registry\? The GGUF file stays on disk\./),
+      within(row).getByText(/Remove qwen\/qwen3-14b-instruct-q4 from Pam's registry\? The GGUF file stays on disk\./),
     ).toBeInTheDocument();
     expect(unregister).not.toHaveBeenCalled();
 
@@ -305,7 +305,7 @@ describe("model runtime panel", () => {
     expect(reported).toHaveTextContent("model storage is unavailable");
   });
 
-  it("offers Delete weights only for a model PAM downloaded, and Reveal in Finder for the rest", async () => {
+  it("offers Delete weights only for a model Pam downloaded, and Reveal in Finder for the rest", async () => {
     const props = await modelProps("model-on-deck");
     const reveal = vi.spyOn(props.bridge, "revealPath");
     render(<ModelsView {...props} />);
@@ -324,7 +324,7 @@ describe("model runtime panel", () => {
     ).toBeInTheDocument();
     expect(within(downloaded).queryByRole("button", { name: /Reveal in Finder/ })).toBeNull();
 
-    // A GGUF PAM only ever verified in place is never PAM's to delete: the
+    // A GGUF Pam only ever verified in place is never Pam's to delete: the
     // honest offer is to show the owner where their file is.
     await userEvent.click(within(imported).getByRole("button", { name: "Check weights" }));
     expect(within(imported).queryByRole("button", { name: /Delete weights/ })).toBeNull();
@@ -524,7 +524,7 @@ describe("model runtime panel", () => {
     expect(props.onModelImported).not.toHaveBeenCalled();
   });
 
-  it("warns when a completed manual import is outside PAM's calibrated set", async () => {
+  it("warns when a completed manual import is outside Pam's calibrated set", async () => {
     const props = await modelProps("model-none");
     vi.spyOn(props.bridge, "modelImportStatus")
       // The mount-time reattach check: nothing running yet.
@@ -546,7 +546,7 @@ describe("model runtime panel", () => {
 
     // The import still succeeds — the warning is additive, not a failure.
     expect(
-      await within(panel).findByText(/not in PAM's calibrated set — it may fail to load under this Mac's runtime profile/),
+      await within(panel).findByText(/not in Pam's calibrated set — it may fail to load under this Mac's runtime profile/),
     ).toBeInTheDocument();
     expect(props.onModelImported).toHaveBeenCalled();
   });
@@ -692,7 +692,7 @@ describe("model runtime panel", () => {
     expect(within(panel).getByLabelText("License URL")).toHaveValue("");
   });
 
-  it("warns when the inspected file falls below PAM's recommended floor", async () => {
+  it("warns when the inspected file falls below Pam's recommended floor", async () => {
     const props = await modelProps("model-none");
     render(<ModelsView {...props} />);
 
@@ -701,7 +701,7 @@ describe("model runtime panel", () => {
     await userEvent.tab();
 
     expect(
-      await within(panel).findByText(/Below PAM's recommended minimum of 17\.0 GB/),
+      await within(panel).findByText(/Below Pam's recommended minimum of 17\.0 GB/),
     ).toBeInTheDocument();
   });
 
@@ -729,7 +729,7 @@ describe("model runtime panel", () => {
     await userEvent.type(within(panel).getByLabelText("GGUF file path"), "/models/notes.txt");
     await userEvent.tab();
 
-    const note = await within(panel).findByText(/Point PAM at a downloaded \.gguf file/);
+    const note = await within(panel).findByText(/Point Pam at a downloaded \.gguf file/);
     expect(note).not.toHaveAttribute("role", "alert");
   });
 
@@ -763,7 +763,7 @@ describe("model runtime panel", () => {
     expect(within(menu).getByText("Devstral Small 2 24B — balanced")).toBeInTheDocument();
     expect(within(menu).getByText("GPT-OSS 120B — full precision")).toBeInTheDocument();
 
-    // The fixture host is a 32 GB Mac — PAM's supported minimum — which can
+    // The fixture host is a 32 GB Mac — Pam's supported minimum — which can
     // devote 23.5 GB to a model. Six quants fit; the rest stay visible but
     // unselectable, each naming both numbers.
     expect(within(menu).getAllByText("Runs on this Mac")).toHaveLength(6);
@@ -775,7 +775,7 @@ describe("model runtime panel", () => {
 
     // Only the three original Qwen quants are measured; every other preset
     // says so before tens of GB move.
-    expect(within(menu).getAllByText(/Not in PAM's calibrated set/)).toHaveLength(8);
+    expect(within(menu).getAllByText(/Not in Pam's calibrated set/)).toHaveLength(8);
     expect(screen.queryByText(/of memory or more; this Mac reports/)).not.toBeInTheDocument();
   });
 
@@ -818,7 +818,7 @@ describe("model runtime panel", () => {
 
   it("warns below the supported minimum and disables every preset an undersized Mac cannot run", async () => {
     const props = await modelProps("model-none");
-    // A 24 GB machine: below PAM's supported 32 GB minimum. Its runtime
+    // A 24 GB machine: below Pam's supported 32 GB minimum. Its runtime
     // ceiling leaves 15.3 GB for a model — only the smallest preset fits.
     const UNDERSIZED_BUDGET_BYTES = 15_300_820_992;
     vi.spyOn(props.bridge, "hostMemory").mockResolvedValue({
@@ -1059,17 +1059,17 @@ describe("model runtime panel", () => {
     ).toBeInTheDocument();
   }, 10_000);
 
-  it("keeps the registered catalog startable while PAM is paused", async () => {
+  it("keeps the registered catalog startable while Pam is paused", async () => {
     const props = await modelProps("offline");
     render(<ModelsView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(within(panel).getByText("unreachable")).toBeInTheDocument();
     expect(
-      within(panel).getByText(/PAM is paused, so nothing is loaded right now/),
+      within(panel).getByText(/Pam is paused, so nothing is loaded right now/),
     ).toBeInTheDocument();
     await userEvent.click(
-      within(panel).getAllByRole("button", { name: "Start PAM with this model" })[0],
+      within(panel).getAllByRole("button", { name: "Start Pam with this model" })[0],
     );
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
   });
@@ -1126,7 +1126,7 @@ describe("model runtime panel", () => {
     expect(within(panel).getByText("loading")).toBeInTheDocument();
     expect(within(panel).getByText(/the model is still loading/)).toBeInTheDocument();
     expect(within(panel).queryByText("unreachable")).not.toBeInTheDocument();
-    // A load in flight is not a failure: no alert, no "PAM is paused" copy.
+    // A load in flight is not a failure: no alert, no "Pam is paused" copy.
     expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -1186,7 +1186,7 @@ describe("model runtime panel", () => {
     expect(daemonStartupProgress).toHaveBeenCalledTimes(settled);
   });
 
-  it("marks the runtime unreachable while PAM is paused with no registered model", async () => {
+  it("marks the runtime unreachable while Pam is paused with no registered model", async () => {
     const props = await modelProps("offline");
     props.modelStatus = { status: "ok", loaded: null, registered: [], loadFailure: null, loading: false, transition: null };
     render(<ModelsView {...props} />);
@@ -1198,7 +1198,7 @@ describe("model runtime panel", () => {
 });
 
 // The pasted-URL path: the same verified, resumable download as a preset,
-// against a source PAM never hand-checked.
+// against a source Pam never hand-checked.
 describe("pasted-URL model download", () => {
   async function openUrlForm(panel: HTMLElement) {
     await userEvent.click(
@@ -1230,7 +1230,7 @@ describe("pasted-URL model download", () => {
     const form = await openUrlForm(panel);
     expect(
       within(form).getByText(
-        /PAM has not checked this source\. By pasting it you are vouching for it, and the SHA-256 you enter is what protects you/,
+        /Pam has not checked this source\. By pasting it you are vouching for it, and the SHA-256 you enter is what protects you/,
       ),
     ).toBeInTheDocument();
     expect(within(form).getByText(/refuses to register the file unless the bytes it receives hash to exactly that digest/)).toBeInTheDocument();
@@ -1271,7 +1271,7 @@ describe("pasted-URL model download", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Download" }));
 
     expect(
-      await within(form).findByText(/PAM downloads models over HTTPS only/),
+      await within(form).findByText(/Pam downloads models over HTTPS only/),
     ).toBeInTheDocument();
     expect(download).not.toHaveBeenCalled();
   });
@@ -1326,9 +1326,9 @@ describe("pasted-URL model download", () => {
         kind: "unavailable",
         code: "invalid_download_url",
         detail:
-          "models.example resolves to 10.0.0.5, which is inside your own network; PAM will not download a model from it.",
+          "models.example resolves to 10.0.0.5, which is inside your own network; Pam will not download a model from it.",
         recovery:
-          "Paste a URL on the public internet. PAM refuses private, loopback and link-local addresses so a pasted link cannot reach into your network.",
+          "Paste a URL on the public internet. Pam refuses private, loopback and link-local addresses so a pasted link cannot reach into your network.",
       },
     });
     render(<ModelsView {...props} />);
@@ -1339,7 +1339,7 @@ describe("pasted-URL model download", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Download" }));
 
     const alert = await within(form).findByRole("alert");
-    expect(alert).toHaveTextContent(/inside your own network; PAM will not download a model from it\./);
+    expect(alert).toHaveTextContent(/inside your own network; Pam will not download a model from it\./);
     expect(alert).toHaveTextContent(/Paste a URL on the public internet\./);
     expect(within(form).getByRole("button", { name: "Retry download" })).toBeInTheDocument();
   }, 10_000);

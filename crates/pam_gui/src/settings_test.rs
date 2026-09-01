@@ -88,7 +88,7 @@ fn the_default_model_is_persisted_readable_and_clearable() {
         Some("qwen/qwen3-8b-instruct")
     );
 
-    // Clearing it is possible: PAM starts with no model at all.
+    // Clearing it is possible: Pam starts with no model at all.
     let cleared = update_default_model(&dirs.data_dir, &dirs.home, None).unwrap();
     assert_eq!(cleared.default_model, None);
     assert_eq!(persisted_default_model(&dirs.data_dir), None);

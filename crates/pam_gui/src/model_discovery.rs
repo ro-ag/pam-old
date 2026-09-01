@@ -127,7 +127,7 @@ pub(crate) async fn discover_license(
     let client = reqwest::Client::builder()
         .timeout(DISCOVERY_TIMEOUT)
         .build()
-        .map_err(|_| ModelDiscoveryFailure::new("PAM could not prepare the lookup client."))?;
+        .map_err(|_| ModelDiscoveryFailure::new("Pam could not prepare the lookup client."))?;
     let response = client
         .get(format!(
             "{SEARCH_URL}?limit=5&search={}",

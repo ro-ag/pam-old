@@ -15,7 +15,7 @@ impl LocalEndpoint {
     ///
     /// Panics when the operating system exposes neither a session runtime
     /// directory nor the per-user local-data directory required by every
-    /// supported PAM platform. `PAM_RUNTIME_DIR` can provide an explicit
+    /// supported Pam platform. `PAM_RUNTIME_DIR` can provide an explicit
     /// absolute override for constrained environments.
     #[must_use]
     pub fn default_for_user() -> Self {
@@ -76,7 +76,7 @@ fn runtime_dir() -> PathBuf {
     }
 
     private_runtime_dir()
-        .expect("supported PAM platforms must provide a private per-user local-data directory")
+        .expect("supported Pam platforms must provide a private per-user local-data directory")
 }
 
 pub(super) fn private_runtime_dir() -> Option<PathBuf> {

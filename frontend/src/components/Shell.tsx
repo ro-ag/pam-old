@@ -134,10 +134,10 @@ export function Sidebar({
   // the state, so the button never reads as the thing it is about to undo.
   const [confirmingStop, setConfirmingStop] = useState(false);
   const running = daemon.state === "running";
-  const lifecycleLabel = running ? "Stop PAM" : "Start PAM";
+  const lifecycleLabel = running ? "Stop Pam" : "Start Pam";
   const restartLabel = running
-    ? "Restart PAM (unloads the loaded model)"
-    : "Restart PAM (unavailable while PAM is stopped)";
+    ? "Restart Pam (unloads the loaded model)"
+    : "Restart Pam (unavailable while Pam is stopped)";
   // A daemon that stops from elsewhere must not leave a stale ask behind.
   useEffect(() => {
     if (!running) setConfirmingStop(false);
@@ -169,11 +169,11 @@ export function Sidebar({
   };
   return (
     <aside ref={containerRef} className={`sidebar ${collapsed ? "is-collapsed" : ""}`} aria-label="Daemon navigation" onKeyDownCapture={trapTabFocus}>
-      <div className="brand" aria-label="PAM" data-tauri-drag-region="deep">
+      <div className="brand" aria-label="Pam" data-tauri-drag-region="deep">
         <img src="/assets/pam-mark.png" alt="" />
         {!collapsed && (
           <div className="brand-identity">
-            <span>PAM</span>
+            <span>Pam</span>
             <small className="app-version">
               {appVersionLabel(typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__)}
             </small>
@@ -236,8 +236,8 @@ export function Sidebar({
             )}
           </div>
           {running && confirmingStop && (
-            <div className="connector-confirm daemon-confirm" role="group" aria-label="Confirm stopping PAM">
-              <span>Stop PAM? It unloads the loaded model and drops queued work.</span>
+            <div className="connector-confirm daemon-confirm" role="group" aria-label="Confirm stopping Pam">
+              <span>Stop Pam? It unloads the loaded model and drops queued work.</span>
               <button
                 type="button"
                 className="button button--secondary button--small"

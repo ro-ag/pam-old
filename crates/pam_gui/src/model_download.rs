@@ -80,7 +80,7 @@ impl From<ModelError> for ModelDownloadFailure {
         // digest mismatch.
         let recovery = match error {
             ModelError::DigestMismatch => {
-                "The bytes PAM received do not match the digest you gave. Nothing was registered \
+                "The bytes Pam received do not match the digest you gave. Nothing was registered \
                  and the partial file was discarded. Re-check the digest against the publisher, \
                  or stop trusting this source."
             }
@@ -89,7 +89,7 @@ impl From<ModelError> for ModelDownloadFailure {
                  retry."
             }
             ModelError::RedirectNotAllowed => {
-                "PAM follows a pasted download only within the host you pasted. Open the link in \
+                "Pam follows a pasted download only within the host you pasted. Open the link in \
                  a browser, then paste the final URL it lands on."
             }
             ModelError::TooManyRedirects => {
@@ -116,7 +116,7 @@ pub(crate) enum ModelDownloadStatusKind {
     Cancelled,
 }
 
-/// Where the running download came from: PAM's own hand-checked catalog, or
+/// Where the running download came from: Pam's own hand-checked catalog, or
 /// a URL the owner pasted and vouched for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelDownloadKind {
@@ -150,7 +150,7 @@ impl ModelDownloadSnapshot {
 }
 
 /// One fully validated acquisition, whatever it came from: the descriptor
-/// PAM will verify the bytes against, the source, and the hosts a redirect
+/// Pam will verify the bytes against, the source, and the hosts a redirect
 /// may land on beyond the source host itself.
 ///
 /// Building one is where every check happens, so nothing reaches
@@ -252,7 +252,7 @@ impl ModelDownloadManager {
             .map(|directories| directories.home_dir().to_path_buf())
             .ok_or_else(|| {
                 ModelDownloadFailure::new(
-                    "PAM could not resolve the user home directory.",
+                    "Pam could not resolve the user home directory.",
                     "Verify the operating system user profile, then retry.",
                 )
             })?;
@@ -544,7 +544,7 @@ impl<R: DownloadResponse> DownloadResponse for CountingResponse<R> {
 
 /// Coarse host memory probe: total physical RAM in bytes.
 ///
-/// PAM's supported system minimum: local AI is the product premise, and the
+/// Pam's supported system minimum: local AI is the product premise, and the
 /// validated models need a 32 GiB machine or larger.
 pub(crate) const MIN_SUPPORTED_HOST_MEMORY_BYTES: u64 = 32 * (1 << 30);
 
@@ -564,13 +564,13 @@ pub(crate) fn host_memory_total_bytes() -> Result<u64, ModelDownloadFailure> {
         .output()
         .map_err(|error| {
             ModelDownloadFailure::new(
-                format!("PAM could not probe host memory: {error}"),
+                format!("Pam could not probe host memory: {error}"),
                 recovery,
             )
         })?;
     if !output.status.success() {
         return Err(ModelDownloadFailure::new(
-            "PAM's host memory probe exited with an error.",
+            "Pam's host memory probe exited with an error.",
             recovery,
         ));
     }
@@ -580,7 +580,7 @@ pub(crate) fn host_memory_total_bytes() -> Result<u64, ModelDownloadFailure> {
         .filter(|bytes| *bytes > 0)
         .ok_or_else(|| {
             ModelDownloadFailure::new(
-                "PAM could not parse the host memory probe output.",
+                "Pam could not parse the host memory probe output.",
                 recovery,
             )
         })
@@ -590,6 +590,6 @@ pub(crate) fn host_memory_total_bytes() -> Result<u64, ModelDownloadFailure> {
 pub(crate) fn host_memory_total_bytes() -> Result<u64, ModelDownloadFailure> {
     Err(ModelDownloadFailure::new(
         "Host memory probing is only implemented on macOS.",
-        "Run PAM on macOS to see host memory.",
+        "Run Pam on macOS to see host memory.",
     ))
 }

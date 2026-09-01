@@ -220,7 +220,7 @@ pub(crate) async fn decide_current_approval(
     };
     if !exchange.events.is_empty() {
         return Err(approval_decision_failure(
-            "PAM returned events for an approval decision.",
+            "Pam returned events for an approval decision.",
             None,
         ));
     }
@@ -253,7 +253,7 @@ pub(crate) async fn decide_current_approval(
             Err(approval_decision_failure(failure.message, failure.recovery))
         }
         ResultBody::Success { .. } => Err(approval_decision_failure(
-            "PAM returned an unexpected approval response.",
+            "Pam returned an unexpected approval response.",
             None,
         )),
     }
@@ -344,7 +344,7 @@ async fn inspect_evidence(
         } if exchange.events.is_empty() && metadata.handle == handle => Ok((truth, metadata)),
         ResultBody::Failure(failure) => Err(failure.message),
         ResultBody::Success { .. } => {
-            Err("PAM returned an unexpected evidence metadata response.".to_owned())
+            Err("Pam returned an unexpected evidence metadata response.".to_owned())
         }
     }
 }
@@ -379,7 +379,7 @@ async fn read_text_evidence(
         }
         ResultBody::Failure(failure) => Err(failure.message),
         ResultBody::Success { .. } => {
-            Err("PAM returned an unexpected evidence content response.".to_owned())
+            Err("Pam returned an unexpected evidence content response.".to_owned())
         }
     }
 }
@@ -399,7 +399,7 @@ async fn load_current_request(request: RequestEnvelope) -> CurrentState {
         }
     };
     if !exchange.events.is_empty() {
-        return degraded("PAM returned events for a project-current read.", None);
+        return degraded("Pam returned events for a project-current read.", None);
     }
     let current = match exchange.result.body {
         ResultBody::Success {
@@ -418,7 +418,7 @@ async fn load_current_request(request: RequestEnvelope) -> CurrentState {
         }
         ResultBody::Failure(failure) => return failure_state(failure),
         ResultBody::Success { .. } => {
-            return degraded("PAM returned an unexpected project-current response.", None);
+            return degraded("Pam returned an unexpected project-current response.", None);
         }
     };
     build_current_view(current, &request).await
@@ -479,7 +479,7 @@ async fn load_run(summary: ProjectRequestSummary, base: &RequestEnvelope) -> Run
             } => (timeline_from_events(&exchange.events), None),
             ResultBody::Success { .. } => (
                 Vec::new(),
-                Some("PAM returned an unexpected replay response.".to_owned()),
+                Some("Pam returned an unexpected replay response.".to_owned()),
             ),
         },
         Err(error) => (Vec::new(), Some(exchange_failure_context(&error).0)),
@@ -514,7 +514,7 @@ async fn load_run(summary: ProjectRequestSummary, base: &RequestEnvelope) -> Run
                 } if exchange.events.is_empty() => outcome = Some(outcome_view(&result)),
                 ResultBody::Failure(failure) => detail_error = Some(failure.message),
                 ResultBody::Success { .. } => {
-                    detail_error = Some("PAM returned an unexpected flow result.".to_owned());
+                    detail_error = Some("Pam returned an unexpected flow result.".to_owned());
                 }
             },
             Err(error) => detail_error = Some(exchange_failure_context(&error).0),
@@ -535,25 +535,25 @@ pub(crate) fn timeline_from_events(events: &[EventEnvelope]) -> Vec<TimelineFact
             Event::Accepted => facts.push(fact(
                 TimelineKind::Request,
                 "Request received",
-                "PAM accepted the run.",
+                "Pam accepted the run.",
                 false,
             )),
             Event::Started => facts.push(fact(
                 TimelineKind::Request,
                 "Run started",
-                "PAM began the run.",
+                "Pam began the run.",
                 false,
             )),
             Event::LeaseExpired => facts.push(fact(
                 TimelineKind::Failure,
                 "Lease expired",
-                "PAM will recover this run from durable state.",
+                "Pam will recover this run from durable state.",
                 false,
             )),
             Event::CancellationRequested => facts.push(fact(
                 TimelineKind::Request,
                 "Cancellation requested",
-                "PAM is stopping at a safe boundary.",
+                "Pam is stopping at a safe boundary.",
                 false,
             )),
             Event::Cancelled => facts.push(fact(
@@ -737,7 +737,7 @@ fn transition_fact(kind: &TransitionKind) -> TimelineFact {
         TransitionKind::RetryScheduled { .. } => (
             TimelineKind::Request,
             "Retry scheduled",
-            "PAM scheduled another bounded attempt.",
+            "Pam scheduled another bounded attempt.",
         ),
         TransitionKind::RetryExhausted { .. } => (
             TimelineKind::Failure,
@@ -752,17 +752,17 @@ fn transition_fact(kind: &TransitionKind) -> TimelineFact {
         TransitionKind::ReconciledNotApplied { .. } => (
             TimelineKind::Change,
             "Effect reconciled",
-            "PAM verified that the effect was not applied.",
+            "Pam verified that the effect was not applied.",
         ),
         TransitionKind::ReconciliationUnknown { .. } => (
             TimelineKind::Failure,
             "Reconciliation unknown",
-            "PAM could not verify the prior effect state.",
+            "Pam could not verify the prior effect state.",
         ),
         TransitionKind::CancellationRequested => (
             TimelineKind::Request,
             "Cancellation requested",
-            "PAM is stopping at a safe boundary.",
+            "Pam is stopping at a safe boundary.",
         ),
         TransitionKind::RunCompleted { outcome } => (
             if *outcome == RunOutcome::Solved {

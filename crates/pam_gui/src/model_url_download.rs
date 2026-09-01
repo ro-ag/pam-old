@@ -1,4 +1,4 @@
-//! The pasted-URL model download: everything PAM checks before a source it
+//! The pasted-URL model download: everything Pam checks before a source it
 //! did not hand-verify is allowed to move bytes onto disk.
 //!
 //! A curated preset ([`crate::model_presets`]) is safe partly because its URL
@@ -50,7 +50,7 @@ pub struct ModelUrlDownloadParams {
     pub accepted: bool,
 }
 
-/// Resolves a host name to the addresses PAM would connect to. Injectable so
+/// Resolves a host name to the addresses Pam would connect to. Injectable so
 /// the address gate can be tested without a network or a DNS server.
 pub(crate) type HostResolver = fn(&str) -> Result<Vec<IpAddr>, std::io::Error>;
 
@@ -86,7 +86,7 @@ pub(crate) fn acquisition_from_url(
 ) -> Result<ModelAcquisition, ModelDownloadFailure> {
     if !params.accepted {
         return Err(ModelDownloadFailure {
-            detail: "PAM records the exact license you accept before it downloads anything."
+            detail: "Pam records the exact license you accept before it downloads anything."
                 .to_owned(),
             recovery: Some("Accept this model's license, then start the download.".to_owned()),
         });
@@ -144,11 +144,11 @@ fn validate_pasted_url(value: &str) -> Result<Url, ModelDownloadFailure> {
         return Err(failure("Enter the model's download URL.", URL_RECOVERY));
     }
     let url = Url::parse(value)
-        .map_err(|_| failure("PAM could not read that as a URL.", URL_RECOVERY))?;
+        .map_err(|_| failure("Pam could not read that as a URL.", URL_RECOVERY))?;
     if url.scheme() != "https" {
         return Err(failure(
             format!(
-                "PAM downloads models over HTTPS only; this URL uses the {} scheme.",
+                "Pam downloads models over HTTPS only; this URL uses the {} scheme.",
                 url.scheme()
             ),
             URL_RECOVERY,
@@ -156,13 +156,13 @@ fn validate_pasted_url(value: &str) -> Result<Url, ModelDownloadFailure> {
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(failure(
-            "PAM refuses a download URL that carries embedded credentials.",
+            "Pam refuses a download URL that carries embedded credentials.",
             "Remove the user:password@ part of the URL and paste it again.",
         ));
     }
     if url.query().is_some() || url.fragment().is_some() {
         return Err(failure(
-            "PAM refuses a download URL with a query string or fragment; provenance records only \
+            "Pam refuses a download URL with a query string or fragment; provenance records only \
              the plain URL.",
             "Paste the URL with everything from the ? or # onward removed.",
         ));
@@ -171,7 +171,7 @@ fn validate_pasted_url(value: &str) -> Result<Url, ModelDownloadFailure> {
         Some(443) => {}
         Some(port) => {
             return Err(failure(
-                format!("PAM downloads models from port 443 only; this URL uses port {port}."),
+                format!("Pam downloads models from port 443 only; this URL uses port {port}."),
                 "Paste a plain https:// URL with no explicit port.",
             ));
         }
@@ -193,7 +193,7 @@ fn source_filename(source: &Url) -> Result<String, ModelDownloadFailure> {
         .unwrap_or_default();
     if pam_model::validate_model_filename(candidate).is_err() {
         return Err(failure(
-            "That URL does not end in a .gguf file name PAM can save.",
+            "That URL does not end in a .gguf file name Pam can save.",
             URL_RECOVERY,
         ));
     }
@@ -202,7 +202,7 @@ fn source_filename(source: &Url) -> Result<String, ModelDownloadFailure> {
 
 fn parse_expected_digest(value: &str) -> Result<ContentDigest, ModelDownloadFailure> {
     // Publishers list the digest either bare or already prefixed; accept both
-    // and store PAM's canonical `sha256:` form either way.
+    // and store Pam's canonical `sha256:` form either way.
     let canonical = if value.starts_with("sha256:") {
         value.to_owned()
     } else {
@@ -233,7 +233,7 @@ fn build_license(params: &ModelUrlDownloadParams) -> Result<LicenseSnapshot, Mod
     let notice = params.license_notice_text.trim();
     if notice.is_empty() {
         return Err(failure(
-            "PAM records the exact license notice you accept, so it cannot be empty.",
+            "Pam records the exact license notice you accept, so it cannot be empty.",
             "Paste the license notice text exactly as the publisher states it.",
         ));
     }
@@ -254,7 +254,7 @@ fn build_license(params: &ModelUrlDownloadParams) -> Result<LicenseSnapshot, Mod
 /// Refuses a host that resolves into the machine's own network.
 ///
 /// `pam_model` already rejects a private *literal* address in the URL, but a
-/// pasted host name can point anywhere, so PAM resolves it here and refuses
+/// pasted host name can point anywhere, so Pam resolves it here and refuses
 /// loopback, private, link-local and every other reserved range using
 /// `pam_model`'s own table rather than a second copy of it. A host that
 /// resolves to a mix is refused on the first non-public answer: `reqwest`
@@ -262,13 +262,13 @@ fn build_license(params: &ModelUrlDownloadParams) -> Result<LicenseSnapshot, Mod
 fn reject_non_public_host(host: &str, resolve: HostResolver) -> Result<(), ModelDownloadFailure> {
     let addresses = resolve(host).map_err(|_| {
         failure(
-            format!("PAM could not resolve the host {host}."),
+            format!("Pam could not resolve the host {host}."),
             "Check the host name and this Mac's network connection, then retry.",
         )
     })?;
     if addresses.is_empty() {
         return Err(failure(
-            format!("PAM could not resolve the host {host}."),
+            format!("Pam could not resolve the host {host}."),
             "Check the host name and this Mac's network connection, then retry.",
         ));
     }
@@ -278,10 +278,10 @@ fn reject_non_public_host(host: &str, resolve: HostResolver) -> Result<(), Model
     {
         return Err(failure(
             format!(
-                "{host} resolves to {address}, which is inside your own network; PAM will not \
+                "{host} resolves to {address}, which is inside your own network; Pam will not \
                  download a model from it."
             ),
-            "Paste a URL on the public internet. PAM refuses private, loopback and link-local \
+            "Paste a URL on the public internet. Pam refuses private, loopback and link-local \
              addresses so a pasted link cannot reach into your network.",
         ));
     }

@@ -12,7 +12,7 @@ const CALIBRATED_IDS: [&str; 3] = [
     "qwen3-coder-30b-q6k",
 ];
 
-/// PAM's floor is the 24B/30B class, so no catalog artifact is small; the
+/// Pam's floor is the 24B/30B class, so no catalog artifact is small; the
 /// upper bound is a sanity rail against a mistyped literal.
 const MIN_PRESET_BYTES: u64 = 10 << 30;
 const MAX_PRESET_BYTES: u64 = 80 << 30;
@@ -149,7 +149,7 @@ mod host_fit {
     use crate::model_presets::{CATALOG, find, host_model_budget_bytes};
 
     const GIB: u64 = 1 << 30;
-    /// The host sizes PAM tiers the catalog across: the supported minimum up
+    /// The host sizes Pam tiers the catalog across: the supported minimum up
     /// to a 128 GiB Mac.
     const HOSTS: [u64; 5] = [32 * GIB, 48 * GIB, 64 * GIB, 96 * GIB, 128 * GIB];
 
@@ -183,7 +183,7 @@ mod host_fit {
                 host_model_ceiling_bytes(total) - host_projection_contingency_bytes(total)
             );
         }
-        // A host below PAM's minimum has no ceiling at all, so nothing fits.
+        // A host below Pam's minimum has no ceiling at all, so nothing fits.
         assert_eq!(host_model_budget_bytes(8 * GIB), 0);
     }
 

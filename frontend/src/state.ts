@@ -91,7 +91,7 @@ export function presentError(error: unknown): string {
     ? error.message
     : typeof error === "string"
       ? error
-      : [message, recovery].filter(Boolean).join(" ") || "PAM could not complete the request.";
+      : [message, recovery].filter(Boolean).join(" ") || "Pam could not complete the request.";
   const collapsed = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  return collapsed.slice(0, 280) || "PAM could not complete the request.";
+  return collapsed.slice(0, 280) || "Pam could not complete the request.";
 }

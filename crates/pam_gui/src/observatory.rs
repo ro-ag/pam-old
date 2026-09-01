@@ -17,7 +17,7 @@ use crate::current::{unique_idempotency, unique_request_id};
 const OBSERVATORY_TIMEOUT: Duration = Duration::from_secs(2);
 const MODEL_INFER_DEADLINE: Duration = Duration::from_mins(2);
 const MODEL_INFER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(125);
-const MODEL_INFER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.infer capability in PAM policy, or approve the pending model request.";
+const MODEL_INFER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.infer capability in Pam policy, or approve the pending model request.";
 // The configure exchange includes daemon keychain writes; the test exchange
 // wraps a daemon-side probe with its own ~10 second deadline.
 const CONNECTOR_CONFIGURE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -49,8 +49,8 @@ const MODEL_VERIFY_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(10);
 const RESET_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(1);
 const RESET_BLOCKED_RECOVERY: &str =
     "Grant the GUI caller this reset capability in Access, or approve the pending reset.";
-const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in PAM policy, or approve the pending connector request.";
-const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in PAM policy, or approve the pending connector request.";
+const CONNECTOR_CONFIGURE_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.configure capability in Pam policy, or approve the pending connector request.";
+const CONNECTOR_TEST_BLOCKED_RECOVERY: &str = "Grant the GUI caller the connector.test capability in Pam policy, or approve the pending connector request.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ObservatoryState<T> {
@@ -371,7 +371,7 @@ pub(crate) async fn run_model_register(
 /// Brings one registered model into the running daemon, without a restart.
 ///
 /// The daemon owns the swap and does it old-before-new, so the GUI never has
-/// to stop and restart PAM to change models. A load that fails leaves the
+/// to stop and restart Pam to change models. A load that fails leaves the
 /// daemon serving without a model and arrives here as unavailable, carrying
 /// the daemon's own reason and recovery line.
 ///
@@ -528,9 +528,9 @@ pub(crate) async fn run_model_sweep(
     .await
 }
 
-/// Deletes one PAM-downloaded model's weights and unregisters it.
+/// Deletes one Pam-downloaded model's weights and unregisters it.
 ///
-/// The daemon owns the provenance gate: a GGUF PAM only ever verified in place
+/// The daemon owns the provenance gate: a GGUF Pam only ever verified in place
 /// is refused, and the refusal arrives as unavailable carrying the daemon's
 /// own explanation and recovery line.
 ///
@@ -674,13 +674,13 @@ async fn load<T>(
             }
         };
     if !exchange.events.is_empty() {
-        return unavailable(format!("PAM returned events for a {surface} read."), None);
+        return unavailable(format!("Pam returned events for a {surface} read."), None);
     }
     match exchange.result.body {
         ResultBody::Success { payload, .. } => match extract(payload) {
             Some(result) => ObservatoryState::Available(result),
             None => unavailable(
-                format!("PAM returned an unexpected {surface} response."),
+                format!("Pam returned an unexpected {surface} response."),
                 None,
             ),
         },
@@ -768,7 +768,7 @@ fn model_sweep_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 
 /// `model.delete-weights` requires an explicit grant: classified exactly like
 /// [`infer_failure_state`], with deletion recovery text. The daemon's own
-/// provenance refusal — PAM did not download this file — arrives as
+/// provenance refusal — Pam did not download this file — arrives as
 /// unavailable and keeps the daemon's explanation and recovery line.
 fn model_delete_weights_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, MODEL_DELETE_WEIGHTS_BLOCKED_RECOVERY)

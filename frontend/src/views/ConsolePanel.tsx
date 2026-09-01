@@ -37,7 +37,7 @@ export interface ConsolePanelProps {
 }
 
 // The daemon's diagnostic log, one panel on Activity. Activity owns the
-// paused state, so this panel only ever mounts while PAM is on watch.
+// paused state, so this panel only ever mounts while Pam is on watch.
 export function ConsolePanel({ bridge }: ConsolePanelProps) {
   const [logs, setLogs] = useState<DaemonLogsDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);

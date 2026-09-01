@@ -224,7 +224,7 @@ export function CallerRequestsPanel({
             <span className="access-icon" aria-hidden="true"><UserCircle size={21} /></span>
             <div>
               <strong>This desktop</strong>
-              <p>PAM has not registered this GUI as a caller yet.</p>
+              <p>Pam has not registered this GUI as a caller yet.</p>
             </div>
             <button
               type="button"
@@ -238,7 +238,7 @@ export function CallerRequestsPanel({
         </div>
       )}
       {offline ? (
-        <PanelEmpty>PAM is paused, so no requests are being served.</PanelEmpty>
+        <PanelEmpty>Pam is paused, so no requests are being served.</PanelEmpty>
       ) : loadError ? (
         <PanelError>{loadError}</PanelError>
       ) : !rows ? (

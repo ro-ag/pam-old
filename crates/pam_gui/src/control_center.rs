@@ -89,7 +89,7 @@ pub(crate) async fn load_credential(caller_id: CallerId) -> Result<CallerCredent
             .map_err(|error| error.to_string())
     })
     .await
-    .map_err(|_| "PAM could not access the native credential worker.".to_owned())?
+    .map_err(|_| "Pam could not access the native credential worker.".to_owned())?
 }
 
 pub(crate) async fn request_daemon_stop_authenticated(
@@ -124,7 +124,7 @@ pub(crate) async fn request_daemon_stop_authenticated(
                 }));
         }
         ResultBody::Success { .. } => {
-            return Err("PAM daemon returned an unexpected stop response.".to_owned());
+            return Err("Pam daemon returned an unexpected stop response.".to_owned());
         }
     }
 
@@ -138,7 +138,7 @@ pub(crate) async fn request_daemon_stop_authenticated(
             return Ok(());
         }
     }
-    Err("PAM acknowledged stop but did not become unavailable before the deadline.".to_owned())
+    Err("Pam acknowledged stop but did not become unavailable before the deadline.".to_owned())
 }
 
 #[cfg(test)]
@@ -202,7 +202,7 @@ fn health_from_result(body: ResultBody) -> HealthState {
             recovery: failure.recovery,
         },
         ResultBody::Success { .. } => HealthState::Degraded {
-            detail: "PAM daemon returned an unexpected health response.".to_owned(),
+            detail: "Pam daemon returned an unexpected health response.".to_owned(),
             recovery: None,
         },
     }
@@ -216,7 +216,7 @@ fn health_from_status(status: StatusResult) -> HealthState {
         }
     } else {
         HealthState::Degraded {
-            detail: "PAM daemon is running but not ready.".to_owned(),
+            detail: "Pam daemon is running but not ready.".to_owned(),
             recovery: Some("Review daemon diagnostics and retry health.".to_owned()),
         }
     }
@@ -249,10 +249,10 @@ pub(crate) fn health_from_timeout(
         Some(pam_platform::DaemonRuntimeState::NotRunning) => HealthState::Offline,
         Some(pam_platform::DaemonRuntimeState::Running { pid }) => HealthState::Degraded {
             detail: pid.map_or_else(
-                || "PAM daemon is running but did not respond in time.".to_owned(),
-                |pid| format!("PAM daemon (pid {pid}) is running but did not respond in time."),
+                || "Pam daemon is running but did not respond in time.".to_owned(),
+                |pid| format!("Pam daemon (pid {pid}) is running but did not respond in time."),
             ),
-            recovery: Some("Check the daemon console for details, or restart PAM.".to_owned()),
+            recovery: Some("Check the daemon console for details, or restart Pam.".to_owned()),
         },
         None => HealthState::Degraded {
             detail: error.to_string(),
@@ -266,8 +266,8 @@ pub(crate) fn health_from_timeout(
 pub(crate) fn exchange_failure_context(error: &ExchangeError) -> (String, Option<String>) {
     match health_from_exchange_error(error) {
         HealthState::Offline => (
-            "PAM daemon is not running.".to_owned(),
-            Some("Start PAM from the sidebar.".to_owned()),
+            "Pam daemon is not running.".to_owned(),
+            Some("Start Pam from the sidebar.".to_owned()),
         ),
         HealthState::Degraded { detail, recovery } => (detail, recovery),
         HealthState::Healthy { .. } => (error.to_string(), None),

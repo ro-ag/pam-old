@@ -1166,7 +1166,7 @@ fn a_concurrent_writer_only_delays_the_wal_conversion() {
     // Converting a rollback-journal database to WAL upgrades a held shared lock
     // to an exclusive one, and SQLite refuses that upgrade with an immediate
     // SQLITE_BUSY — no busy handler, no waiting — while another connection
-    // holds a write lock. That is the whole first-run race between two PAM
+    // holds a write lock. That is the whole first-run race between two Pam
     // processes: whoever loses the coin flip must wait, not fail.
     let (directory, path) = database_path("wal-conversion-wait");
     fs::create_dir_all(&directory).unwrap();
