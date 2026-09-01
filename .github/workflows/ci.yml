@@ -180,25 +180,25 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
             family: linux
-            artifact: PAM-linux-amd64
+            artifact: pam-linux-amd64
           - name: Linux arm64 package
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: appimage,deb
             family: linux
-            artifact: PAM-linux-arm64
+            artifact: pam-linux-arm64
           - name: Windows amd64 package
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             bundles: nsis
             family: windows
-            artifact: PAM-windows-amd64
+            artifact: pam-windows-amd64
           - name: Windows arm64 package
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundles: nsis
             family: windows
-            artifact: PAM-windows-arm64
+            artifact: pam-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
@@ -355,11 +355,11 @@ jobs:
             $originalText = [Text.Encoding]::ASCII.GetString($original)
             $offset = $originalText.IndexOf($unknownMarker, [StringComparison]::Ordinal)
             if ($offset -lt 0 -or $offset -ne $originalText.LastIndexOf($unknownMarker, [StringComparison]::Ordinal)) {
-              throw "unpatched PAM desktop must contain exactly one Tauri bundle marker"
+              throw "unpatched Pam desktop must contain exactly one Tauri bundle marker"
             }
             [Array]::Copy($nsis, 0, $original, $offset, $nsis.Length)
             if ((Get-ByteHash $original) -ne (Get-ByteHash $packaged)) {
-              throw "packaged PAM desktop differs beyond the expected Tauri NSIS marker patch"
+              throw "packaged Pam desktop differs beyond the expected Tauri NSIS marker patch"
             }
           }
 
@@ -384,7 +384,7 @@ jobs:
           $pamExecutables = @(Get-ChildItem $extract -Recurse -File -Filter 'pam*.exe')
           $names = @($pamExecutables.Name | Sort-Object)
           if (($names -join ' ') -ne 'pam.exe') {
-            throw "unexpected NSIS PAM executable inventory: $($names -join ' ')"
+            throw "unexpected NSIS Pam executable inventory: $($names -join ' ')"
           }
           Assert-PeMachine $pamExecutables[0].FullName $expectedMachine
           Assert-NsisDesktopContract $binary $pamExecutables[0].FullName
@@ -398,7 +398,7 @@ jobs:
           set -euo pipefail
           bundle="target/$TARGET/release/bundle"
           if [[ "$RUNNER_OS" == "Linux" ]]; then
-            archive="target/$TARGET/release/PAM-$TARGET-bundle.tar.gz"
+            archive="target/$TARGET/release/pam-$TARGET-bundle.tar.gz"
             tar -C "$bundle" -czf "$PWD/$archive" .
             echo "path=$archive" >> "$GITHUB_OUTPUT"
           else
@@ -455,7 +455,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="target/aarch64-apple-darwin/release/bundle/macos/PAM.app"
+          app="target/aarch64-apple-darwin/release/bundle/macos/pam.app"
           dmg_dir="target/aarch64-apple-darwin/release/bundle/dmg"
           tools/package-macos-dmg.sh "$PWD/$app" "$PWD/$dmg_dir"
 
@@ -465,7 +465,7 @@ jobs:
         run: |
           set -euo pipefail
           bundle="target/aarch64-apple-darwin/release/bundle"
-          app="$bundle/macos/PAM.app"
+          app="$bundle/macos/pam.app"
           dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           [[ -n "$dmg" ]]
           # Single-binary product: the app bundle ships exactly one executable.
@@ -473,14 +473,14 @@ jobs:
           [[ "${bundle_binaries[*]}" == "pam" ]]
           [[ "$(lipo -archs "$app/Contents/MacOS/pam")" == arm64 ]]
           [[ "$(otool -l "$app/Contents/MacOS/pam" | awk '/cmd LC_BUILD_VERSION/ { seen=1 } seen && /minos/ { print $2; exit }')" == 12.0 ]]
-          archive="target/aarch64-apple-darwin/release/PAM-macos-arm64-bundle.tar.gz"
-          tar -C "$bundle" -czf "$PWD/$archive" "macos/PAM.app" "dmg/$(basename "$dmg")"
+          archive="target/aarch64-apple-darwin/release/pam-macos-arm64-bundle.tar.gz"
+          tar -C "$bundle" -czf "$PWD/$archive" "macos/pam.app" "dmg/$(basename "$dmg")"
           echo "path=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Upload preview package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: PAM-macos-arm64
+          name: pam-macos-arm64
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
           retention-days: 7

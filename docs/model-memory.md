@@ -4,7 +4,7 @@ Date: 2026-08-19
 
 ## Decision
 
-PAM does not derive a fit recommendation from GGUF file size or a generic KV
+Pam does not derive a fit recommendation from GGUF file size or a generic KV
 formula. The selected runtime must project the exact model, context, batch,
 micro-batch, sequence count, cache types, flash-attention mode, and offload
 configuration. `pam_model::RuntimeMemoryProjection` keeps the resulting weight,
@@ -12,7 +12,7 @@ context/recurrent, and compute totals behind a model-neutral boundary and binds
 them to the registered artifact digest.
 
 `pam_model::estimate_memory` applies caller-supplied projection contingency,
-PAM application budget, operating-system reserve, current availability, and an
+Pam application budget, operating-system reserve, current availability, and an
 explicit unified-memory working-set state with checked arithmetic. It reports
 physical-capacity, working-set, and transient-availability failures separately.
 The estimate is an admission input, not a reservation and not benchmark proof.
@@ -21,11 +21,11 @@ configuration are volatile.
 
 ## Authoritative projection
 
-For the selected `llama-cpp-4` 0.6.0 spike, PAM uses
+For the selected `llama-cpp-4` 0.6.0 spike, Pam uses
 `get_device_memory_data`. The binding wraps llama.cpp's
 `common_get_device_memory_data`, loads the exact GGUF with `no_alloc`, constructs
 the requested context, and reports per-buffer model, context, and compute bytes.
-On Apple unified memory, PAM sums every distinct Metal and Host entry once;
+On Apple unified memory, Pam sums every distinct Metal and Host entry once;
 these are not independent physical pools. The live context's
 `memory_breakdown()` is the calibration check after load.
 
@@ -37,12 +37,12 @@ The component meanings are:
   MLA state;
 - **compute**: temporary graphs, output buffers, and backend scratch affected
   by micro-batch and attention implementation;
-- **headroom**: projection contingency, PAM's non-model budget, and memory left
+- **headroom**: projection contingency, Pam's non-model budget, and memory left
   to the OS and other applications.
 
 llama.cpp's own `fit_params` device fitting is useful but not sufficient as the
 product admission policy: its contract explicitly assumes system memory is
-unlimited. PAM therefore evaluates OS and unified-memory limits separately.
+unlimited. Pam therefore evaluates OS and unified-memory limits separately.
 See the pinned upstream
 [`fit.h`](https://github.com/ggml-org/llama.cpp/blob/34af94cd9ab277632e27caeec2d41de2fd091b31/common/fit.h)
 and
@@ -57,7 +57,7 @@ point for an uncalibrated profile is:
 ```text
 core = sum(weight + context + compute across distinct runtime entries)
 projection contingency = max(2 GiB, ceil(10% of core))
-model working set = core + projection contingency + PAM application budget
+model working set = core + projection contingency + Pam application budget
 OS reserve = max(8 GiB, 20% of physical RAM)
 
 require model working set <= Metal recommended maximum working set
@@ -68,7 +68,7 @@ require the same allocation to pass a fresh availability/pressure check
 The 10%, 2 GiB, 8 GiB, and 20% values are conservative uncalibrated defaults,
 not universal constants. The contingency covers mapped-buffer/layout
 variance, allocator and page-table overhead, Metal pipelines, tokenizer/native
-objects, and projection error. PAM's own daemon/API/UI budget is separate so it
+objects, and projection error. Pam's own daemon/API/UI budget is separate so it
 cannot disappear inside a model estimate. Before load, the macOS adapter re-runs
 the projection and checks normal memory pressure with a stable swapout counter;
 warning or critical pressure, a rising or unknown swap trend, an unknown limit,
@@ -85,24 +85,24 @@ load and must never sum per-device free or total values on unified memory.
 
 Metal's recommended maximum working set is a device allocation limit, not
 physical RAM. The measured M4 Max reports 55,662,788,608 bytes while the host
-has 64 GiB of unified physical memory. M1 Pro with 32 GB memory is PAM's
+has 64 GiB of unified physical memory. M1 Pro with 32 GB memory is Pam's
 minimum supported Mac, but each live host still supplies its own working-set
 limit and pressure snapshot. The M4 results below establish the model-memory
 profile, not M1 Pro throughput.
 
 ## Host-derived model ceiling
 
-The model-allocation ceiling is derived from the machine PAM is running on,
+The model-allocation ceiling is derived from the machine Pam is running on,
 not from a product-wide constant. `pam_model::host_model_ceiling_bytes` is a
 pure function of the host's physical memory:
 
 ```text
 OS reserve = max(8 GiB, ceil(20% of total))          [required_os_reserve]
-ceiling(total) = total - OS reserve - 1 GiB PAM application budget
+ceiling(total) = total - OS reserve - 1 GiB Pam application budget
 ```
 
 Both terms are the reserves already documented above: the operating-system
-share and PAM's own daemon/API/UI budget, which is kept separate so it cannot
+share and Pam's own daemon/API/UI budget, which is kept separate so it cannot
 disappear inside a model estimate. The OS term is `required_os_reserve`, the
 *same* function `validate_host_admission` enforces against the live snapshot,
 so one reserve rule applies everywhere and the ceiling can never advertise
@@ -153,7 +153,7 @@ over-reserve capacity no admissible projection can use.
 | 64 GiB | 2,695,091,979 |
 
 The retired value was a fixed 1 GiB (1,073,741,824), which covered projections
-only up to about 21.47 GB and therefore refused PAM's own largest calibrated
+only up to about 21.47 GB and therefore refused Pam's own largest calibrated
 artifact with "projection contingency is below the calibrated minimum". The
 32 GiB minimum Mac keeps its margin after the OS floor was folded into the
 ceiling: 1,234,803,098 bytes is still above the retired constant, not below
@@ -176,7 +176,7 @@ for is physical capacity, because the ceiling now carries the same OS reserve.
 The snapshot that supplies the host total is the same one that feeds the exact
 check — there is one sample per load, not two.
 
-### The 32 GiB story: PAM's own Q6_K
+### The 32 GiB story: Pam's own Q6_K
 
 The 25,092,535,456-byte Q6_K in `CALIBRATED_ARTIFACTS` is the artifact that
 motivated the fold. Its weights alone exceed the 32 GiB Mac's 24,696,061,952-byte
@@ -189,13 +189,13 @@ projected runtime allocation of 27523861109 bytes exceeds the 24696061952-byte p
 
 Under the previous split rule the same artifact cleared the
 26,414,048,870-byte ceiling on weights and was then refused by the exact
-accounting at load — its weights plus the 8 GiB OS reserve and PAM's 1 GiB
+accounting at load — its weights plus the 8 GiB OS reserve and Pam's 1 GiB
 budget need 34,756,211,872 bytes of a 34,359,738,368-byte machine. No
 contingency value changes that; it is physical capacity, and now one rule
 reports it once.
 
 Calibration is a *measured-end-to-end* verdict, not a promise that an artifact
-fits every supported Mac. PAM ships a calibrated artifact its documented
+fits every supported Mac. Pam ships a calibrated artifact its documented
 32 GiB minimum cannot run; the Q6_K is a 64 GiB-class profile, where it is
 admitted end to end. The other two calibrated artifacts (17,456,012,448 and
 18,556,689,568 bytes) clear the 32 GiB ceiling with their 5% contingency.
@@ -203,7 +203,7 @@ admitted end to end. The other two calibrated artifacts (17,456,012,448 and
 ## Uncalibrated artifacts at load time
 
 `CALIBRATED_ARTIFACTS` remains the known-good set: an exact digest and size
-pair PAM has measured end to end. Membership is no longer a load gate, only a
+pair Pam has measured end to end. Membership is no longer a load gate, only a
 calibration verdict.
 
 - **Calibrated** — the digest and size match the measured set; the runtime
@@ -215,7 +215,7 @@ calibration verdict.
 - **Uncalibrated but fitting** — outside the set, and its weights plus the 5%
   contingency are within this host's ceiling. It loads, the profile reports
   `ArtifactCalibration::Uncalibrated`, and the load path logs that the
-  artifact "is not in PAM's calibrated set, so its runtime profile is
+  artifact "is not in Pam's calibrated set, so its runtime profile is
   untested" — the same wording the GUI uses for an uncalibrated import.
   Nothing about it is treated as measured: it still passes the exact
   projection, host admission, and live-context checks.
@@ -233,7 +233,7 @@ admissions that follow.
 
 `crates/pam_gui/src/model_presets.rs` is a curated catalog, not a view of
 `CALIBRATED_ARTIFACTS`. Each preset carries its own size and digest literals,
-so PAM can offer artifacts it has not measured — two coding families
+so Pam can offer artifacts it has not measured — two coding families
 (Qwen3-Coder-30B-A3B, Devstral-Small-2-24B) plus a 120B tier, tiered by
 quantization from a 32 GiB Mac to a 128 GiB one. The three original Qwen
 quants remain the measured set; every other preset is flagged uncalibrated in
@@ -288,7 +288,7 @@ this exact configuration, the runtime projection is:
 | 262,144 | 5,434,572,800 |
 
 This happens to decompose as 65,863,680 recurrent bytes per sequence plus
-20,480 KV bytes per token for f16, but PAM does not generalize that equation to
+20,480 KV bytes per token for f16, but Pam does not generalize that equation to
 another architecture or cache configuration. At 8,192 tokens the pinned
 runtime instead projected 154,992,640 context bytes with q8_0 cache and
 113,049,600 with q4_0. Four parallel sequences also multiply recurrent state;
@@ -314,7 +314,7 @@ artifact remains rejected under the 20 GB ceiling that was in force when this
 profile was measured.
 
 That leaves only 1,924,177,344 bytes of a 32 GiB physical-memory budget before
-projection contingency, PAM, or the OS. The initial 10% contingency alone
+projection contingency, Pam, or the OS. The initial 10% contingency alone
 exceeds the remaining capacity, before applying the 8 GiB OS reserve. Q6_K_XL
 is therefore rejected as a 32 GiB candidate.
 
@@ -325,7 +325,7 @@ The selected artifact is the Apache-2.0
 `Qwen3.6-35B-A3B-Q4_K_S-3.80bpw.gguf`: 16,492,334,496 bytes,
 SHA-256
 `ecc07b85c6c3110d1b210aa85935967c7f29f994e6e1c3a07ee486946ae535c1`.
-PAM does not bundle this user-owned file.
+Pam does not bundle this user-owned file.
 
 The exact profile uses full Metal offload, one sequence, batch and micro-batch
 512, automatic flash attention, f16 K/V cache, and non-unified KV. The measured
@@ -346,13 +346,13 @@ after the selected chat run report system-free memory moving from 90% to 63%
 and encrypted swap usage unchanged at 610.38 MiB. The no-allocation projection
 under-reported live buffers by 166,871,040 bytes. A calibrated contingency of
 `max(5%, 256 MiB)` is 924,092,751 bytes here, producing a calibrated model
-allocation estimate of 19,405,947,759 bytes before PAM's application budget:
+allocation estimate of 19,405,947,759 bytes before Pam's application budget:
 below the 20,000,000,000-byte model ceiling and above the measured live
 allocation. The larger uncalibrated 10%/2 GiB rule continues to apply to any
 other digest or runtime profile.
 
 On a 32 GiB minimum host, the separate 8 GiB OS reserve plus this calibrated
-model allocation uses 27,995,882,351 bytes before PAM's application budget,
+model allocation uses 27,995,882,351 bytes before Pam's application budget,
 leaving 6,363,856,017 bytes. Startup still fails closed if the live Metal
 working-set limit, availability, or pressure check is unknown or insufficient.
 
@@ -360,19 +360,19 @@ Quality checks through the embedded GGUF chat template passed arithmetic and a
 one-sentence integrity explanation. A sequence prompt returned the correct
 answer with `/no_think`; exact-format output remained unreliable because the
 model could spend the output budget on visible reasoning. This profile is
-therefore retained as calibration evidence, not selected as PAM's coding and
+therefore retained as calibration evidence, not selected as Pam's coding and
 data-analysis model. Full measurements are in
 `docs/benchmarks/llama-cpp-macos.md`.
 
 ## Production coder profile
 
-PAM's first supported runtime profile is the text-only
+Pam's first supported runtime profile is the text-only
 [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct)
 model using the user-owned Unsloth `Q4_K_S` GGUF at revision
 `b17cb02dd882d5b6ab62fc777ad2995f19668350`. The exact file is
 17,456,012,448 bytes with SHA-256
 `56a7d00783419bcb0ae566253c371bcb3678261bb79881a553539f5679864db4`.
-PAM accepts no other size/digest pair for this profile.
+Pam accepts no other size/digest pair for this profile.
 
 The selected configuration is full Metal offload, one sequence, 8,192 context
 tokens, batch and micro-batch 512, automatic flash attention, f16 K/V cache,
@@ -395,7 +395,7 @@ allocation exceeded the no-allocation projection by 175,030,272 bytes. The
 calibrated contingency is `max(ceil(5%), 256 MiB)` = 929,374,823 bytes, so the
 admitted model allocation is 19,516,871,271 bytes. That is 483,128,729 bytes
 below the 20,000,000,000-byte ceiling and 754,344,551 bytes above the measured
-live allocation. PAM and OS reserves remain separate admission requirements.
+live allocation. Pam and OS reserves remain separate admission requirements.
 
 Quality acceptance uses the GGUF's embedded chat template and the model card's
 recommended non-thinking sampler: temperature 0.7, top-p 0.8, top-k 20, and
@@ -407,10 +407,10 @@ filtering/grouping with
 and safe `.first()`, and conversion-rate arithmetic. Earlier implicit prompts
 missed requested output constraints in three of four cases, so generated text
 is untrusted and callers must specify and validate their output contract. The
-model supports only non-thinking mode; PAM exposes no reasoning toggle.
+model supports only non-thinking mode; Pam exposes no reasoning toggle.
 
 The same final binary was loaded by the production daemon and invoked through
-an authenticated, exact-effect PAM IPC grant. That establishes the adapter and
+an authenticated, exact-effect Pam IPC grant. That establishes the adapter and
 policy path on the measured M4 Max. It does not establish M1 Pro throughput;
 M1 Pro with 32 GB remains the minimum supported Mac, and every startup repeats
 host-specific admission before model load.
@@ -420,10 +420,10 @@ host-specific admission before model load.
 Qwen3-Coder is the only supported profile in this release, not the only model
 that could ever fit. GLM-4.7-Flash Q4_K_S is the closest future challenger: its
 30B-A3B architecture and approximately 17.2 GB community quant appear capable
-of fitting, but PAM has not verified an exact artifact, projection, chat
+of fitting, but Pam has not verified an exact artifact, projection, chat
 contract, or local quality suite. Devstral Small 2 is coding-specialized and
 targets 32 GB Macs, but its dense 24B runtime is expected to be materially
-slower on M1 Pro and its added vision capability is outside PAM's text-only
+slower on M1 Pro and its added vision capability is outside Pam's text-only
 scope. GPT-OSS-20B fits the memory class but requires Harmony formatting and a
 reasoning-oriented contract. Kimi K2.5 is multimodal and its official weight
 repository is hundreds of gigabytes, so it is outside the host envelope.
@@ -437,7 +437,7 @@ SQL, and numerical-analysis acceptance suite used for the selected profile.
 LLMLingua is a prompt compressor, not an alternative generation model. The
 20 GB ceiling is the active Qwen generation-profile cap, not a limit on models
 installed on disk or on auxiliary tools loaded in a different phase. For any
-phase with more than one resident model, PAM still accounts for their combined
+phase with more than one resident model, Pam still accounts for their combined
 allocation:
 
 ```text
@@ -460,7 +460,7 @@ Original LLMLingua uses causal-LM perplexity, commonly with GPT-2-small or a
 7B-class model, and is the less attractive local candidate. LLMLingua-2 turns
 compression into extractive token classification with a BERT-level encoder;
 its authors report 3x-6x lower compressor latency and 2x-5x compression in
-their evaluated tasks. PAM would screen the 713 MB mBERT variant first, but it
+their evaluated tasks. Pam would screen the 713 MB mBERT variant first, but it
 is multilingual, trained from MeetingBank seed data, and shipped through a
 Python/Transformers stack. It is not yet evidence for English code, compiler
 logs, paths, hashes, or a single Rust binary.

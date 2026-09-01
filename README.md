@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/pam-mark.svg" width="160" alt="PAM mark: a lifeguard tower against a coral sun">
+  <img src="docs/assets/pam-mark.svg" width="160" alt="Pam mark: a lifeguard tower against a coral sun">
 </p>
 
-<h1 align="center">PAM</h1>
+<h1 align="center">Pam</h1>
 
 <p align="center"><strong>A local lifeguard for developers and AI agents in corporate environments.</strong></p>
 
@@ -23,14 +23,14 @@
 
 ---
 
-PAM is Baywatch for developers and AI agents working inside corporate
+Pam is Baywatch for developers and AI agents working inside corporate
 environments: always on watch, confident, and ready with the verified project
 story. It keeps durable context, turns noisy evidence into compact answers,
 safely brokers approved tools, and runs repeatable flows without sending the
 developer's workspace to a hosted control plane.
 
 <p align="center">
-  <img src="docs/assets/screenshots/control-center-ventisquero-dark.png" alt="PAM control center: durable activity timeline and a terminal handoff card, Ventisquero dark theme" width="900">
+  <img src="docs/assets/screenshots/control-center-ventisquero-dark.png" alt="Pam control center: durable activity timeline and a terminal handoff card, Ventisquero dark theme" width="900">
 </p>
 
 ```text
@@ -40,18 +40,18 @@ pam gui                     # launches the installed desktop control center
 pam flow run "release check"
 ```
 
-## Why PAM
+## Why Pam
 
 Coding agents are capable, but corporate development work is fragmented across
 build logs, Git, CI, SonarQube, Jira, Confluence, credentials, policy prompts,
 and restrictive sandboxes. Agents also lose useful context when conversations
-are compacted or restarted. PAM sits locally between agents and those systems,
+are compacted or restarted. Pam sits locally between agents and those systems,
 preserving verified continuity and returning small, evidence-backed results.
 
-PAM helps an agent answer:
+Pam helps an agent answer:
 
 - **What project am I acting on**, and what work is already in flight?
-- **What actually failed**, where is the evidence, and what can PAM safely fix?
+- **What actually failed**, where is the evidence, and what can Pam safely fix?
 - **Which action requires human approval?**
 - **What changed**, how was it verified, and what remains unresolved?
 
@@ -85,10 +85,10 @@ Two theme families, each with a true light and dark variant:
   model summarization; original evidence is always addressable.
 - **Flows:** developers compose auditable sequences in the GUI or as files and
   run them with `pam flow run "name"`.
-- **Local inference:** PAM integrates with `llama.cpp`, helps acquire compatible
+- **Local inference:** Pam integrates with `llama.cpp`, helps acquire compatible
   models, and never ships model weights. The default model location is
   `~/llm/<vendor>/<model-name>.<extension>` unless the user chooses another.
-- **Companion continuity:** PAM cooperates with tools such as `ptrack`
+- **Companion continuity:** Pam cooperates with tools such as `ptrack`
   through supported interfaces instead of taking ownership of their storage.
 - **Connectors ship dormant:** corporate connectors are built in but inert
   until the user enables each one, stores its credential in the native
@@ -178,7 +178,7 @@ cargo run --bin pam -- status --approval-id <approval-id>
 
 `--approval-id <ID>` is available on the single-request `status`, `brief`,
 `wait`, `result`, and `network diagnostics` commands. The receipt is attached
-only to the command that explicitly supplies it; PAM does not read approval
+only to the command that explicitly supplies it; Pam does not read approval
 authority from the environment.
 
 `evidence show` deliberately does not accept an approval receipt. One evidence
@@ -193,7 +193,7 @@ The first supported embedded model profile is the user-owned
 Qwen3-Coder-30B-A3B-Instruct Q4_K_S artifact documented in
 [docs/model-memory.md](docs/model-memory.md). Register its exact bytes and
 accepted license snapshot; if policy denies the import, run the exact recovery
-grant printed by PAM and retry the same command:
+grant printed by Pam and retry the same command:
 
 ```sh
 cargo run --bin pam -- model import \
@@ -207,7 +207,7 @@ cargo run --bin pam -- model import \
   --accept-license
 ```
 
-Start the daemon with that profile and invoke it over PAM's authenticated local
+Start the daemon with that profile and invoke it over Pam's authenticated local
 protocol. The first generation is default-denied until its printed exact-effect
 grant is added; retry the identical request after granting it.
 
@@ -225,7 +225,7 @@ cargo run --bin pam -- model generate \
 
 Model loading is disabled unless the daemon receives `--model VENDOR/NAME`,
 then fails closed on the 20 GB profile, fresh memory pressure, swap trend,
-Metal working set, and OS/PAM reserves. The model path is text-only,
+Metal working set, and OS/Pam reserves. The model path is text-only,
 English-first, and intended for coding plus Python/SQL data analysis. It does
 not expose an HTTP model endpoint. The embedded llama.cpp/Metal runtime
 remains macOS-only; the portable desktop surfaces report that limitation
@@ -243,7 +243,7 @@ network diagnostics expose only sanitized configuration facts; audit export is
 project-scoped and redacted; evidence and audit retention are explicit,
 bounded, and crash-recoverable.
 
-PAM nevertheless relies on the operating-system account and per-user
+Pam nevertheless relies on the operating-system account and per-user
 data-directory protections for local administrative CLI operations and direct
 database access; an untrusted process with unrestricted execution as that same
 user is inside the current administrative trust boundary.
@@ -264,7 +264,7 @@ schedules per-project work in SQLite, recovers leases after restart, replays
 ordered events, retains exact content-addressed evidence, and obtains project
 context from `ptrack` only through its supported JSON CLI. The workspace also
 contains a tested, deterministic log compactor and a bounded, directly embedded
-llama.cpp runtime behind the existing authenticated PAM protocol; compactor
+llama.cpp runtime behind the existing authenticated Pam protocol; compactor
 integration remains future work. LLMLingua-2 is recorded as a possible staged
 semantic compressor, but is not integrated; it may load on demand and unload
 before the selected model. The 20 GB ceiling applies to the active Qwen
@@ -305,7 +305,7 @@ MACOSX_DEPLOYMENT_TARGET=12.0 \
   npm --prefix frontend run tauri -- build \
   --target aarch64-apple-darwin --bundles app
 tools/package-macos-dmg.sh \
-  "$PWD/target/aarch64-apple-darwin/release/bundle/macos/PAM.app" \
+  "$PWD/target/aarch64-apple-darwin/release/bundle/macos/pam.app" \
   "$PWD/target/aarch64-apple-darwin/release/bundle/dmg"
 ```
 
@@ -332,6 +332,6 @@ architectures as independently exercised UI surfaces.
 
 The design is intentionally open before implementation hardens it. Please start
 with the product brief and roadmap, then open an issue describing the user
-problem, expected evidence, and security boundary. PAM is licensed under the
+problem, expected evidence, and security boundary. Pam is licensed under the
 [Apache License 2.0](LICENSE). By contributing, you agree that your
 contributions will be licensed under the same terms.

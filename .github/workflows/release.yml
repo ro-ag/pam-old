@@ -74,7 +74,7 @@ jobs:
           # tag lands late. Re-running the CI run refreshes its artifacts.
           names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
             --jq '[.artifacts[] | select(.expired | not) | .name] | join(" ")')"
-          for artifact in PAM-linux-amd64 PAM-linux-arm64 PAM-windows-amd64 PAM-windows-arm64 PAM-macos-arm64; do
+          for artifact in pam-linux-amd64 pam-linux-arm64 pam-windows-amd64 pam-windows-arm64 pam-macos-arm64; do
             if [[ " $names " != *" $artifact "* ]]; then
               echo "::error::Artifact $artifact from CI run $run_id is missing or expired; re-run that CI run, then retry the release."
               exit 1
@@ -95,25 +95,25 @@ jobs:
             target: x86_64-unknown-linux-gnu
             family: linux
             arch: amd64
-            artifact: PAM-linux-amd64
+            artifact: pam-linux-amd64
           - name: Linux arm64 package
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             family: linux
             arch: arm64
-            artifact: PAM-linux-arm64
+            artifact: pam-linux-arm64
           - name: Windows amd64 package
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             family: windows
             arch: amd64
-            artifact: PAM-windows-amd64
+            artifact: pam-windows-amd64
           - name: Windows arm64 package
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             family: windows
             arch: arm64
-            artifact: PAM-windows-arm64
+            artifact: pam-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       # Packages were built and verified by the CI run on the tag commit;
@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bundle
-          tar -xzf "downloaded/PAM-${TARGET}-bundle.tar.gz" -C bundle
+          tar -xzf "downloaded/pam-${TARGET}-bundle.tar.gz" -C bundle
           tar -C bundle -czf "$PWD/pam_${VERSION}_linux_${ARCH}.tar.gz" .
 
       - name: Assemble Windows release archive
@@ -178,9 +178,9 @@ jobs:
         run: |
           set -euo pipefail
           # No checkout in this job: point gh at the repository explicitly.
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name PAM-macos-arm64 --dir downloaded
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name pam-macos-arm64 --dir downloaded
           mkdir -p bundle
-          tar -xzf downloaded/PAM-macos-arm64-bundle.tar.gz -C bundle
+          tar -xzf downloaded/pam-macos-arm64-bundle.tar.gz -C bundle
 
       - name: Prepare Apple signing and notarization
         shell: bash
@@ -215,7 +215,7 @@ jobs:
           set -euo pipefail
           # Hardened runtime is a notarization requirement; the Tauri build
           # used to apply it at build time, so the post-hoc signature must too.
-          codesign --force --timestamp --options runtime --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/PAM.app"
+          codesign --force --timestamp --options runtime --deep --sign "$APPLE_SIGNING_IDENTITY" "bundle/macos/pam.app"
 
       - name: Rebuild the disk image from the signed application
         shell: bash
@@ -224,7 +224,7 @@ jobs:
           # The CI-built dmg wraps the unsigned app, and notarization scans
           # the dmg payload: it must be rebuilt around the signed bundle.
           rm -rf bundle/dmg
-          tools/package-macos-dmg.sh "$PWD/bundle/macos/PAM.app" "$PWD/bundle/dmg"
+          tools/package-macos-dmg.sh "$PWD/bundle/macos/pam.app" "$PWD/bundle/dmg"
 
       - name: Sign and notarize disk image
         shell: bash
@@ -262,13 +262,13 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          app="bundle/macos/PAM.app"
+          app="bundle/macos/pam.app"
           dmg="$(find bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           [[ -n "$dmg" ]]
           codesign --verify --deep --strict "$app"
           codesign --verify --strict "$dmg"
           xcrun stapler validate "$dmg"
-          release_dmg="PAM_${VERSION}_darwin_arm64.dmg"
+          release_dmg="pam_${VERSION}_darwin_arm64.dmg"
           mv "$dmg" "$release_dmg"
           echo "path=$release_dmg" >> "$GITHUB_OUTPUT"
 
@@ -333,6 +333,6 @@ jobs:
           set -euo pipefail
           gh release create "${GITHUB_REF_NAME}" \
             dist/* \
-            --title "PAM ${GITHUB_REF_NAME}" \
+            --title "Pam ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             --verify-tag

@@ -43,7 +43,7 @@ fn default_endpoint_uses_local_ipc() {
 
 #[test]
 fn fallback_runtime_is_rooted_in_private_per_user_data() {
-    let project_dirs = directories::ProjectDirs::from("dev", "PAM", "PAM")
+    let project_dirs = directories::ProjectDirs::from("dev", "pam", "pam")
         .expect("the test host must expose a per-user data directory");
 
     assert_eq!(

@@ -36,7 +36,7 @@ Tauri reuses the operating system webview and bundles the existing Rust helper.
 
 ## Why application-level queues, not a ZeroMQ queue
 
-ZeroMQ routes live messages; it is not PAM's durable source of truth. Project
+ZeroMQ routes live messages; it is not Pam's durable source of truth. Project
 ordering, retries, leases, cancellation, event replay, and idempotency belong in
 the SQLite-backed scheduler. A daemon restart may disconnect sockets without
 losing or duplicating accepted work.
@@ -65,7 +65,7 @@ admission is mandatory, and M1 Pro speed remains unmeasured.
 Universal model packaging remains intentionally out of scope. The desktop
 control center targets Linux and Windows on arm64/amd64 and macOS 12+ on arm64.
 The macOS CI package is Developer-ID-signed, notarized, stapled, and
-Gatekeeper-validated without exposing repository credentials. PAM will use bounded chunk-boundary
+Gatekeeper-validated without exposing repository credentials. Pam will use bounded chunk-boundary
 cancellation and a serialized worker instead of the binding's unsafe abort
 callback. See `docs/benchmarks/llama-cpp-macos.md` for commands, measurements,
 limitations, and the fallback criteria. The preview uses the embedded adapter
@@ -74,17 +74,17 @@ part of the runtime path.
 
 ## Reference model policy
 
-PAM maintains explicit digest-bound model capability profiles. The first
+Pam maintains explicit digest-bound model capability profiles. The first
 production profile is Qwen3-Coder-30B-A3B-Instruct Q4_K_S at 8,192 context,
 documented in `docs/model-memory.md`; it is text-only, supports only
 non-thinking mode, and uses the model card's recommended sampling parameters.
 The adapter admits it only after checking weights, context, compute, calibrated
-contingency, operating-system and PAM reserves, live pressure and swap trend,
+contingency, operating-system and Pam reserves, live pressure and swap trend,
 and the 20 GB model-allocation ceiling. Other artifacts and quantizations
 require their own exact projection, calibration, and focused quality suite; M4
 timings are not presented as M1 Pro measurements.
 
-The user chooses the download directory. If they do not, PAM proposes:
+The user chooses the download directory. If they do not, Pam proposes:
 
 ```text
 ~/llm/<vendor>/<model-name>.<extension>
@@ -141,5 +141,5 @@ boundary is proven.
 - Release and long-term distribution policy beyond CI-retained preview
   artifacts; no tag, release, or public upload is implied by the package jobs.
 - MessagePack library and evolution rules after protocol fixture spike.
-- Whether a later model-sharing slice needs another authenticated PAM protocol
+- Whether a later model-sharing slice needs another authenticated Pam protocol
   operation; an HTTP/OpenAI-compatible listener is intentionally out of scope.

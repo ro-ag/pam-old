@@ -1,6 +1,6 @@
 # Model acquisition and ownership
 
-PAM never owns or bundles model weights. `pam_model` verifies an existing GGUF
+Pam never owns or bundles model weights. `pam_model` verifies an existing GGUF
 in place or downloads one to a path the user controls. The default path helper
 returns:
 
@@ -44,7 +44,7 @@ are never placed in the durable model record.
 Literal non-public targets and non-443 ports are rejected. With direct
 connections, the HTTPS peer is resolved by the platform-backed HTTP stack. If
 a system proxy is configured, that proxy is an explicit trusted network
-boundary and may perform its own DNS resolution; PAM does not claim DNS pinning
+boundary and may perform its own DNS resolution; Pam does not claim DNS pinning
 through an administrator-configured proxy.
 
 Downloads use same-directory `.pam-model.part`, `.pam-model.json`, and lock
@@ -56,7 +56,7 @@ offset, preserve the expected total and validator, and match its declared
 segment length. A server that ignores a range with `200 OK` causes a safe
 truncate-and-restart; bytes are never appended to that full response.
 
-Before publication PAM verifies exact length, SHA-256, and bounded GGUF
+Before publication Pam verifies exact length, SHA-256, and bounded GGUF
 structure, syncs the partial, and hard-links the verified inode to the final
 destination without replacement. Recovery accepts an already-published final
 path only after it independently matches the descriptor. The final path is
@@ -92,6 +92,6 @@ the completed accounting and candidate screen are documented in
 `docs/model-memory.md`.
 The selected 20 GB target profile is documented there as task #24 evidence.
 The runtime slice revalidates the registered size and SHA-256 before every
-model load and reaches the embedded llama.cpp adapter only through PAM's
+model load and reaches the embedded llama.cpp adapter only through Pam's
 authenticated local protocol. It does not add an HTTP model server or transfer
-ownership of the user-selected weights to PAM.
+ownership of the user-selected weights to Pam.

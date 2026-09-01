@@ -9,7 +9,7 @@ started
 The public-source baseline documents how developers on company-managed machines
 resume work, diagnose CI failures, and cross approval boundaries while using
 coding agents and corporate tools. The optional study kit prepares a future
-field study that can test PAM's product assumptions with real behavior.
+field study that can test Pam's product assumptions with real behavior.
 
 Public issue reports and prototype scenarios may inform the interview guide, but
 they do not count as interviews or observations. No participants have been
@@ -69,7 +69,7 @@ quietly substituting an ineligible participant.
    from its natural starting point. Ask the participant to work normally and use
    neutral prompts such as "What are you looking for now?" Record tools,
    handoffs, waits, repeated work, evidence consulted, approval boundaries, and
-   the final outcome. Do not turn the observation into a PAM demo.
+   the final outcome. Do not turn the observation into a Pam demo.
 4. **Decision questions — 10-15 minutes.** Ask the four questions below only
    after observing current behavior. Probe for conditions, objections, and
    counterexamples rather than seeking agreement.
@@ -107,8 +107,8 @@ only when both occur naturally and each has distinct evidence.
 ## Four decision questions
 
 1. Under what conditions would the participant and their company allow a local
-   PAM daemon to run, and what would make it unacceptable?
-2. Which audit events and source evidence should PAM retain, for how long, where,
+   Pam daemon to run, and what would make it unacceptable?
+2. Which audit events and source evidence should Pam retain, for how long, where,
    and under whose deletion or export control?
 3. Does company policy permit local model weights and inference; if so, which
    acquisition, license, storage, network, and hardware constraints apply?

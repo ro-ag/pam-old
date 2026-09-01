@@ -1,6 +1,6 @@
 # Participant consent and privacy protocol
 
-This protocol applies to PAM interviews and workflow observations with
+This protocol applies to Pam interviews and workflow observations with
 developers in company-managed environments. It does not replace an employer's
 research, security, legal, or confidentiality requirements. A session proceeds
 only when both the participant and their organization permit it.
@@ -82,7 +82,7 @@ recordings, and retain only the statement `restricted content omitted` when the
 omission is analytically relevant.
 
 Confidentiality cannot be guaranteed for information the participant chooses to
-disclose outside this protocol. The PAM repository is public: it receives only
+disclose outside this protocol. The Pam repository is public: it receives only
 deidentified aggregate findings and paraphrases, never completed session notes,
 participant identities, employer identities, or raw quotations.
 

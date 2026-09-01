@@ -63,11 +63,11 @@ Deliverables:
 - model import/download, integrity, licensing, memory estimate, and chosen paths;
 - one Qwen-capable profile proven below a 20 GB model-memory ceiling, with
   M1 Pro/32 GB as the minimum supported Mac and host-specific admission;
-- direct in-process Rust/llama.cpp inference through the authenticated PAM
+- direct in-process Rust/llama.cpp inference through the authenticated Pam
   protocol, with a bounded queue and optional semantic evidence compression.
 
-Exit: PAM can compact a retained diagnostic evidence set locally within a safe
-memory budget and another approved PAM caller can use the model without direct
+Exit: Pam can compact a retained diagnostic evidence set locally within a safe
+memory budget and another approved Pam caller can use the model without direct
 weight or credential management. No HTTP model endpoint is required.
 
 ### 5. Flows and useful feedback
@@ -107,7 +107,7 @@ Deliverables:
 - one safe remediation or rerun action behind explicit approval;
 - rate-limit, timeout, certificate, and partial-data behavior.
 
-Exit: PAM diagnoses a real failing GitHub Actions run, compacts the evidence,
+Exit: Pam diagnoses a real failing GitHub Actions run, compacts the evidence,
 and reports solved/verified/unresolved state end to end.
 
 ## Milestone 2 — corporate tool belt
@@ -139,7 +139,7 @@ preview, approval, idempotency, and verification.
 
 ## Future multi-user validation
 
-- If PAM expands beyond the solo-maintainer foundation, recruit five to eight
+- If Pam expands beyond the solo-maintainer foundation, recruit five to eight
   managed-environment developers for workflow interviews and direct observation
   before treating public-source inferences as participant-validated or making
   population-level claims.

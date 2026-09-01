@@ -16,7 +16,7 @@ and study templates. It contains no participant, session, or company evidence.
 The current evidence base is limited to public issue reports, public community
 discussions, and authoritative vendor documentation. Public reports show that a
 person encountered or described a problem; they do not establish prevalence,
-causality, or the experience of PAM's target population. Vendor documentation
+causality, or the experience of Pam's target population. Vendor documentation
 establishes supported platform behavior, not that users experience a problem.
 
 This report uses three evidence classes:
@@ -25,7 +25,7 @@ This report uses three evidence classes:
   an incident they investigated.
 - **Documented capability:** an authoritative vendor describes supported
   behavior, requirements, or restrictions.
-- **Product inference:** a hypothesis for PAM derived from one or both of the
+- **Product inference:** a hypothesis for Pam derived from one or both of the
   above. It remains unvalidated until participant evidence supports it.
 
 Nothing in this report is an interview result. No public post is treated as an
@@ -35,7 +35,7 @@ a population estimate.
 
 ## Ranked public signals
 
-| Rank | Public signal | Severity | Recurrence in source set | Confidence | Direct evidence | Provisional PAM inference |
+| Rank | Public signal | Severity | Recurrence in source set | Confidence | Direct evidence | Provisional Pam inference |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | Agent work can become invisible or impossible to resume across restarts and authentication events. | Critical | Recurrent | High | [S1], [S2] | Keep an authoritative project ledger and running/waiting/stopped state outside any agent UI or provider session. |
 | 2 | Corporate proxy and certificate trust differs across the macOS Keychain and tool-specific runtimes. | Critical | Recurrent across tools | High | [S3], [S4] | Diagnose PAC, proxy, VPN, Keychain, and runtime trust stores without recommending disabled TLS verification. |
@@ -46,7 +46,7 @@ a population estimate.
 | 7 | Visible activity and agent-authored summaries can omit the causal record needed to prove an outcome. | High | Emerging | High | [S12] | Capture tool inputs, approvals, outputs, verification, and source handles mechanically; report changed, verified, unresolved, and blocked separately. |
 
 Severity is a product-risk judgment. Confidence reflects source specificity and
-triangulation, not user-population certainty. All provisional PAM inferences
+triangulation, not user-population certainty. All provisional Pam inferences
 must be tested against counterevidence in the planned sessions.
 
 ## Source map
@@ -169,7 +169,7 @@ organization.
 ## As-is workflow-map templates
 
 Fill these from direct observation. Preserve the participant's current process;
-do not insert a PAM step into an as-is map.
+do not insert a Pam step into an as-is map.
 
 A replay may supplement notes from a live observation, but it cannot satisfy
 the live-observation requirement for either the real CI-diagnosis gate or the
@@ -221,7 +221,7 @@ approval- or network-gated-operation gate.
 - Ask how the workflow succeeds today, which controls are valuable, and when
   the reported problem does not occur.
 - Record alternate explanations, configuration-specific causes, workarounds
-  that are acceptable, and cases where PAM would add risk or another layer of
+  that are acceptable, and cases where Pam would add risk or another layer of
   friction.
 - Preserve contradictory session evidence and revise rank, severity, and
   confidence instead of averaging it away.
