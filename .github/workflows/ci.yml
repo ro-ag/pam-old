@@ -15,6 +15,10 @@ on:
 
 permissions:
   contents: read
+  # The already-tested gate reads the squash-merged PR's head and its check
+  # conclusions; both are read-only.
+  pull-requests: read
+  checks: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -29,6 +33,7 @@ jobs:
       has_cargo: ${{ steps.rust_workspace.outputs.has_cargo }}
       has_frontend: ${{ steps.frontend.outputs.has_frontend }}
       rust_changed: ${{ steps.rust_changes.outputs.changed }}
+      already_tested: ${{ steps.already_tested.outputs.already_tested }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -99,10 +104,45 @@ jobs:
             echo "has_frontend=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # A squash merge of an up-to-date branch lands the exact tree the PR run
+      # already proved green, so re-proving it on the main push buys nothing.
+      # The gate skips the heavy jobs ONLY when the pushed commit names its PR
+      # in the squash subject, that PR's head tree is byte-identical to main's
+      # tree, and every required check on that head concluded success. A stale
+      # base (trees differ), a direct push (no PR subject), or anything less
+      # than green falls through to the full run.
+      - name: Skip heavy jobs when this exact tree was already green on a PR
+        id: already_tested
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tested=false
+          subject="$(git log -1 --format=%s)"
+          if [[ "$subject" =~ \(#([0-9]+)\)$ ]]; then
+            pr="${BASH_REMATCH[1]}"
+            head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" -q .head.sha 2>/dev/null || true)"
+            if [[ -n "$head_sha" ]] && git fetch --depth=1 origin "$head_sha" 2>/dev/null; then
+              main_tree="$(git rev-parse 'HEAD^{tree}')"
+              pr_tree="$(git rev-parse "${head_sha}^{tree}" 2>/dev/null || true)"
+              if [[ "$main_tree" == "$pr_tree" ]]; then
+                conclusions="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
+                  -q '[.check_runs[] | select(.name == "Foundation" or .name == "Rust" or .name == "Desktop frontend") | .conclusion] | unique | join(",")')"
+                if [[ "$conclusions" == "success" ]]; then
+                  tested=true
+                  echo "::notice::Tree ${main_tree} was already green on PR #${pr} (${head_sha}); skipping the heavy jobs."
+                fi
+              fi
+            fi
+          fi
+          echo "already_tested=${tested}" >> "$GITHUB_OUTPUT"
+
   rust:
     name: Rust
     needs: foundation
-    if: ${{ needs.foundation.outputs.has_cargo == 'true' }}
+    if: ${{ needs.foundation.outputs.has_cargo == 'true' && needs.foundation.outputs.already_tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -132,12 +172,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Test workspace
-        run: cargo test --workspace --all-features --locked
+        run: bash tools/ci/test-timeout-tolerance.sh
 
   frontend:
     name: Desktop frontend
     needs: foundation
-    if: ${{ needs.foundation.outputs.has_frontend == 'true' }}
+    if: ${{ needs.foundation.outputs.has_frontend == 'true' && needs.foundation.outputs.already_tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:

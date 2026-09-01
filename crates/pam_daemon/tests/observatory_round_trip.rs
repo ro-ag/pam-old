@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use pam_client::request_exchange;
 use pam_core::{
     CallerCredential, CallerId, ContentDigest, GrantId, IdempotencyKey, ProjectId, RequestId,
 };
@@ -16,6 +15,7 @@ use pam_protocol::{
     Capability, FailureCode, OperationTruth, RequestEnvelope, ResultBody, ResultPayload, encode,
 };
 use pam_store::{AppendAuditEvent, CallerAuthentication, PutGrant, Store};
+use pam_testkit::request_exchange;
 use sha2::{Digest as _, Sha256};
 use tokio::{sync::oneshot, task::JoinHandle};
 

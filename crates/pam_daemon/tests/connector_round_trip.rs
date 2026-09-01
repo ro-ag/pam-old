@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use pam_client::request_exchange;
 use pam_core::{CallerCredential, CallerId, GrantId, IdempotencyKey, ProjectId, RequestId};
 use pam_daemon::{ConnectorSecretOverride, DaemonConfig, serve_until};
 use pam_platform::{LocalEndpoint, SecretBackend, SecretBackendError, SecretLocator};
@@ -16,6 +15,7 @@ use pam_protocol::{
     OperationTruth, RequestEnvelope, ResultBody, ResultPayload, encode,
 };
 use pam_store::Store;
+use pam_testkit::request_exchange;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 const TEST_CREDENTIAL: &str = "connector-caller-credential";

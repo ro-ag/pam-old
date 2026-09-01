@@ -3128,6 +3128,7 @@ dependencies = [
  "pam_policy",
  "pam_protocol",
  "pam_store",
+ "pam_testkit",
  "rmp-serde",
  "rusqlite",
  "serde",
@@ -3164,6 +3165,7 @@ dependencies = [
  "pam_protocol",
  "pam_skills",
  "pam_store",
+ "pam_testkit",
  "reqwest",
  "serde",
  "serde_json",
@@ -3263,6 +3265,16 @@ dependencies = [
  "sha2",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "pam_testkit"
+version = "0.10.0"
+dependencies = [
+ "nix",
+ "pam_client",
+ "pam_platform",
+ "pam_protocol",
 ]
 
 [[package]]
