@@ -390,10 +390,6 @@ pub(super) async fn serve_until_with_delay<F>(
 where
     F: Future<Output = ()> + Send,
 {
-    // The legacy `dev.PAM.PAM` per-user directory has to be moved before the
-    // ownership lock, the endpoint, or the durable store is opened under the
-    // current path; the outcome is recorded once the log file exists.
-    let data_dir_migration = pam_platform::migrate_user_data_dir();
     let ownership = Ownership::acquire(&config.endpoint)?;
     prepare_endpoint(&config)?;
     let state_path = match &config.state_path {
@@ -404,14 +400,6 @@ where
         .parent()
         .map_or_else(|| PathBuf::from("logs"), |parent| parent.join("logs"));
     let log = DaemonLog::open(&log_dir);
-    if let Some(line) = data_dir_migration.audit_line() {
-        match data_dir_migration {
-            pam_platform::DataDirMigration::NotNeeded => {}
-            pam_platform::DataDirMigration::Moved { .. } => log.info(line),
-            pam_platform::DataDirMigration::Conflict { .. } => log.warn(line),
-            pam_platform::DataDirMigration::Failed { .. } => log.error(line),
-        }
-    }
     let reset_state_path = state_path.clone();
     let store = Store::open(state_path)?;
     store.recover_all_leases(now_ms()).await?;
