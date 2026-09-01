@@ -750,9 +750,33 @@ export type ModelDownloadDto =
   | { status: "ok" }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
+/** What to download. A preset is one of PAM's hand-checked catalog entries;
+ *  a url is a source the owner pasted and vouched for, carrying every field
+ *  PAM needs to verify the bytes it receives. */
+export type ModelDownloadSource =
+  | { kind: "preset"; presetId: string }
+  | {
+      kind: "url";
+      /** Stable model identity in vendor/name form. */
+      model: string;
+      /** Plain HTTPS URL of the .gguf file, with no query or fragment. */
+      url: string;
+      expectedSizeBytes: number;
+      /** Lowercase hex SHA-256, with or without the `sha256:` prefix. */
+      sha256: string;
+      licenseId: string;
+      licenseUrl: string;
+      licenseNoticeText: string;
+      /** The explicit license acceptance; PAM refuses the download without it. */
+      accepted: boolean;
+    };
+
 export interface ModelDownloadStatusDto {
   status: "idle" | "running" | "complete" | "failed" | "cancelled";
-  presetId: string | null;
+  /** The preset id for a curated download, the vendor/name model key for a
+   *  pasted-URL one. */
+  downloadId: string | null;
+  downloadKind: "preset" | "url" | null;
   receivedBytes: number;
   totalBytes: number;
   failure: ModelFailureDto | null;
@@ -896,7 +920,7 @@ export interface PamBridge {
   modelInspect(fence: CommandFence, path: string): Promise<ModelInspectDto>;
   modelLicenseDiscover(fence: CommandFence, query: string): Promise<ModelLicenseDiscoveryDto>;
   modelPresets(fence: CommandFence): Promise<ModelPresetsDto>;
-  modelDownload(fence: CommandFence, presetId: string): Promise<ModelDownloadDto>;
+  modelDownload(fence: CommandFence, source: ModelDownloadSource): Promise<ModelDownloadDto>;
   modelDownloadStatus(fence: CommandFence): Promise<ModelDownloadStatusDto>;
   modelDownloadCancel(fence: CommandFence): Promise<ModelDownloadDto>;
   hostMemory(fence: CommandFence): Promise<HostMemoryDto>;

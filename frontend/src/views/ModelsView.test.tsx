@@ -834,11 +834,12 @@ describe("model runtime panel", () => {
     const props = await modelProps("model-none");
     vi.spyOn(props.bridge, "modelDownloadStatus")
       // The mount-time reattach check: nothing running yet.
-      .mockResolvedValueOnce({ status: "idle", presetId: null, receivedBytes: 0, totalBytes: 0, failure: null })
-      .mockResolvedValueOnce({ status: "running", presetId: "qwen3-coder-30b-q4ks", receivedBytes: 1_000, totalBytes: 17_456_012_448, failure: null })
+      .mockResolvedValueOnce({ status: "idle", downloadId: null, downloadKind: null, receivedBytes: 0, totalBytes: 0, failure: null })
+      .mockResolvedValueOnce({ status: "running", downloadId: "qwen3-coder-30b-q4ks", downloadKind: "preset", receivedBytes: 1_000, totalBytes: 17_456_012_448, failure: null })
       .mockResolvedValueOnce({
         status: "failed",
-        presetId: "qwen3-coder-30b-q4ks",
+        downloadId: "qwen3-coder-30b-q4ks",
+        downloadKind: "preset",
         receivedBytes: 1_000,
         totalBytes: 17_456_012_448,
         failure: { kind: "unavailable", code: "connection_reset", detail: "The download connection dropped.", recovery: "Check the network and retry." },
@@ -866,7 +867,8 @@ describe("model runtime panel", () => {
     const props = await modelProps("model-none");
     vi.spyOn(props.bridge, "modelDownloadStatus").mockResolvedValue({
       status: "running",
-      presetId: "qwen3-coder-30b-q4ks",
+      downloadId: "qwen3-coder-30b-q4ks",
+      downloadKind: "preset",
       receivedBytes: 6_000_000_000,
       totalBytes: 17_456_012_448,
       failure: null,
@@ -1117,4 +1119,152 @@ describe("model runtime panel", () => {
     expect(within(panel).getByText("unreachable")).toBeInTheDocument();
     expect(within(panel).getByText(/local model runtime is not reachable/)).toBeInTheDocument();
   });
+});
+
+// The pasted-URL path: the same verified, resumable download as a preset,
+// against a source PAM never hand-checked.
+describe("pasted-URL model download", () => {
+  async function openUrlForm(panel: HTMLElement) {
+    await userEvent.click(
+      within(panel).getByRole("button", { name: "Download from a URL you paste" }),
+    );
+    return within(panel).getByRole("form", { name: "Download from a URL you paste" });
+  }
+
+  async function fillUrlForm(form: HTMLElement) {
+    await userEvent.type(within(form).getByLabelText("Model identity"), "acme/pasted-model");
+    await userEvent.type(
+      within(form).getByLabelText("Download URL"),
+      "https://models.example/pasted-model.gguf",
+    );
+    await userEvent.type(within(form).getByLabelText("Expected size in bytes"), "17456012448");
+    await userEvent.type(within(form).getByLabelText("Expected SHA-256"), "a".repeat(64));
+    await userEvent.type(within(form).getByLabelText("License identifier"), "Apache-2.0");
+    await userEvent.type(within(form).getByLabelText("License URL"), "https://example.com/license");
+    await userEvent.type(within(form).getByLabelText("License notice"), "Apache License 2.0");
+    await userEvent.click(within(form).getByLabelText(/I accept this model's license/));
+  }
+
+  it("says the presets are hand-checked and that a pasted source is the user's own vouch", async () => {
+    const props = await modelProps("model-none");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    expect(await within(panel).findByText(/Every model in the list below is hand-checked/)).toBeInTheDocument();
+    const form = await openUrlForm(panel);
+    expect(
+      within(form).getByText(
+        /PAM has not checked this source\. By pasting it you are vouching for it, and the SHA-256 you enter is what protects you/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(form).getByText(/refuses to register the file unless the bytes it receives hash to exactly that digest/)).toBeInTheDocument();
+  });
+
+  it("names the missing fields before it ever calls the daemon", async () => {
+    const props = await modelProps("model-none");
+    const download = vi.spyOn(props.bridge, "modelDownload");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const form = await openUrlForm(panel);
+    await userEvent.type(within(form).getByLabelText("Model identity"), "acme/pasted-model");
+    await userEvent.click(within(form).getByLabelText(/I accept this model's license/));
+    await userEvent.click(within(form).getByRole("button", { name: "Download" }));
+
+    expect(
+      await within(form).findByText(
+        /Fill in the download URL, expected size, SHA-256 digest, license identifier, license URL, license notice/,
+      ),
+    ).toBeInTheDocument();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-HTTPS pasted URL in the form", async () => {
+    const props = await modelProps("model-none");
+    const download = vi.spyOn(props.bridge, "modelDownload");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const form = await openUrlForm(panel);
+    await fillUrlForm(form);
+    await userEvent.clear(within(form).getByLabelText("Download URL"));
+    await userEvent.type(
+      within(form).getByLabelText("Download URL"),
+      "http://models.example/pasted-model.gguf",
+    );
+    await userEvent.click(within(form).getByRole("button", { name: "Download" }));
+
+    expect(
+      await within(form).findByText(/PAM downloads models over HTTPS only/),
+    ).toBeInTheDocument();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("refuses a digest that is not a 64-character SHA-256", async () => {
+    const props = await modelProps("model-none");
+    const download = vi.spyOn(props.bridge, "modelDownload");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const form = await openUrlForm(panel);
+    await fillUrlForm(form);
+    await userEvent.clear(within(form).getByLabelText("Expected SHA-256"));
+    await userEvent.type(within(form).getByLabelText("Expected SHA-256"), "abc123");
+    await userEvent.click(within(form).getByRole("button", { name: "Download" }));
+
+    expect(
+      await within(form).findByText("The expected digest must be a 64-character hex SHA-256."),
+    ).toBeInTheDocument();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("downloads a pasted URL with polled progress and a cancel that keeps the bytes", async () => {
+    const props = await modelProps("model-none");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const form = await openUrlForm(panel);
+    await fillUrlForm(form);
+    await userEvent.click(within(form).getByRole("button", { name: "Download" }));
+
+    expect(await within(form).findByText(/40%/)).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(
+      await within(form).findByText(/Download cancelled — .* kept on disk/, {}, { timeout: 2_000 }),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).not.toHaveBeenCalled();
+
+    // Resuming the same pasted URL picks up from the kept bytes.
+    await userEvent.click(within(form).getByRole("button", { name: "Resume download" }));
+    expect(
+      await within(form).findByText("Downloaded and registered.", {}, { timeout: 4_000 }),
+    ).toBeInTheDocument();
+    expect(props.onModelImported).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
+  it("renders a refused pasted download with its recovery line", async () => {
+    const props = await modelProps("model-none");
+    vi.spyOn(props.bridge, "modelDownload").mockResolvedValue({
+      status: "unavailable",
+      failure: {
+        kind: "unavailable",
+        code: "invalid_download_url",
+        detail:
+          "models.example resolves to 10.0.0.5, which is inside your own network; PAM will not download a model from it.",
+        recovery:
+          "Paste a URL on the public internet. PAM refuses private, loopback and link-local addresses so a pasted link cannot reach into your network.",
+      },
+    });
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const form = await openUrlForm(panel);
+    await fillUrlForm(form);
+    await userEvent.click(within(form).getByRole("button", { name: "Download" }));
+
+    const alert = await within(form).findByRole("alert");
+    expect(alert).toHaveTextContent(/inside your own network; PAM will not download a model from it\./);
+    expect(alert).toHaveTextContent(/Paste a URL on the public internet\./);
+    expect(within(form).getByRole("button", { name: "Retry download" })).toBeInTheDocument();
+  }, 10_000);
 });

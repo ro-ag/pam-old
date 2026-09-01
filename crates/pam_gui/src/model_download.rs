@@ -74,10 +74,33 @@ impl From<StoreWriteFailure> for ModelDownloadFailure {
 
 impl From<ModelError> for ModelDownloadFailure {
     fn from(error: ModelError) -> Self {
-        Self::new(
-            error.to_string(),
-            "Retry the download; if it keeps failing, check your network connection.",
-        )
+        // Integrity and redirect refusals are the checks that protect a
+        // pasted source, so each one says what to do about it rather than
+        // "check your network connection", which would be a lie about a
+        // digest mismatch.
+        let recovery = match error {
+            ModelError::DigestMismatch => {
+                "The bytes PAM received do not match the digest you gave. Nothing was registered \
+                 and the partial file was discarded. Re-check the digest against the publisher, \
+                 or stop trusting this source."
+            }
+            ModelError::SizeMismatch { .. } => {
+                "Re-check the expected size in bytes against the publisher's own listing, then \
+                 retry."
+            }
+            ModelError::RedirectNotAllowed => {
+                "PAM follows a pasted download only within the host you pasted. Open the link in \
+                 a browser, then paste the final URL it lands on."
+            }
+            ModelError::TooManyRedirects => {
+                "The source redirected too many times. Paste the final download URL instead."
+            }
+            ModelError::InsecureSource | ModelError::InvalidSource => {
+                "Paste a plain HTTPS URL with no credentials, query string, or fragment."
+            }
+            _ => "Retry the download; if it keeps failing, check your network connection.",
+        };
+        Self::new(error.to_string(), recovery)
     }
 }
 
@@ -93,10 +116,21 @@ pub(crate) enum ModelDownloadStatusKind {
     Cancelled,
 }
 
+/// Where the running download came from: PAM's own hand-checked catalog, or
+/// a URL the owner pasted and vouched for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ModelDownloadKind {
+    Preset,
+    Url,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ModelDownloadSnapshot {
     pub(crate) status: ModelDownloadStatusKind,
-    pub(crate) preset_id: Option<String>,
+    /// Identifies the download the status belongs to: the preset id for a
+    /// catalog entry, the `vendor/name` model key for a pasted URL.
+    pub(crate) download_id: Option<String>,
+    pub(crate) download_kind: Option<ModelDownloadKind>,
     pub(crate) received_bytes: u64,
     pub(crate) total_bytes: u64,
     pub(crate) failure: Option<ModelDownloadFailure>,
@@ -106,11 +140,64 @@ impl ModelDownloadSnapshot {
     fn idle() -> Self {
         Self {
             status: ModelDownloadStatusKind::Idle,
-            preset_id: None,
+            download_id: None,
+            download_kind: None,
             received_bytes: 0,
             total_bytes: 0,
             failure: None,
         }
+    }
+}
+
+/// One fully validated acquisition, whatever it came from: the descriptor
+/// PAM will verify the bytes against, the source, and the hosts a redirect
+/// may land on beyond the source host itself.
+///
+/// Building one is where every check happens, so nothing reaches
+/// [`download_https`] that has not already been parsed and refused on the
+/// caller's thread with a message the user can act on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModelAcquisition {
+    pub(crate) id: String,
+    pub(crate) kind: ModelDownloadKind,
+    pub(crate) descriptor: ModelDescriptor,
+    pub(crate) url: String,
+    /// Redirect hosts allowed *beyond* the source's own host, which
+    /// `pam_model` always appends. Empty means same-host redirects only.
+    pub(crate) allowed_redirect_hosts: Vec<String>,
+}
+
+impl ModelAcquisition {
+    /// Builds the acquisition for one hand-checked catalog preset. Its URL is
+    /// a checked-in constant, so it keeps the Hugging Face CDN redirect
+    /// allowlist a pasted URL never gets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelDownloadFailure`] when the preset's own metadata is
+    /// malformed, which the catalog's tests already rule out.
+    pub(crate) fn from_preset(preset: &ModelPreset) -> Result<Self, ModelDownloadFailure> {
+        let key = parse_model_key(preset.model).map_err(|failure| ModelDownloadFailure {
+            detail: failure.detail,
+            recovery: failure.recovery,
+        })?;
+        let descriptor = ModelDescriptor::new(
+            key,
+            preset.file_name,
+            preset.expected_digest(),
+            preset.expected_size_bytes,
+            preset.license()?,
+        )?;
+        Ok(Self {
+            id: preset.id.to_owned(),
+            kind: ModelDownloadKind::Preset,
+            descriptor,
+            url: preset.url.to_owned(),
+            allowed_redirect_hosts: HUGGING_FACE_REDIRECT_HOSTS
+                .iter()
+                .map(|host| (*host).to_owned())
+                .collect(),
+        })
     }
 }
 
@@ -157,7 +244,10 @@ impl ModelDownloadManager {
     ///
     /// Returns [`ModelDownloadFailure`] when another download is already
     /// running.
-    pub(crate) fn start(self: Arc<Self>, preset: ModelPreset) -> Result<(), ModelDownloadFailure> {
+    pub(crate) fn start(
+        self: Arc<Self>,
+        acquisition: ModelAcquisition,
+    ) -> Result<(), ModelDownloadFailure> {
         let home = BaseDirs::new()
             .map(|directories| directories.home_dir().to_path_buf())
             .ok_or_else(|| {
@@ -173,7 +263,7 @@ impl ModelDownloadManager {
             |_| home.join("llm"),
             |data_dir| settings::effective_models_dir(&data_dir, &home),
         );
-        self.start_with(preset, models_root, |received, cancel| {
+        self.start_with(acquisition, models_root, |received, cancel| {
             ReqwestDownloadTransport::secure().map(|transport| CountingTransport {
                 inner: transport,
                 received,
@@ -208,7 +298,7 @@ impl ModelDownloadManager {
     /// and HTTPS.
     pub(crate) fn start_with<T, F>(
         self: Arc<Self>,
-        preset: ModelPreset,
+        acquisition: ModelAcquisition,
         models_root: PathBuf,
         make_transport: F,
     ) -> Result<(), ModelDownloadFailure>
@@ -230,9 +320,10 @@ impl ModelDownloadManager {
             state.cancel = Arc::clone(&cancel);
             state.snapshot = ModelDownloadSnapshot {
                 status: ModelDownloadStatusKind::Running,
-                preset_id: Some(preset.id.to_owned()),
+                download_id: Some(acquisition.id.clone()),
+                download_kind: Some(acquisition.kind),
                 received_bytes: 0,
-                total_bytes: preset.expected_size_bytes,
+                total_bytes: acquisition.descriptor.expected_size_bytes,
                 failure: None,
             };
             (received, cancel)
@@ -241,23 +332,31 @@ impl ModelDownloadManager {
             let seed_received = Arc::clone(&received);
             let outcome = match make_transport(received, cancel) {
                 Ok(transport) => {
-                    run_download(&transport, preset, &models_root, seed_received).await
+                    run_download(&transport, &acquisition, &models_root, seed_received).await
                 }
                 Err(error) => Err(error.into()),
             };
-            self.finish(preset, outcome);
+            self.finish(&acquisition, outcome);
         });
         Ok(())
     }
 
-    fn finish(&self, preset: ModelPreset, outcome: Result<RegisteredModel, ModelDownloadFailure>) {
+    fn finish(
+        &self,
+        acquisition: &ModelAcquisition,
+        outcome: Result<RegisteredModel, ModelDownloadFailure>,
+    ) {
         let mut state = self.state.lock().unwrap();
+        let download_id = Some(acquisition.id.clone());
+        let download_kind = Some(acquisition.kind);
+        let total_bytes = acquisition.descriptor.expected_size_bytes;
         state.snapshot = match outcome {
             Ok(registered) => ModelDownloadSnapshot {
                 status: ModelDownloadStatusKind::Complete,
-                preset_id: Some(preset.id.to_owned()),
+                download_id,
+                download_kind,
                 received_bytes: registered.size_bytes,
-                total_bytes: preset.expected_size_bytes,
+                total_bytes,
                 failure: None,
             },
             // A requested cancel surfaces as the transfer error it forced;
@@ -265,16 +364,18 @@ impl ModelDownloadManager {
             // before the flag was seen stays Complete above — truthfully.
             Err(_) if state.cancel.load(Ordering::Relaxed) => ModelDownloadSnapshot {
                 status: ModelDownloadStatusKind::Cancelled,
-                preset_id: Some(preset.id.to_owned()),
+                download_id,
+                download_kind,
                 received_bytes: state.received.load(Ordering::Relaxed),
-                total_bytes: preset.expected_size_bytes,
+                total_bytes,
                 failure: None,
             },
             Err(failure) => ModelDownloadSnapshot {
                 status: ModelDownloadStatusKind::Failed,
-                preset_id: Some(preset.id.to_owned()),
+                download_id,
+                download_kind,
                 received_bytes: state.received.load(Ordering::Relaxed),
-                total_bytes: preset.expected_size_bytes,
+                total_bytes,
                 failure: Some(failure),
             },
         };
@@ -283,22 +384,11 @@ impl ModelDownloadManager {
 
 async fn run_download<T: DownloadTransport>(
     transport: &T,
-    preset: ModelPreset,
+    acquisition: &ModelAcquisition,
     models_root: &Path,
     received: Arc<AtomicU64>,
 ) -> Result<RegisteredModel, ModelDownloadFailure> {
-    let key = parse_model_key(preset.model).map_err(|failure| ModelDownloadFailure {
-        detail: failure.detail,
-        recovery: failure.recovery,
-    })?;
-    let license = preset.license()?;
-    let descriptor = ModelDescriptor::new(
-        key,
-        preset.file_name,
-        preset.expected_digest(),
-        preset.expected_size_bytes,
-        license,
-    )?;
+    let descriptor = acquisition.descriptor.clone();
     let consent = LicenseConsent::accept(&descriptor);
     let destination = model_path_under(models_root, &descriptor.key, &descriptor.filename)?;
     seed_resume_offset(&destination, &received);
@@ -306,11 +396,8 @@ async fn run_download<T: DownloadTransport>(
     let request = DownloadRequest {
         descriptor,
         consent,
-        source: preset.url.to_owned(),
-        allowed_redirect_hosts: HUGGING_FACE_REDIRECT_HOSTS
-            .iter()
-            .map(|host| (*host).to_owned())
-            .collect(),
+        source: acquisition.url.clone(),
+        allowed_redirect_hosts: acquisition.allowed_redirect_hosts.clone(),
         destination,
         registered_at_ms,
     };

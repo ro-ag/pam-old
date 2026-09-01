@@ -205,10 +205,10 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     modelPresets: (fence) =>
       invokeCommand<ModelPresetsDto>("model_presets", request(flatFence(fence))),
-    modelDownload: (fence, presetId) =>
+    modelDownload: (fence, source) =>
       invokeCommand<ModelDownloadDto>("model_download", request({
         ...flatFence(fence),
-        presetId,
+        source,
       })),
     modelDownloadStatus: (fence) =>
       invokeCommand<ModelDownloadStatusDto>("model_download_status", request(flatFence(fence))),

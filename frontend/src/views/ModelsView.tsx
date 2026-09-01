@@ -94,28 +94,31 @@ function PresetDownload({
         setPresets(presetsResponse.presets);
         setHostModelBudgetBytes(presetsResponse.hostModelBudgetBytes);
         setHostMemory(memoryResponse);
-        if (downloadStatus.presetId) {
-          setSelectedId(downloadStatus.presetId);
+        // Only a curated download belongs to this picker; a pasted-URL one
+        // in flight is the other form's to reattach to.
+        const mine = downloadStatus.downloadKind !== "url";
+        if (mine && downloadStatus.downloadId) {
+          setSelectedId(downloadStatus.downloadId);
           setAccepted(true);
         }
-        if (downloadStatus.status === "running") {
+        if (mine && downloadStatus.status === "running") {
           setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
           setPhase("running");
-        } else if (downloadStatus.status === "complete" && downloadStatus.presetId) {
+        } else if (mine && downloadStatus.status === "complete" && downloadStatus.downloadId) {
           setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
           setPhase("complete");
           if (!completedRef.current) {
             completedRef.current = true;
             onImported();
           }
-        } else if (downloadStatus.status === "failed" && downloadStatus.presetId) {
+        } else if (mine && downloadStatus.status === "failed" && downloadStatus.downloadId) {
           setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
           setPhase("failed");
           setDownloadError(
             [downloadStatus.failure?.detail, downloadStatus.failure?.recovery].filter(Boolean).join(" ") ||
               "The download failed partway through.",
           );
-        } else if (downloadStatus.status === "cancelled" && downloadStatus.presetId) {
+        } else if (mine && downloadStatus.status === "cancelled" && downloadStatus.downloadId) {
           setProgress({ receivedBytes: downloadStatus.receivedBytes, totalBytes: downloadStatus.totalBytes });
           setPhase("cancelled");
         }
@@ -183,7 +186,10 @@ function PresetDownload({
     setProgress({ receivedBytes: 0, totalBytes: selected.expectedSizeBytes });
     setPhase("running");
     try {
-      const response = await bridge.modelDownload(withDaemonOperation(), selected.id);
+      const response = await bridge.modelDownload(withDaemonOperation(), {
+        kind: "preset",
+        presetId: selected.id,
+      });
       if (response.status !== "ok") {
         setPhase("failed");
         setDownloadError([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
@@ -371,6 +377,331 @@ function PresetDownload({
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// The vouching line, in one place: the pasted path has no hand-check behind
+// it, and the digest is the only thing standing between the user and whatever
+// the source sends.
+export const PASTED_SOURCE_NOTICE =
+  "PAM has not checked this source. By pasting it you are vouching for it, and the SHA-256 you " +
+  "enter is what protects you: PAM refuses to register the file unless the bytes it receives " +
+  "hash to exactly that digest.";
+
+// The pasted path: a URL outside the curated catalog, with the same fields
+// `pam model import` demands. It runs through the very same verified,
+// resumable, cancellable download the presets use — only the source, and who
+// vouched for it, differ.
+function UrlDownload({
+  bridge,
+  onImported,
+  refreshTick = 0,
+}: {
+  bridge: PamBridge;
+  onImported: () => void;
+  /** Bumped by ⌘R; re-runs the mount-time reattach without a remount. */
+  refreshTick?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    model: "",
+    url: "",
+    expectedSizeBytes: "",
+    sha256: "",
+    licenseId: "",
+    licenseUrl: "",
+    licenseNoticeText: "",
+  });
+  const [accepted, setAccepted] = useState(false);
+  const [phase, setPhase] = useState<DownloadPhase>("idle");
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  // True only between submitting the start and hearing back: the phase does
+  // not become "running" until the desktop says the download actually
+  // started, so a refusal is not overwritten by the polling effect.
+  const [starting, setStarting] = useState(false);
+  const completedRef = useRef(false);
+  const busy = phase === "running" || starting;
+
+  // Reattach to a pasted-URL download already in flight: the manager is
+  // single-flight and survives a remount of this view, exactly like the
+  // curated picker's own reattachment.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await bridge.modelDownloadStatus(withDaemonOperation());
+        if (cancelled || status.downloadKind !== "url" || !status.downloadId) return;
+        setOpen(true);
+        setForm((current) => (current.model.trim() === "" ? { ...current, model: status.downloadId ?? "" } : current));
+        setProgress({ receivedBytes: status.receivedBytes, totalBytes: status.totalBytes });
+        if (status.status === "running") setPhase("running");
+        else if (status.status === "cancelled") setPhase("cancelled");
+        else if (status.status === "complete") setPhase("complete");
+        else if (status.status === "failed") {
+          setPhase("failed");
+          setDownloadError(
+            [status.failure?.detail, status.failure?.recovery].filter(Boolean).join(" ") ||
+              "The download failed partway through.",
+          );
+        }
+      } catch {
+        // Reattachment is an enhancement; the form still works without it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, refreshTick]);
+
+  // Poll while running, the same 800ms cadence the curated picker uses; the
+  // desktop tracks one download at a time and reports its own progress.
+  useEffect(() => {
+    if (phase !== "running") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await bridge.modelDownloadStatus(withDaemonOperation());
+        if (cancelled) return;
+        setProgress({ receivedBytes: status.receivedBytes, totalBytes: status.totalBytes });
+        if (status.status === "complete") {
+          setPhase("complete");
+          if (!completedRef.current) {
+            completedRef.current = true;
+            onImported();
+          }
+        } else if (status.status === "failed") {
+          setPhase("failed");
+          setDownloadError(
+            [status.failure?.detail, status.failure?.recovery].filter(Boolean).join(" ") ||
+              "The download failed partway through.",
+          );
+        } else if (status.status === "cancelled") {
+          setPhase("cancelled");
+        } else if (status.status === "idle") {
+          setPhase("idle");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPhase("failed");
+          setDownloadError(presentError(error));
+        }
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [phase, bridge, onImported]);
+
+  const set = (field: keyof typeof form) => (value: string) =>
+    setForm((current) => ({ ...current, [field]: value }));
+
+  // Everything the form itself can check, named the way the desktop names it,
+  // so a bad paste is corrected here instead of costing a round-trip.
+  const localRefusal = (): string | null => {
+    const missing = [
+      form.model.trim() === "" && "model identity",
+      form.url.trim() === "" && "download URL",
+      form.expectedSizeBytes.trim() === "" && "expected size",
+      form.sha256.trim() === "" && "SHA-256 digest",
+      form.licenseId.trim() === "" && "license identifier",
+      form.licenseUrl.trim() === "" && "license URL",
+      form.licenseNoticeText.trim() === "" && "license notice",
+    ].filter((field): field is string => Boolean(field));
+    if (missing.length > 0) return `Fill in the ${missing.join(", ")} — PAM verifies every one of them.`;
+    if (!/^[^/\s]+\/[^/\s]+$/.test(form.model.trim())) {
+      return "Name the model as vendor/name, e.g. qwen/qwen3-4b-instruct-q4.";
+    }
+    if (!form.url.trim().startsWith("https://")) {
+      return "PAM downloads models over HTTPS only. Paste the direct https:// URL of the .gguf file itself.";
+    }
+    if (!/^(sha256:)?[0-9a-fA-F]{64}$/.test(form.sha256.trim())) {
+      return "The expected digest must be a 64-character hex SHA-256.";
+    }
+    if (!/^\d+$/.test(form.expectedSizeBytes.trim()) || Number(form.expectedSizeBytes.trim()) < 24) {
+      return "The expected size must be the file's exact length in bytes.";
+    }
+    return null;
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const refusal = localRefusal();
+    if (refusal) {
+      setPhase("failed");
+      setDownloadError(refusal);
+      return;
+    }
+    completedRef.current = false;
+    setDownloadError(null);
+    setProgress({ receivedBytes: 0, totalBytes: Number(form.expectedSizeBytes.trim()) });
+    setStarting(true);
+    try {
+      const response = await bridge.modelDownload(withDaemonOperation(), {
+        kind: "url",
+        model: form.model.trim(),
+        url: form.url.trim(),
+        expectedSizeBytes: Number(form.expectedSizeBytes.trim()),
+        sha256: form.sha256.trim().toLowerCase(),
+        licenseId: form.licenseId.trim(),
+        licenseUrl: form.licenseUrl.trim(),
+        licenseNoticeText: form.licenseNoticeText,
+        accepted,
+      });
+      if (response.status === "ok") {
+        setPhase("running");
+      } else {
+        setPhase("failed");
+        setDownloadError([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
+      setPhase("failed");
+      setDownloadError(presentError(error));
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  // Cancelling keeps the partial file; restarting the same URL resumes from
+  // it, exactly as it does for a preset.
+  const cancelDownload = async () => {
+    try {
+      const response = await bridge.modelDownloadCancel(withDaemonOperation());
+      if (response.status !== "ok") {
+        setDownloadError([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
+      setDownloadError(presentError(error));
+    }
+  };
+
+  const percent = progress && progress.totalBytes > 0
+    ? Math.min(100, Math.round((progress.receivedBytes / progress.totalBytes) * 100))
+    : 0;
+
+  const field = (
+    label: string,
+    key: keyof typeof form,
+    placeholder: string,
+    type: "text" | "url" = "text",
+  ) => (
+    <label>
+      {label}
+      <input
+        type={type}
+        name={`model-url-${key}`}
+        placeholder={placeholder}
+        value={form[key]}
+        disabled={busy}
+        onChange={(event) => set(key)(event.target.value)}
+      />
+    </label>
+  );
+
+  return (
+    <div className="model-advanced model-url-download">
+      <button
+        type="button"
+        className="model-advanced-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? <CaretDown size={13} weight="bold" aria-hidden="true" /> : <CaretRight size={13} weight="bold" aria-hidden="true" />}
+        Download from a URL you paste
+      </button>
+      {open && (
+        <form
+          className="model-import model-advanced-body"
+          aria-label="Download from a URL you paste"
+          onSubmit={(event) => void submit(event)}
+        >
+          <p className="model-fit-warn" role="note">{PASTED_SOURCE_NOTICE}</p>
+          {field("Model identity", "model", "vendor/name, e.g. qwen/qwen3-4b-instruct-q4")}
+          {field("Download URL", "url", "https://…/model.gguf", "url")}
+          {field("Expected size in bytes", "expectedSizeBytes", "e.g. 17456012448")}
+          {field("Expected SHA-256", "sha256", "64 hex characters")}
+          {field("License identifier", "licenseId", "SPDX id, e.g. Apache-2.0")}
+          {field("License URL", "licenseUrl", "https://…", "url")}
+          <label>
+            License notice
+            <textarea
+              name="model-url-notice"
+              placeholder="Paste the exact license notice text you are accepting."
+              rows={3}
+              value={form.licenseNoticeText}
+              disabled={busy}
+              onChange={(event) => set("licenseNoticeText")(event.target.value)}
+            />
+          </label>
+          <label className="model-import-consent">
+            <input
+              type="checkbox"
+              checked={accepted}
+              disabled={busy}
+              onChange={(event) => setAccepted(event.target.checked)}
+            />
+            I accept this model's license exactly as stated above, and I vouch for this source.
+          </label>
+          <div className="model-actions">
+            <button
+              type="submit"
+              className="button button--primary button--small"
+              disabled={!accepted || busy || phase === "complete"}
+            >
+              {busy
+                ? "Downloading…"
+                : phase === "complete"
+                  ? "Downloaded"
+                  : phase === "failed"
+                    ? "Retry download"
+                    : phase === "cancelled"
+                      ? "Resume download"
+                      : "Download"}
+            </button>
+            {phase === "running" && (
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                onClick={() => void cancelDownload()}
+              >
+                Cancel
+              </button>
+            )}
+            {phase === "running" && (
+              <small>PAM fetches, hashes, and registers this model, all from this screen.</small>
+            )}
+          </div>
+          {phase === "running" && progress && (
+            <div className="model-download-progress">
+              <div className="model-download-track" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+                <div className="model-download-fill" style={{ width: `${percent}%` }} />
+              </div>
+              <small>
+                {formatModelSize(progress.receivedBytes)} of {formatModelSize(progress.totalBytes)} · {percent}%
+              </small>
+            </div>
+          )}
+          {phase === "complete" && (
+            <p className="model-verify is-pass" role="status">
+              <Check size={16} aria-hidden="true" /> Downloaded and registered.
+            </p>
+          )}
+          {phase === "cancelled" && progress && (
+            <p className="model-note" role="status">
+              Download cancelled — {formatModelSize(progress.receivedBytes)} of{" "}
+              {formatModelSize(progress.totalBytes)} kept on disk. Resume picks up where it left off.
+            </p>
+          )}
+          {phase === "failed" && downloadError && (
+            <p className="model-verify is-fail" role="alert">{downloadError}</p>
+          )}
+        </form>
       )}
     </div>
   );
@@ -890,7 +1221,15 @@ function ModelImportForm({
           ? "No local model is registered yet. Choose a curated model for PAM to download, or import one you already have."
           : "Add another model: choose a curated one for PAM to download, or import one you already have. Registering a model never disturbs the one running."}
       </p>
+      <p className="model-note">
+        Every model in the list below is hand-checked: PAM ships its URL, size and digest as
+        checked-in constants and confines its download to the publisher's own hosts.
+      </p>
       <PresetDownload bridge={bridge} onImported={onImported} refreshTick={refreshTick} />
+      <div className="model-setup-divider" role="separator">
+        <span>or paste a download URL</span>
+      </div>
+      <UrlDownload bridge={bridge} onImported={onImported} refreshTick={refreshTick} />
       <div className="model-setup-divider" role="separator">
         <span>or import a downloaded GGUF</span>
       </div>

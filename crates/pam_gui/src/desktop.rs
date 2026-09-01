@@ -59,14 +59,15 @@ use crate::{
     },
     model_discovery::discover_license,
     model_download::{
-        MIN_SUPPORTED_HOST_MEMORY_BYTES, ModelDownloadManager, ModelDownloadStatusKind,
-        host_memory_total_bytes,
+        MIN_SUPPORTED_HOST_MEMORY_BYTES, ModelAcquisition, ModelDownloadKind, ModelDownloadManager,
+        ModelDownloadStatusKind, host_memory_total_bytes,
     },
     model_import::{
         MIN_RECOMMENDED_MODEL_BYTES, ModelImportManager, ModelImportParams, ModelImportStage,
         ModelImportStatusKind, run_model_inspect,
     },
     model_presets,
+    model_url_download::{self, ModelUrlDownloadParams},
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
@@ -1120,14 +1121,38 @@ pub enum ModelDownloadStatusKindDto {
     Cancelled,
 }
 
+/// Which of the two download paths the reported status belongs to, so the
+/// curated picker and the pasted-URL form each reattach only to their own
+/// in-flight download.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelDownloadKindDto {
+    Preset,
+    Url,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelDownloadStatusDto {
     pub status: ModelDownloadStatusKindDto,
-    pub preset_id: Option<String>,
+    /// The preset id for a curated download, the `vendor/name` model key for
+    /// a pasted-URL one.
+    pub download_id: Option<String>,
+    pub download_kind: Option<ModelDownloadKindDto>,
     pub received_bytes: u64,
     pub total_bytes: u64,
     pub failure: Option<FailureDto>,
+}
+
+/// What to download: one curated catalog entry, or a URL the owner pasted
+/// and vouched for. Both run through the same verified, resumable,
+/// cancellable transfer.
+///
+/// Deliberately not `Debug`: the pasted variant carries license consent text.
+#[derive(Clone)]
+pub enum ModelDownloadSourceParams {
+    Preset { preset_id: String },
+    Url(ModelUrlDownloadParams),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2604,19 +2629,13 @@ impl DesktopCore {
     pub async fn model_download(
         &self,
         fence: CommandFence,
-        preset_id: String,
+        source: ModelDownloadSourceParams,
     ) -> DesktopResult<ModelDownloadDto> {
         let _command = self.command_gate.lock().await;
         let scope = self.begin_scoped(&fence).await?;
-        let data = match model_presets::find(&preset_id) {
-            None => ModelDownloadDto::Unavailable {
-                failure: unavailable_failure(
-                    Some("unknown_preset".to_owned()),
-                    "This preset is not offered by PAM.",
-                    Some("Reload the preset list and select it again.".to_owned()),
-                ),
-            },
-            Some(preset) => match Arc::clone(&self.downloads).start(*preset) {
+        let data = match resolve_download_source(source).await {
+            Err(refusal) => ModelDownloadDto::Unavailable { failure: refusal },
+            Ok(acquisition) => match Arc::clone(&self.downloads).start(acquisition) {
                 Ok(()) => ModelDownloadDto::Ok,
                 Err(failure) => ModelDownloadDto::Unavailable {
                     failure: unavailable_failure(
@@ -2653,7 +2672,11 @@ impl DesktopCore {
                 ModelDownloadStatusKind::Failed => ModelDownloadStatusKindDto::Failed,
                 ModelDownloadStatusKind::Cancelled => ModelDownloadStatusKindDto::Cancelled,
             },
-            preset_id: snapshot.preset_id,
+            download_id: snapshot.download_id,
+            download_kind: snapshot.download_kind.map(|kind| match kind {
+                ModelDownloadKind::Preset => ModelDownloadKindDto::Preset,
+                ModelDownloadKind::Url => ModelDownloadKindDto::Url,
+            }),
             received_bytes: snapshot.received_bytes,
             total_bytes: snapshot.total_bytes,
             failure: snapshot.failure.map(|failure| {
@@ -4792,6 +4815,55 @@ fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDt
         } => ModelStatusDto::Unavailable {
             failure: unavailable_failure(code, detail, recovery),
         },
+    }
+}
+
+/// Turns a requested download source into a validated acquisition, or into
+/// the bounded refusal the GUI renders. Business refusals are data here, the
+/// same way [`DesktopCore::model_import`] reports its own.
+async fn resolve_download_source(
+    source: ModelDownloadSourceParams,
+) -> Result<ModelAcquisition, FailureDto> {
+    match source {
+        ModelDownloadSourceParams::Preset { preset_id } => {
+            let preset = model_presets::find(&preset_id).ok_or_else(|| {
+                unavailable_failure(
+                    Some("unknown_preset".to_owned()),
+                    "This preset is not offered by PAM.",
+                    Some("Reload the preset list and select it again.".to_owned()),
+                )
+            })?;
+            ModelAcquisition::from_preset(preset).map_err(|failure| {
+                unavailable_failure(
+                    Some("invalid_preset".to_owned()),
+                    failure.detail,
+                    failure.recovery,
+                )
+            })
+        }
+        // A pasted URL is checked here, on the caller's request, so a bad
+        // scheme or a host inside the user's own network is refused in the
+        // form rather than surfacing later as a mid-download failure. Host
+        // resolution is a blocking system call, so it runs off the runtime
+        // thread even though the desktop command gate is held.
+        ModelDownloadSourceParams::Url(params) => tokio::task::spawn_blocking(move || {
+            model_url_download::acquisition_from_url(&params, model_url_download::resolve_host)
+        })
+        .await
+        .map_err(|_| {
+            unavailable_failure(
+                Some("download_source_unchecked".to_owned()),
+                "PAM could not check that download URL.",
+                Some("Retry the download.".to_owned()),
+            )
+        })?
+        .map_err(|failure| {
+            unavailable_failure(
+                Some("invalid_download_url".to_owned()),
+                failure.detail,
+                failure.recovery,
+            )
+        }),
     }
 }
 

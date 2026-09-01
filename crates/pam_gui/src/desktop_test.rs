@@ -21,10 +21,11 @@ use super::{
         CommandFence, ConnectorConfigureParams, CurrentDto, DaemonStartup, DesktopCore,
         DesktopErrorKind, DesktopResult, EvidenceHandleDto, FailureDto, FailureKindDto,
         FlowComposeDto, FlowDefinitionHandle, FlowDocumentHandle, FlowGraphDto, GenerationId,
-        HealthDto, ModelDownloadDto, ModelInspectDto, ModelStatusDto, ModelSummaryDto, OperationId,
-        ProjectHandle, StartupPhase, StartupProgress, StartupProgressCell, StartupSampler,
-        TimelineKindDto, access_dto_for_test, active_core_at_for_test, active_core_for_test,
-        activity_dto_for_test, approval_current_for_test, approval_failure_retains_handle_for_test,
+        HealthDto, ModelDownloadDto, ModelDownloadSourceParams, ModelInspectDto, ModelStatusDto,
+        ModelSummaryDto, OperationId, ProjectHandle, StartupPhase, StartupProgress,
+        StartupProgressCell, StartupSampler, TimelineKindDto, access_dto_for_test,
+        active_core_at_for_test, active_core_for_test, activity_dto_for_test,
+        approval_current_for_test, approval_failure_retains_handle_for_test,
         bootstrap_with_catalog_for_test, bounded_detail_for_test, callers_dto_for_test,
         clamp_model_output_tokens_for_test, command_gate_for_test,
         connector_configure_dto_for_test, connector_test_dto_for_test, connectors_dto_for_test,
@@ -41,6 +42,7 @@ use super::{
         stop_outcome_for_test, switch_authority_for_test, wait_for_daemon_serving_for_test,
     },
     flow_editor::FlowEditorError,
+    model_url_download::ModelUrlDownloadParams,
     observatory::ObservatoryState,
     skill_library::{SkillLibraryAgentDto, SkillLibraryRequest},
 };
@@ -943,12 +945,47 @@ async fn model_download_reports_an_unknown_preset_as_unavailable_data_not_an_err
     let dto = core
         .model_download(
             daemon_fence(OperationId::new()),
-            "does-not-exist".to_owned(),
+            ModelDownloadSourceParams::Preset {
+                preset_id: "does-not-exist".to_owned(),
+            },
         )
         .await
         .unwrap();
 
     assert!(matches!(dto, ModelDownloadDto::Unavailable { .. }));
+}
+
+/// A pasted URL is refused as bounded data on the same command, without ever
+/// reaching the transport — the scheme check fires long before any network.
+#[tokio::test]
+async fn model_download_reports_a_refused_pasted_url_as_unavailable_data() {
+    let core = DesktopCore::new("/bounded/test");
+    let dto = core
+        .model_download(
+            daemon_fence(OperationId::new()),
+            ModelDownloadSourceParams::Url(ModelUrlDownloadParams {
+                model: "acme/pasted-model".to_owned(),
+                url: "http://models.example/pasted-model.gguf".to_owned(),
+                expected_size_bytes: 4096,
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                license_id: "Test-License".to_owned(),
+                license_url: "https://example.test/license".to_owned(),
+                license_notice_text: "notice".to_owned(),
+                accepted: true,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let ModelDownloadDto::Unavailable { failure } = dto else {
+        panic!("a pasted http:// URL must be refused as unavailable data");
+    };
+    assert_eq!(failure.code.as_deref(), Some("invalid_download_url"));
+    assert_eq!(
+        failure.detail,
+        "PAM downloads models over HTTPS only; this URL uses the http scheme."
+    );
 }
 
 #[tokio::test]
@@ -996,7 +1033,8 @@ async fn model_download_status_defaults_to_idle() {
         serde_json::to_value(dto).unwrap(),
         serde_json::json!({
             "status": "idle",
-            "presetId": null,
+            "downloadId": null,
+            "downloadKind": null,
             "receivedBytes": 0,
             "totalBytes": 0,
             "failure": null
@@ -1646,8 +1684,13 @@ async fn daemon_scoped_commands_accept_the_daemon_authority_without_a_project() 
             .await,
     );
     assert_daemon_replay_conflict(
-        core.model_download(fence(), "qwen3-coder-30b-q4ks".to_owned())
-            .await,
+        core.model_download(
+            fence(),
+            ModelDownloadSourceParams::Preset {
+                preset_id: "qwen3-coder-30b-q4ks".to_owned(),
+            },
+        )
+        .await,
     );
     assert_daemon_replay_conflict(core.model_download_status(fence()).await);
     assert_daemon_replay_conflict(core.model_download_cancel(fence()).await);
