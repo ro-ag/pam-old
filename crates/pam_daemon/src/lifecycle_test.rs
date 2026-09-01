@@ -2789,37 +2789,51 @@ async fn daemon_parallelizes_projects_but_serializes_each_project() {
     ));
     wait_until_ready(&endpoint).await;
 
+    // Each worker reads `queued_behind` for its own request when it finishes, so the
+    // reported queue depth is the daemon's own record of what was still waiting in that
+    // project's lane while the request held it. That observation is what proves the
+    // scheduling shape here; it does not depend on how fast the host happens to run.
     let different_a = request("project-a", "different-a");
     let different_b = request("project-b", "different-b");
-    let different_started = Instant::now();
     let different = tokio::join!(
         request_status(&endpoint, &different_a, Duration::from_secs(3)),
         request_status(&endpoint, &different_b, Duration::from_secs(3))
     );
-    assert!(different.0.is_ok());
-    assert!(different.1.is_ok());
-    let different_elapsed = different_started.elapsed();
+    let first_different_project = different.0.unwrap();
+    let second_different_project = different.1.unwrap();
+    // Separate projects occupy separate lanes: neither request ever saw the other
+    // waiting behind it, so neither had to wait for the other to finish.
+    let different_queue_depths = [
+        status_queue_depth(&first_different_project),
+        status_queue_depth(&second_different_project),
+    ];
+    assert_eq!(
+        different_queue_depths,
+        [0, 0],
+        "different-project requests must not share a queue lane"
+    );
 
     let same_a = request("project-c", "same-a");
     let same_b = request("project-c", "same-b");
-    let same_started = Instant::now();
     let same = tokio::join!(
         request_status(&endpoint, &same_a, Duration::from_secs(3)),
         request_status(&endpoint, &same_b, Duration::from_secs(3))
     );
     let first_same_project = same.0.unwrap();
     let second_same_project = same.1.unwrap();
+    // One project, one lane: whichever request ran first still had the other queued
+    // behind it when it completed, and the one that ran second had an empty lane. If
+    // per-project serialization broke, both would be leased at once and both would
+    // report an empty lane.
     let mut queue_depths = [
         status_queue_depth(&first_same_project),
         status_queue_depth(&second_same_project),
     ];
     queue_depths.sort_unstable();
-    assert_eq!(queue_depths, [0, 1]);
-    let same_elapsed = same_started.elapsed();
-
-    assert!(
-        same_elapsed >= different_elapsed + Duration::from_millis(150),
-        "same-project elapsed {same_elapsed:?}, different-project elapsed {different_elapsed:?}"
+    assert_eq!(
+        queue_depths,
+        [0, 1],
+        "same-project requests must serialize, so the earlier one must observe the later one queued"
     );
 
     let abandoned = request("project-abandoned", "abandoned");
