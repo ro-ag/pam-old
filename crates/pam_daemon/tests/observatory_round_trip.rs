@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use pam_client::request_exchange;
@@ -13,7 +13,7 @@ use pam_model::{GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, Registered
 use pam_platform::LocalEndpoint;
 use pam_policy::{ApprovalRequirement, CapabilityName, Effect, Grant, ResourceScope};
 use pam_protocol::{
-    FailureCode, OperationTruth, RequestEnvelope, ResultBody, ResultPayload, encode,
+    Capability, FailureCode, OperationTruth, RequestEnvelope, ResultBody, ResultPayload, encode,
 };
 use pam_store::{AppendAuditEvent, CallerAuthentication, PutGrant, Store};
 use sha2::{Digest as _, Sha256};
@@ -143,13 +143,75 @@ async fn start_daemon(
     (shutdown_tx, daemon)
 }
 
+/// How long a test waits for a freshly started daemon to answer.
+///
+/// The endpoint is bound last: the store opens and migrates, the credential
+/// store warms and any configured model loads first. A shared CI runner
+/// stretches every one of those, so readiness is given far more patience than
+/// any single exchange.
+const READY_TIMEOUT: Duration = Duration::from_mins(1);
+/// How long one readiness probe waits before it is retried.
+const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long readiness pauses between probes.
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Waits until the daemon answers, not merely until its socket file appears.
+///
+/// A socket file proves the listener is bound, never that the daemon serves,
+/// and the cost of that gap lands on whichever exchange goes first. The
+/// transport's connect back-off is exponential — roughly 1.4s, then 2.0s, 2.7s,
+/// 3.8s and 5.3s — so an endpoint that is late by a fraction of a second costs
+/// seconds and one that is late by ten exhausts a fifteen-second deadline
+/// outright. Waiting for a complete round trip here keeps startup out of the
+/// exchange deadlines, which then cover only the exchange they are spent on.
+///
+/// The probe is deliberately inert. Its capability and payload do not match, so
+/// the daemon answers on shape alone — before authentication, policy or the
+/// audit ledger — and leaves nothing behind for any test to observe.
+///
+/// Readiness that never arrives panics here, naming the endpoint and the wait,
+/// instead of falling through into a confusing deadline further down.
 async fn wait_until_ready(endpoint: &LocalEndpoint) {
-    for _ in 0..40 {
+    let started = Instant::now();
+    let mut probes = 0_u32;
+    loop {
         if endpoint.socket_path().is_some_and(std::path::Path::exists) {
-            break;
+            probes += 1;
+            if let Ok(exchange) =
+                request_exchange(endpoint, &readiness_probe(probes), READY_PROBE_TIMEOUT).await
+            {
+                assert!(
+                    matches!(
+                        &exchange.result.body,
+                        ResultBody::Failure(failure) if failure.code == FailureCode::InvalidRequest
+                    ),
+                    "the readiness probe must stay inert: {:?}",
+                    exchange.result.body
+                );
+                return;
+            }
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            started.elapsed() < READY_TIMEOUT,
+            "daemon at {} answered no readiness probe within {READY_TIMEOUT:?} ({probes} tried)",
+            endpoint.address()
+        );
+        tokio::time::sleep(READY_POLL_INTERVAL).await;
     }
+}
+
+/// A request the daemon must answer and must not record.
+fn readiness_probe(probe: u32) -> RequestEnvelope {
+    let mut request = RequestEnvelope::status(
+        RequestId::new(format!("readiness-probe-{probe}")),
+        CallerId::from("readiness-probe"),
+        ProjectId::from("readiness-probe"),
+        IdempotencyKey::new(format!("readiness-probe-{probe}")),
+    );
+    // `Status` pairs only with `DaemonStatus`; under any other capability the
+    // daemon rejects the request for its shape without touching the store.
+    request.capability = Capability::CallerList;
+    request
 }
 
 #[allow(clippy::too_many_lines)] // One transport fixture proves the complete activity read boundary.
