@@ -6,9 +6,10 @@ use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
-    FailureCode, GrantRevokeResult, ModelGenerationResult, ModelMessage, ModelRegisterResult,
-    ModelRegistration, ModelStatusResult, ModelUnregisterResult, ProtocolContractError,
-    RequestEnvelope, ResetResult, ResetTier, ResultBody, ResultPayload,
+    FailureCode, GrantRevokeResult, ModelDeleteWeightsResult, ModelGenerationResult, ModelMessage,
+    ModelRegisterResult, ModelRegistration, ModelStatusResult, ModelSweepResult,
+    ModelUnregisterResult, ModelVerifyResult, ProtocolContractError, RequestEnvelope, ResetResult,
+    ResetTier, ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -27,6 +28,14 @@ const MODEL_REGISTER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const GRANT_REVOKE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL_REGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.register capability in Access, or approve the pending registration.";
 const MODEL_UNREGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.";
+const MODEL_VERIFY_BLOCKED_RECOVERY: &str =
+    "Grant the GUI caller the model.verify capability in Access, or approve the pending check.";
+const MODEL_SWEEP_BLOCKED_RECOVERY: &str =
+    "Grant the GUI caller the model.sweep capability in Access, or approve the pending sweep.";
+const MODEL_DELETE_WEIGHTS_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.delete-weights capability in Access, or approve the pending deletion.";
+/// Verification re-hashes every registered artifact, which for a catalog of
+/// multi-gigabyte weights is minutes of disk work, not a status read.
+const MODEL_VERIFY_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(10);
 // A reset walks the whole store, and clearing history also unlinks every
 // evidence blob, so it gets a far longer window than an ordinary write.
 const RESET_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -385,7 +394,104 @@ pub(crate) async fn run_model_unregister(
     .await)
 }
 
-/// Revokes every daemon-scope grant the GUI caller holds for one capability,
+/// Re-reads the registered weights and reports what still matches the registry.
+///
+/// This is the registry's health, not the loaded model's: it asks whether the
+/// bytes on disk are still the bytes the registry recorded, and needs no model
+/// to be loaded at all.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a model identity the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_model_verify(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    model: Option<String>,
+) -> Result<ObservatoryState<ModelVerifyResult>, ProtocolContractError> {
+    let request = RequestEnvelope::model_verify(
+        unique_request_id("gui-model-verify"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-verify"),
+        model,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "model-verify",
+        MODEL_VERIFY_EXCHANGE_TIMEOUT,
+        model_verify_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelVerify(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+/// Reconciles the registry against the models directory, in both directions.
+pub(crate) async fn run_model_sweep(
+    caller_id: CallerId,
+    credential: CallerCredential,
+) -> ObservatoryState<ModelSweepResult> {
+    let request = RequestEnvelope::model_sweep(
+        unique_request_id("gui-model-sweep"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-sweep"),
+    )
+    .authenticated(credential);
+    load(
+        request,
+        "model-sweep",
+        MODEL_REGISTER_EXCHANGE_TIMEOUT,
+        model_sweep_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelSweep(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await
+}
+
+/// Deletes one PAM-downloaded model's weights and unregisters it.
+///
+/// The daemon owns the provenance gate: a GGUF PAM only ever verified in place
+/// is refused, and the refusal arrives as unavailable carrying the daemon's
+/// own explanation and recovery line.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a model identity the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_model_delete_weights(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    model: String,
+) -> Result<ObservatoryState<ModelDeleteWeightsResult>, ProtocolContractError> {
+    let request = RequestEnvelope::model_delete_weights(
+        unique_request_id("gui-model-delete-weights"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-delete-weights"),
+        model,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "model-delete-weights",
+        MODEL_REGISTER_EXCHANGE_TIMEOUT,
+        model_delete_weights_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelDeleteWeights(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+/// Revokes every daemon-scope grant the GUI caller holds for one capability,/// Revokes every daemon-scope grant the GUI caller holds for one capability,
 /// through the daemon that owns the store.
 ///
 /// # Errors
@@ -558,6 +664,26 @@ fn model_register_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 /// unavailable and keeps the daemon's own recovery line.
 fn model_unregister_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, MODEL_UNREGISTER_BLOCKED_RECOVERY)
+}
+
+/// `model.verify` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with verification recovery text.
+fn model_verify_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_VERIFY_BLOCKED_RECOVERY)
+}
+
+/// `model.sweep` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with sweep recovery text.
+fn model_sweep_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_SWEEP_BLOCKED_RECOVERY)
+}
+
+/// `model.delete-weights` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with deletion recovery text. The daemon's own
+/// provenance refusal — PAM did not download this file — arrives as
+/// unavailable and keeps the daemon's explanation and recovery line.
+fn model_delete_weights_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_DELETE_WEIGHTS_BLOCKED_RECOVERY)
 }
 
 /// `connector.configure` requires an explicit grant: classified exactly like

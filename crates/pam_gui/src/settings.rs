@@ -14,6 +14,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+// The models root is resolved by `pam_model`, not here: the daemon's registry
+// health capabilities gate weights deletion on containment in this exact
+// directory, so the GUI and the daemon must read one implementation.
+pub(crate) use pam_model::{default_models_dir, effective_models_dir};
+
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const LOGS_DIR_NAME: &str = "logs";
 // Every on-disk file PAM writes under `<data_dir>/logs`: the daemon's own
@@ -87,10 +92,6 @@ fn flows_dir_for(data_dir: &Path) -> PathBuf {
     data_dir.join(".pam").join("flows")
 }
 
-fn default_models_dir(home: &Path) -> PathBuf {
-    home.join("llm")
-}
-
 /// Reads the persisted preferences, tolerating a missing or unreadable file:
 /// Settings v1 has exactly one preference, and losing it is recoverable by
 /// re-entering it — never worth failing an unrelated read for.
@@ -121,16 +122,6 @@ fn write_persisted(data_dir: &Path, persisted: &PersistedSettings) -> Result<(),
             recovery,
         )
     })
-}
-
-/// The effective models download directory: the persisted override when one
-/// is set, otherwise `<home>/llm`. Infallible by design (a missing or
-/// corrupt preference file silently falls back) so a Settings read glitch
-/// never blocks a model download.
-pub(crate) fn effective_models_dir(data_dir: &Path, home: &Path) -> PathBuf {
-    load_persisted(data_dir)
-        .models_dir
-        .map_or_else(|| default_models_dir(home), PathBuf::from)
 }
 
 fn logs_size_bytes(logs_dir: &Path) -> u64 {

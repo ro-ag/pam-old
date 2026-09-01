@@ -27,7 +27,7 @@ use crate::{
 /// [`pam_policy::BASELINE_CAPABILITIES`]: revoking a row drops every grant
 /// for that capability, which only reads as "not granted" while default-deny
 /// still applies.
-pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 10] = [
+pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 13] = [
     (
         "model.infer",
         "Model inference",
@@ -42,6 +42,21 @@ pub(crate) const GUI_DAEMON_CAPABILITIES: [(&str, &str, &str); 10] = [
         "model.unregister",
         "Model removal",
         "Models removes a registered model from the daemon's registry; the weights stay on disk.",
+    ),
+    (
+        "model.verify",
+        "Model verification",
+        "Models re-reads registered weights and reports what no longer matches the registry.",
+    ),
+    (
+        "model.sweep",
+        "Model directory sweep",
+        "Models reconciles the registry against the models directory and reports what it costs.",
+    ),
+    (
+        "model.delete-weights",
+        "Model weights deletion",
+        "Models deletes a GGUF PAM downloaded into its own models directory and unregisters it.",
     ),
     (
         "network.diagnostics",

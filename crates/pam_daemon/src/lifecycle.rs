@@ -55,8 +55,11 @@ use pam_core::{
     APPLICATION_VERSION, ApprovalId, ContentDigest, EvidenceHandle, ProjectId, RequestId,
 };
 use pam_model::{
-    GgufMetadata, LicenseSnapshot, ModelKey, ModelSource, RegisteredModel, RuntimeError,
-    RuntimeFinishReason, RuntimeMessage, RuntimeMessageRole, RuntimeRequest, RuntimeResponse,
+    GgufMetadata, LicenseSnapshot, ModelError, ModelKey, ModelSource, ModelsDirectorySweep,
+    RegisteredModel, RuntimeError, RuntimeFinishReason, RuntimeMessage, RuntimeMessageRole,
+    RuntimeRequest, RuntimeResponse, WeightsRefusal, delete_registered_weights,
+    effective_models_dir, health_label, revalidate_registered_model, sweep_models_directory,
+    weights_deletion_allowed, weights_refusal_message,
 };
 #[cfg(target_os = "macos")]
 use pam_model::{MacosLlamaCppRuntime, ModelRuntime};
@@ -65,7 +68,7 @@ use pam_platform::{
     PacDiagnostic, ProxyBypassDiagnostic, ProxyDiagnosticStatus, ProxyEnvironmentVariable,
     ProxyInputIssueKind, ProxyRouteDiagnostic, ProxySource, ReqwestCorporateHttpClientFactory,
     SecretBackend, ServerTransport, TransportError, TransportErrorKind, diagnose_process_proxy,
-    user_data_dir,
+    user_data_dir, user_home_dir,
 };
 use pam_policy::{CapabilityName, InvalidResourceName, ResourceName, redact_audit_detail};
 use pam_protocol::{
@@ -75,12 +78,14 @@ use pam_protocol::{
     CancellationDisposition, CancellationResult, Capability, CodecError, ConfigurationPresence,
     ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult, ConnectorSummary,
     ConnectorTestDisposition, ConnectorTestResult, DaemonLifecycleResult, DaemonLogEntry,
-    DaemonLogsResult, DaemonStatsResult, Event, EventEnvelope, EvidenceChunk, EvidenceMetadata,
-    EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, Failure, FailureCode,
-    GrantRevokeResult, LogSeverity, ModelFinishReason, ModelGenerationResult, ModelRegisterResult,
-    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelUnregisterResult,
-    ModelUsage, NetworkDiagnosticsResult, OperationTruth, PROTOCOL_VERSION, PacState,
-    ProjectCurrentResult, ProjectRequestState as ProtocolProjectRequestState,
+    DaemonLogsResult, DaemonStatsResult, DanglingRegistrationSummary, Event, EventEnvelope,
+    EvidenceChunk, EvidenceMetadata, EvidenceRedaction, EvidenceRetention, ExpectedTargetKind,
+    Failure, FailureCode, GrantRevokeResult, LogSeverity, ModelDeleteWeightsResult,
+    ModelFinishReason, ModelGenerationResult, ModelRegisterResult, ModelRegistration, ModelRole,
+    ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnregisterResult, ModelUsage,
+    ModelVerification, ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth,
+    OrphanWeightsSummary, PROTOCOL_VERSION, PacState, ProjectCurrentResult,
+    ProjectRequestState as ProtocolProjectRequestState,
     ProjectRequestSummary as ProtocolProjectRequestSummary, ProjectUsageSummary, ReplayResult,
     RequestEnvelope, RequestPayload, ResetResult, ResetTier, ResultBody, ResultEnvelope,
     ResultPayload, ServerMessage, SourceAvailability, StatusResult, decode_request_envelope,
@@ -1134,6 +1139,26 @@ async fn handle_incoming(
             )
             .await
         }
+        (Capability::ModelVerify, RequestPayload::ModelVerify { model: requested }) => {
+            handle_model_verify(&request, requested.clone(), incoming, &store, &outbound).await
+        }
+        (Capability::ModelSweep, RequestPayload::ModelSweep) => {
+            handle_model_sweep(&request, incoming, &store, &outbound).await
+        }
+        (
+            Capability::ModelDeleteWeights,
+            RequestPayload::ModelDeleteWeights { model: requested },
+        ) => {
+            handle_model_delete_weights(
+                &request,
+                requested.clone(),
+                incoming,
+                &store,
+                &outbound,
+                model.loaded.as_ref(),
+            )
+            .await
+        }
         (Capability::GrantRevoke, RequestPayload::GrantRevoke { capability }) => {
             handle_grant_revoke(&request, capability.clone(), incoming, &store, &outbound).await
         }
@@ -1310,6 +1335,9 @@ pub(super) const fn capability_is_daemon_scoped(capability: &Capability) -> bool
             | Capability::ModelInfer
             | Capability::ModelRegister
             | Capability::ModelUnregister
+            | Capability::ModelVerify
+            | Capability::ModelSweep
+            | Capability::ModelDeleteWeights
             | Capability::GrantRevoke
             | Capability::NetworkDiagnostics
             | Capability::ConnectorList
@@ -1510,6 +1538,12 @@ fn request_shape_is_valid(request: &RequestEnvelope) -> bool {
             | (
                 Capability::ModelUnregister,
                 RequestPayload::ModelUnregister { .. }
+            )
+            | (Capability::ModelVerify, RequestPayload::ModelVerify { .. })
+            | (Capability::ModelSweep, RequestPayload::ModelSweep)
+            | (
+                Capability::ModelDeleteWeights,
+                RequestPayload::ModelDeleteWeights { .. }
             )
             | (Capability::GrantRevoke, RequestPayload::GrantRevoke { .. })
             | (Capability::FlowRun, RequestPayload::FlowRun { .. })
@@ -1723,9 +1757,19 @@ pub(super) fn policy_resource(
         // `model.infer` approval binds to the model, not to one exact
         // conversation -- a chat message can never be pre-approved anyway.
         // `model.unregister` names the same authority: one exact model.
-        RequestPayload::ModelInfer { model, .. } | RequestPayload::ModelUnregister { model } => {
-            format!("model:{model}")
-        }
+        RequestPayload::ModelInfer { model, .. }
+        | RequestPayload::ModelUnregister { model }
+        | RequestPayload::ModelDeleteWeights { model } => format!("model:{model}"),
+        // Verification names the model it was asked about, and the whole
+        // catalog when it was asked about all of them, so an approval binds to
+        // exactly the scope the caller requested. `model:all` stays shell-safe
+        // so the denial's own recovery command remains runnable.
+        RequestPayload::ModelVerify { model } => model
+            .as_ref()
+            .map_or_else(|| "model:all".to_owned(), |model| format!("model:{model}")),
+        // The sweep's authority is the models directory itself, not any one
+        // model: it reads every row and every file under that root.
+        RequestPayload::ModelSweep => "models:directory".to_owned(),
         // A dry run and a real reset are deliberately different resources: a
         // grant that only ever forecast a reset must never be spendable on
         // the wipe itself.
@@ -1869,6 +1913,9 @@ pub(super) fn approval_recovery(request: &RequestEnvelope, approval_id: &Approva
         | Capability::GetResult
         | Capability::ModelInfer
         | Capability::ModelUnregister
+        | Capability::ModelVerify
+        | Capability::ModelSweep
+        | Capability::ModelDeleteWeights
         | Capability::FlowRun
         // Every reset tier has a CLI surface that takes --approval-id.
         | Capability::ResetAccess
@@ -3020,6 +3067,508 @@ async fn handle_model_unregister(
                 model: removed,
                 size_bytes: record.size_bytes,
                 digest: record.digest.as_str().to_owned(),
+            }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// The models directory this daemon reconciles the registry against.
+///
+/// Resolved from the same Settings-persisted preference the GUI reads, never
+/// assembled from literals here: the directory a sweep walks and the root a
+/// weights deletion is confined to must be the one directory the user
+/// actually configured.
+fn daemon_models_dir() -> Option<PathBuf> {
+    let data_dir = user_data_dir().ok()?;
+    let home = user_home_dir().ok()?;
+    Some(effective_models_dir(&data_dir, &home))
+}
+
+/// Message for a request the daemon cannot answer without a models directory.
+pub(super) const MODELS_DIR_UNRESOLVED_MESSAGE: &str =
+    "PAM could not resolve the models directory to reconcile against";
+
+fn models_dir_unresolved(request: &RequestEnvelope) -> ResultEnvelope {
+    let mut failure = failure_result(
+        request,
+        FailureCode::Internal,
+        MODELS_DIR_UNRESOLVED_MESSAGE,
+    );
+    if let ResultBody::Failure(body) = &mut failure.body {
+        body.recovery = Some(
+            "Verify the operating system user profile and PAM's Settings, then retry.".to_owned(),
+        );
+    }
+    failure
+}
+
+/// Builds one model's verification line from the revalidation outcome.
+///
+/// A failure never collapses to a boolean: `health` names which check stopped
+/// matching and `detail` carries that check's own sentence.
+pub(super) fn model_verification(
+    model: &RegisteredModel,
+    outcome: &Result<(), ModelError>,
+    deletable: bool,
+) -> ModelVerification {
+    let (health, detail) = match outcome {
+        Ok(()) => ("ok", None),
+        Err(error) => (health_label(error), Some(error.to_string())),
+    };
+    ModelVerification {
+        model: model.key.id(),
+        path: model.path.display().to_string(),
+        size_bytes: model.size_bytes,
+        health: health.to_owned(),
+        detail,
+        source: model.source.kind().to_owned(),
+        weights_deletable: deletable,
+    }
+}
+
+/// The truth a verification pass reports.
+///
+/// A pass that re-read every artifact and found them all intact is the one
+/// thing PAM can honestly call `Verified` — the same standing the connector
+/// self-test earns by actually reaching its host. Any artifact that no longer
+/// matches its registration leaves the catalog `Unresolved`: PAM knows the
+/// registry is wrong but cannot say what the truth is. Verifying an empty
+/// catalog verified nothing, so it is a plain `Observed` read.
+pub(super) fn model_verify_truth(models: &[ModelVerification]) -> OperationTruth {
+    if models.is_empty() {
+        OperationTruth::Observed
+    } else if models.iter().all(|model| model.health == "ok") {
+        OperationTruth::Verified
+    } else {
+        OperationTruth::Unresolved
+    }
+}
+
+/// Re-reads the registered weights and reports what still matches the
+/// registry.
+///
+/// This is the standalone form of the check the macOS runtime already runs
+/// before it maps a model. Hashing a multi-gigabyte artifact is blocking work,
+/// so the whole pass runs on a blocking task rather than on the request loop.
+/// The registry rows one verification request covers: the named model, or the
+/// whole catalog when none was named.
+///
+/// Returns the failure envelope to send instead when the identity is not a
+/// registry identity, the model is not registered, or the store is unavailable.
+async fn verification_catalog(
+    request: &RequestEnvelope,
+    model: Option<String>,
+    store: &Store,
+) -> Result<Vec<RegisteredModel>, ResultEnvelope> {
+    let Some(model) = model else {
+        return store
+            .list_models()
+            .await
+            .map_err(|error| store_failure_result(request, &error));
+    };
+    let key = model
+        .split_once('/')
+        .and_then(|(vendor, name)| ModelKey::new(vendor, name).ok())
+        .ok_or_else(|| {
+            failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "model identity is not a valid registry identity",
+            )
+        })?;
+    registered_record(request, key, store)
+        .await
+        .map(|record| vec![record])
+}
+
+/// One registered model, or the failure envelope that says why it is not
+/// available: an unknown identity is a plain `NotFound`, never an internal
+/// error.
+async fn registered_record(
+    request: &RequestEnvelope,
+    key: ModelKey,
+    store: &Store,
+) -> Result<RegisteredModel, ResultEnvelope> {
+    store.model(key).await.map_err(|error| match error {
+        StoreError::ModelNotFound(model_id) => failure_result(
+            request,
+            FailureCode::NotFound,
+            &format!("model {model_id} is not registered"),
+        ),
+        error => store_failure_result(request, &error),
+    })
+}
+
+async fn handle_model_verify(
+    request: &RequestEnvelope,
+    model: Option<String>,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+) -> Result<(), DaemonError> {
+    let catalog = match verification_catalog(request, model, store).await {
+        Ok(catalog) => catalog,
+        Err(failure) => {
+            send_routed(
+                outbound,
+                incoming,
+                vec![ServerMessage::Result(failure)],
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    let models_dir = daemon_models_dir();
+    let verified = tokio::task::spawn_blocking(move || {
+        catalog
+            .into_iter()
+            .map(|model| {
+                let outcome = revalidate_registered_model(&model);
+                let deletable = models_dir
+                    .as_deref()
+                    .is_some_and(|root| weights_deletion_allowed(root, &model).is_ok());
+                model_verification(&model, &outcome, deletable)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let Ok(models) = verified else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::Internal,
+                "model verification did not finish",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let truth = model_verify_truth(&models);
+    let failures = models.iter().filter(|model| model.health != "ok").count();
+    append_change_audit(
+        store,
+        request,
+        "model.verify",
+        truth_label(&truth),
+        &format!("models={} failed={failures}", models.len()),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            truth,
+            ResultPayload::ModelVerify(ModelVerifyResult { models }),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Turns one sweep of the models directory into its wire report.
+pub(super) fn model_sweep_result(sweep: ModelsDirectorySweep) -> ModelSweepResult {
+    ModelSweepResult {
+        models_dir: sweep.models_dir.display().to_string(),
+        dangling: sweep
+            .dangling
+            .into_iter()
+            .map(|row| DanglingRegistrationSummary {
+                model: row.key.id(),
+                path: row.path.display().to_string(),
+                size_bytes: row.size_bytes,
+            })
+            .collect(),
+        orphans: sweep
+            .orphans
+            .into_iter()
+            .map(|orphan| OrphanWeightsSummary {
+                path: orphan.path.display().to_string(),
+                size_bytes: orphan.size_bytes,
+            })
+            .collect(),
+        total_bytes: sweep.total_bytes,
+    }
+}
+
+/// Reconciles the registry against the models directory, in both directions.
+///
+/// The sweep reports and never acts: a dangling row is cleared with
+/// `model.unregister`, and an orphaned file is removed by its owner or,
+/// when PAM downloaded it, through `model.delete-weights`.
+async fn handle_model_sweep(
+    request: &RequestEnvelope,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+) -> Result<(), DaemonError> {
+    let catalog = match store.list_models().await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            send_store_failure(outbound, incoming, request, &error).await;
+            return Ok(());
+        }
+    };
+    let Some(models_dir) = daemon_models_dir() else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(models_dir_unresolved(request))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let swept =
+        tokio::task::spawn_blocking(move || sweep_models_directory(&models_dir, &catalog)).await;
+    let Ok(sweep) = swept else {
+        send_routed(
+            outbound,
+            incoming,
+            vec![ServerMessage::Result(failure_result(
+                request,
+                FailureCode::Internal,
+                "the models directory sweep did not finish",
+            ))],
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Observed,
+            ResultPayload::ModelSweep(model_sweep_result(sweep)),
+        ))],
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+/// Message for refusing to delete the weights of the model this daemon holds.
+pub(super) const MODEL_DELETE_WEIGHTS_LOADED_MESSAGE: &str =
+    "the requested model is loaded in this daemon and its weights cannot be deleted";
+
+/// The refusal for deleting the weights the running daemon has mapped, or
+/// `None` when the request names any other model.
+///
+/// Mirrors the `model.unregister` refusal: a serving daemon maps its artifact
+/// for its whole life, and removing those bytes underneath it would leave the
+/// runtime serving a file that no longer exists.
+pub(super) fn model_delete_weights_loaded_refusal(
+    request: &RequestEnvelope,
+    model: &str,
+    requested: &ModelKey,
+    loaded: Option<&ModelKey>,
+) -> Option<ResultEnvelope> {
+    if loaded != Some(requested) {
+        return None;
+    }
+    let mut failure = failure_result(
+        request,
+        FailureCode::LeaseConflict,
+        MODEL_DELETE_WEIGHTS_LOADED_MESSAGE,
+    );
+    if let ResultBody::Failure(body) = &mut failure.body {
+        body.recovery = Some(format!(
+            "restart PAM without this model using `pam daemon`, then delete the weights for {model}"
+        ));
+    }
+    Some(failure)
+}
+
+/// The exact words PAM refuses a weights deletion in, and what the user can do
+/// instead.
+///
+/// The provenance refusal is the important one: `pam model import` verifies a
+/// GGUF where its owner already keeps it, so PAM never owned that file and
+/// deleting it would destroy a user's own data. The refusal says so, and
+/// points at the two things the user can still do — drop the registry entry,
+/// and remove the file themselves.
+pub(super) fn weights_refusal_failure(
+    refusal: WeightsRefusal,
+    model: &str,
+    path: &Path,
+    models_dir: &Path,
+) -> (FailureCode, String, String) {
+    let path = path.display();
+    let message = format!("{} at {path}", weights_refusal_message(refusal));
+    let recovery = match refusal {
+        WeightsRefusal::NotDownloadedByPam => format!(
+            "Run `pam model unregister {model} --yes` to drop the registry entry, then delete {path} yourself."
+        ),
+        WeightsRefusal::OutsideModelsDirectory => format!(
+            "Move the file back under {}, or run `pam model unregister {model} --yes` and delete {path} yourself.",
+            models_dir.display()
+        ),
+        WeightsRefusal::Unsafe => format!(
+            "Inspect {path}, then run `pam model sweep` to see what the registry and the models directory disagree about."
+        ),
+    };
+    (FailureCode::InvalidRequest, message, recovery)
+}
+
+/// Deletes one PAM-downloaded model's weights and unregisters it.
+///
+/// Two gates stand in front of the removal, and both are the daemon's to
+/// enforce: the model must not be the one this daemon has mapped, and the
+/// registration must say PAM downloaded the artifact into the models
+/// directory it is still sitting in. The removal itself is confined to that
+/// directory and never follows a symlink out of it.
+///
+/// The bytes go before the row. A store failure after the file is gone leaves
+/// exactly the dangling registration `model.sweep` reports and
+/// `model.unregister` clears; losing the row first and then failing to delete
+/// would instead leave an orphan nothing points at.
+/// The refusal envelope for a weights deletion the gate turned down, with the
+/// explanation and the recovery attached.
+fn weights_refusal_result(
+    request: &RequestEnvelope,
+    refusal: WeightsRefusal,
+    model: &str,
+    path: &Path,
+    models_dir: &Path,
+) -> ResultEnvelope {
+    let (code, message, recovery) = weights_refusal_failure(refusal, model, path, models_dir);
+    let mut failure = failure_result(request, code, &message);
+    if let ResultBody::Failure(body) = &mut failure.body {
+        body.recovery = Some(recovery);
+    }
+    failure
+}
+
+#[allow(clippy::too_many_lines)] // One refusal per gate keeps the deletion path readable.
+async fn handle_model_delete_weights(
+    request: &RequestEnvelope,
+    model: String,
+    incoming: IncomingRequest,
+    store: &Store,
+    outbound: &mpsc::Sender<Outbound>,
+    loaded: Option<&LoadedModelService>,
+) -> Result<(), DaemonError> {
+    // Every branch below either refuses with one envelope or falls through to
+    // the removal, so the refusal path is written once.
+    let refused = |failure: ResultEnvelope| vec![ServerMessage::Result(failure)];
+    let Some(key) = model
+        .split_once('/')
+        .and_then(|(vendor, name)| ModelKey::new(vendor, name).ok())
+    else {
+        send_routed(
+            outbound,
+            incoming,
+            refused(failure_result(
+                request,
+                FailureCode::InvalidRequest,
+                "model identity is not a valid registry identity",
+            )),
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    if let Some(failure) =
+        model_delete_weights_loaded_refusal(request, &model, &key, loaded.map(|loaded| &loaded.key))
+    {
+        send_routed(outbound, incoming, refused(failure), None).await;
+        return Ok(());
+    }
+    let record = match registered_record(request, key.clone(), store).await {
+        Ok(record) => record,
+        Err(failure) => {
+            send_routed(outbound, incoming, refused(failure), None).await;
+            return Ok(());
+        }
+    };
+    let Some(models_dir) = daemon_models_dir() else {
+        send_routed(
+            outbound,
+            incoming,
+            refused(models_dir_unresolved(request)),
+            None,
+        )
+        .await;
+        return Ok(());
+    };
+    let path = record.path.clone();
+    let root = models_dir.clone();
+    let removed =
+        tokio::task::spawn_blocking(move || delete_registered_weights(&root, &record)).await;
+    let bytes_reclaimed = match removed {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(refusal)) => {
+            send_routed(
+                outbound,
+                incoming,
+                refused(weights_refusal_result(
+                    request,
+                    refusal,
+                    &model,
+                    &path,
+                    &models_dir,
+                )),
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+        Err(_) => {
+            send_routed(
+                outbound,
+                incoming,
+                refused(failure_result(
+                    request,
+                    FailureCode::Internal,
+                    "the weights deletion did not finish",
+                )),
+                None,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    if let Err(error) = store.delete_model(key).await {
+        send_routed(
+            outbound,
+            incoming,
+            refused(store_failure_result(request, &error)),
+            None,
+        )
+        .await;
+        return Ok(());
+    }
+    append_change_audit(
+        store,
+        request,
+        "model.delete-weights",
+        "deleted",
+        &format!(
+            "model={model} path={} bytes_reclaimed={bytes_reclaimed}",
+            path.display()
+        ),
+    )
+    .await?;
+    send_routed(
+        outbound,
+        incoming,
+        vec![ServerMessage::Result(success_result(
+            request,
+            OperationTruth::Changed,
+            ResultPayload::ModelDeleteWeights(ModelDeleteWeightsResult {
+                model,
+                path: path.display().to_string(),
+                bytes_reclaimed,
             }),
         ))],
         None,
@@ -4673,6 +5222,9 @@ fn target_request_id(request: &RequestEnvelope) -> Option<&RequestId> {
         | RequestPayload::ModelStatus
         | RequestPayload::ModelRegister { .. }
         | RequestPayload::ModelUnregister { .. }
+        | RequestPayload::ModelVerify { .. }
+        | RequestPayload::ModelSweep
+        | RequestPayload::ModelDeleteWeights { .. }
         | RequestPayload::GrantRevoke { .. }
         | RequestPayload::FlowRun { .. }
         | RequestPayload::ConnectorList
@@ -4789,12 +5341,8 @@ async fn learn_project_root(request: &RequestEnvelope, store: &Store) {
         .await;
 }
 
-async fn send_store_failure(
-    outbound: &mpsc::Sender<Outbound>,
-    incoming: IncomingRequest,
-    request: &RequestEnvelope,
-    error: &StoreError,
-) {
+/// One durable-store error as the failure the caller sees.
+fn store_failure_result(request: &RequestEnvelope, error: &StoreError) -> ResultEnvelope {
     let (code, message) = match error {
         StoreError::IdempotencyConflict { .. } => {
             (FailureCode::IdempotencyConflict, error.to_string())
@@ -4802,12 +5350,19 @@ async fn send_store_failure(
         StoreError::RequestIdConflict(_) => (FailureCode::InvalidRequest, error.to_string()),
         _ => (FailureCode::Internal, error.to_string()),
     };
+    failure_result(request, code, &message)
+}
+
+async fn send_store_failure(
+    outbound: &mpsc::Sender<Outbound>,
+    incoming: IncomingRequest,
+    request: &RequestEnvelope,
+    error: &StoreError,
+) {
     send_routed(
         outbound,
         incoming,
-        vec![ServerMessage::Result(failure_result(
-            request, code, &message,
-        ))],
+        vec![ServerMessage::Result(store_failure_result(request, error))],
         None,
     )
     .await;

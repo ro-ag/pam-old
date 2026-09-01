@@ -6,8 +6,9 @@ use std::{
 use crate::{
     app::{
         FlowResponseKind, audit_export, flow_recovery_cursor, flow_response_matches,
-        flow_run_retry, migrate_legacy_flows, model_import, model_import_resource,
-        model_unregister, refuse_unconfirmed, render_model_catalog, retention_prune, select_flow,
+        flow_run_retry, migrate_legacy_flows, model_delete_weights, model_import,
+        model_import_resource, model_unregister, refuse_unconfirmed, render_model_catalog,
+        render_model_sweep, render_model_verification, retention_prune, select_flow,
     },
     command::{ResetConfirmation, RetentionScopeArg},
     flow::FlowCatalog,
@@ -21,7 +22,8 @@ use pam_model::{
 };
 use pam_platform::discover_project;
 use pam_protocol::{
-    CancellationDisposition, CancellationResult, Failure, FailureCode, OperationTruth,
+    CancellationDisposition, CancellationResult, DanglingRegistrationSummary, Failure, FailureCode,
+    ModelSweepResult, ModelVerification, ModelVerifyResult, OperationTruth, OrphanWeightsSummary,
     ReplayResult, ResultBody, ResultPayload,
 };
 use uuid::Uuid;
@@ -255,6 +257,114 @@ fn catalog_model(
         source,
         registered_at_ms: 42,
     }
+}
+
+#[tokio::test]
+async fn deleting_weights_requires_explicit_confirmation_before_any_daemon_exchange() {
+    // No daemon runs in this test: reaching the exchange at all would fail
+    // differently, so the refusal proves consent is checked first.
+    assert_eq!(
+        model_delete_weights(ModelKey::new("vendor", "model").unwrap(), false, None).await,
+        EXIT_OPERATION_FAILED
+    );
+}
+
+fn verification(model: &str, health: &str, detail: Option<&str>) -> ModelVerification {
+    ModelVerification {
+        model: model.to_owned(),
+        path: format!("/models/{model}.gguf"),
+        size_bytes: 4096,
+        health: health.to_owned(),
+        detail: detail.map(str::to_owned),
+        source: "https".to_owned(),
+        weights_deletable: health == "ok",
+    }
+}
+
+#[test]
+fn a_verification_report_names_each_models_health_and_the_sentence_behind_it() {
+    let report = ModelVerifyResult {
+        models: vec![
+            verification("vendor/healthy", "ok", None),
+            verification(
+                "vendor/drifted",
+                "digest_mismatch",
+                Some("model SHA-256 did not match the expected digest"),
+            ),
+        ],
+    };
+
+    let rendered = render_model_verification(&report, &OperationTruth::Unresolved, false).unwrap();
+    let lines = rendered.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines[0], "models=2 failed=1 truth=unresolved");
+    assert_eq!(
+        lines[1],
+        "model=vendor/healthy health=ok size_bytes=4096 source=https weights_deletable=true path=/models/vendor/healthy.gguf"
+    );
+    assert_eq!(
+        lines[2],
+        "model=vendor/drifted health=digest_mismatch size_bytes=4096 source=https weights_deletable=false path=/models/vendor/drifted.gguf"
+    );
+    // A health label is never the only thing a reader gets.
+    assert_eq!(
+        lines[3],
+        "  model SHA-256 did not match the expected digest"
+    );
+
+    // A whole catalog that still matches reports the verified truth it earned.
+    let intact = ModelVerifyResult {
+        models: vec![verification("vendor/healthy", "ok", None)],
+    };
+    assert!(
+        render_model_verification(&intact, &OperationTruth::Verified, false)
+            .unwrap()
+            .starts_with("models=1 failed=0 truth=verified")
+    );
+
+    let json = render_model_verification(&report, &OperationTruth::Unresolved, true).unwrap();
+    assert!(json.contains("\"schemaVersion\": 1"));
+    assert!(json.contains("\"truth\": \"unresolved\""));
+    assert!(json.contains("\"health\": \"digest_mismatch\""));
+    assert!(json.contains("\"weightsDeletable\": false"));
+}
+
+#[test]
+fn a_sweep_report_names_both_directions_with_sizes_and_the_directory_total() {
+    let report = ModelSweepResult {
+        models_dir: "/models".to_owned(),
+        dangling: vec![DanglingRegistrationSummary {
+            model: "vendor/gone".to_owned(),
+            path: "/models/vendor/gone.gguf".to_owned(),
+            size_bytes: 4096,
+        }],
+        orphans: vec![OrphanWeightsSummary {
+            path: "/models/vendor/stray.gguf".to_owned(),
+            size_bytes: 128,
+        }],
+        total_bytes: 8192,
+    };
+
+    let rendered = render_model_sweep(&report, false).unwrap();
+    let lines = rendered.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        lines[0],
+        "dangling=1 orphans=1 total_bytes=8192 truth=observed models_dir=/models"
+    );
+    assert_eq!(
+        lines[1],
+        "dangling model=vendor/gone size_bytes=4096 path=/models/vendor/gone.gguf"
+    );
+    assert_eq!(
+        lines[2],
+        "orphan size_bytes=128 path=/models/vendor/stray.gguf"
+    );
+
+    let json = render_model_sweep(&report, true).unwrap();
+    assert!(json.contains("\"modelsDir\": \"/models\""));
+    assert!(json.contains("\"totalBytes\": 8192"));
+    assert!(json.contains("\"sizeBytes\": 128"));
 }
 
 #[test]

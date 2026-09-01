@@ -811,3 +811,181 @@ async fn grant_revoke_drops_only_the_requesting_callers_own_grants() {
 
     let _ = fs::remove_dir_all(runtime);
 }
+
+/// Registry health is three separate capabilities over one registry, and the
+/// most important thing about them is what they refuse. This drives all three
+/// real envelopes through the daemon's own dispatch against a registration
+/// whose file was never there: verification reports the exact failure, the
+/// sweep sees the dangling row, and deleting the weights of a GGUF PAM only
+/// ever verified in place is refused in words that say why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // One fixture proves all three health capabilities.
+async fn registry_health_verifies_sweeps_and_refuses_to_delete_a_file_pam_never_downloaded() {
+    let runtime = test_runtime("daemon-scope-model-health");
+    let endpoint = LocalEndpoint::ipc(runtime.clone());
+    let state_path = endpoint.runtime_dir().join("state.sqlite3");
+
+    let seed = Store::open(&state_path).unwrap();
+    seed_caller(&seed, "scope-operator", TEST_CREDENTIAL).await;
+    seed_caller(&seed, "ungranted-operator", TEST_CREDENTIAL).await;
+    for (id, capability) in [
+        ("daemon-scope-health-register", "model.register"),
+        ("daemon-scope-health-verify", "model.verify"),
+        ("daemon-scope-health-sweep", "model.sweep"),
+        ("daemon-scope-health-delete", "model.delete-weights"),
+    ] {
+        daemon_scope_grant(&seed, id, "scope-operator", capability).await;
+    }
+    seed.shutdown().await.unwrap();
+
+    let (shutdown, daemon) = start_daemon(endpoint.clone());
+    wait_until_ready(&endpoint).await;
+
+    request_exchange(
+        &endpoint,
+        &register_request("health-register", "scope-operator"),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+
+    // Verification is not baseline: an ungranted caller is refused outright.
+    let denied = request_exchange(
+        &endpoint,
+        &authenticated(
+            RequestEnvelope::model_verify(
+                RequestId::from("health-verify-denied"),
+                CallerId::from("ungranted-operator"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("health-verify-denied-key"),
+                None,
+            )
+            .unwrap(),
+        ),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(denied.result.body, ResultBody::Failure(ref failure) if failure.code == FailureCode::Forbidden),
+        "an ungranted caller must not verify the registry: {:?}",
+        denied.result.body
+    );
+
+    // The registered path was never written, so the catalog verifies to an
+    // unresolved truth naming the exact check that failed.
+    let verified = request_exchange(
+        &endpoint,
+        &authenticated(
+            RequestEnvelope::model_verify(
+                RequestId::from("health-verify"),
+                CallerId::from("scope-operator"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("health-verify-key"),
+                None,
+            )
+            .unwrap(),
+        ),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelVerify(report),
+    } = verified.result.body
+    else {
+        panic!("a granted verification must be served: {verified:?}");
+    };
+    assert_eq!(truth, OperationTruth::Unresolved);
+    let entry = report
+        .models
+        .iter()
+        .find(|model| model.model == "qwen/routed-model")
+        .expect("the registered model must appear in the report");
+    assert_eq!(entry.health, "path_missing");
+    assert!(entry.detail.is_some(), "a failure must explain itself");
+    assert_eq!(entry.source, "local");
+    assert!(
+        !entry.weights_deletable,
+        "a GGUF PAM verified in place is never PAM's to delete"
+    );
+
+    // The sweep sees the same row from the other direction.
+    let swept = request_exchange(
+        &endpoint,
+        &authenticated(RequestEnvelope::model_sweep(
+            RequestId::from("health-sweep"),
+            CallerId::from("scope-operator"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("health-sweep-key"),
+        )),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Success {
+        truth,
+        payload: ResultPayload::ModelSweep(sweep),
+    } = swept.result.body
+    else {
+        panic!("a granted sweep must be served: {swept:?}");
+    };
+    assert_eq!(truth, OperationTruth::Observed);
+    assert!(
+        sweep
+            .dangling
+            .iter()
+            .any(|row| row.model == "qwen/routed-model" && row.size_bytes == 64),
+        "the sweep must report the row whose file is gone: {:?}",
+        sweep.dangling
+    );
+
+    // Deleting the weights of a locally imported model is refused, and the
+    // refusal says PAM did not download the file plus what to do instead.
+    let refused = request_exchange(
+        &endpoint,
+        &authenticated(
+            RequestEnvelope::model_delete_weights(
+                RequestId::from("health-delete"),
+                CallerId::from("scope-operator"),
+                ProjectId::daemon_scope(),
+                IdempotencyKey::from("health-delete-key"),
+                "qwen/routed-model",
+            )
+            .unwrap(),
+        ),
+        EXCHANGE_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let ResultBody::Failure(failure) = refused.result.body else {
+        panic!("PAM must refuse to delete a file it never downloaded");
+    };
+    assert_eq!(failure.code, FailureCode::InvalidRequest);
+    assert!(
+        failure
+            .message
+            .starts_with("PAM did not download this model, so it will not delete the file at"),
+        "the refusal must explain itself: {}",
+        failure.message
+    );
+    assert!(
+        failure.recovery.as_deref().is_some_and(
+            |recovery| recovery.contains("pam model unregister qwen/routed-model --yes")
+        ),
+        "the refusal must say what the user can do instead: {:?}",
+        failure.recovery
+    );
+
+    shutdown.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    // Nothing was removed: the registry row the refusal named is still there.
+    let store = Store::open(&state_path).unwrap();
+    let models = store.list_models().await.unwrap();
+    store.shutdown().await.unwrap();
+    assert_eq!(models.len(), 1);
+
+    let _ = fs::remove_dir_all(runtime);
+}

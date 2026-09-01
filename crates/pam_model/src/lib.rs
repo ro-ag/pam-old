@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod acquisition;
+mod catalog;
 mod error;
 #[cfg(target_os = "macos")]
 mod llama_cpp_macos;
@@ -11,6 +12,8 @@ mod runtime;
 
 #[cfg(test)]
 mod acquisition_test;
+#[cfg(test)]
+mod catalog_test;
 #[cfg(all(test, target_os = "macos"))]
 mod llama_cpp_macos_test;
 #[cfg(test)]
@@ -27,6 +30,11 @@ pub use acquisition::{
     ReqwestDownloadTransport, TransferRequest, download_https, import_existing, inspect_model_file,
     revalidate_registered_model,
 };
+pub use catalog::{
+    DanglingRegistration, ModelsDirectorySweep, OrphanWeights, WeightsRefusal,
+    delete_registered_weights, health_label, sweep_models_directory, weights_deletion_allowed,
+    weights_refusal_message,
+};
 pub use error::ModelError;
 #[cfg(target_os = "macos")]
 pub use llama_cpp_macos::{
@@ -42,7 +50,8 @@ pub use model::{
     ModelDescriptor, ModelKey, ModelSource, RegisteredModel, is_calibrated_artifact,
 };
 pub use path::{
-    default_model_path, model_path_under, validate_absolute_unicode_path, validate_model_filename,
+    default_model_path, default_models_dir, effective_models_dir, model_path_under,
+    validate_absolute_unicode_path, validate_model_filename,
 };
 pub use runtime::{
     ArtifactCalibration, CancellationSignal, CancellationToken, ModelRuntime, RuntimeError,

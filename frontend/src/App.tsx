@@ -39,7 +39,7 @@ import {
   QueueDrawer,
   RecoveryScreen,
 } from "./components/Surfaces";
-import { ActivityView } from "./views/ActivityView";
+import { ActivityView, formatModelSize } from "./views/ActivityView";
 import { FlowsView } from "./views/FlowsView";
 import { ModelsView } from "./views/ModelsView";
 import { OverviewView } from "./views/OverviewView";
@@ -686,6 +686,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
                   onStartWithModel={startWithModel}
                   onModelImported={() => { showToast("Model registered"); reloadModelStatus(); }}
                   onModelUnregistered={(modelId) => { showToast(`Unregistered ${modelId}`); reloadModelStatus(); }}
+                  onModelWeightsDeleted={(modelId, bytesReclaimed) => { showToast(`Deleted ${formatModelSize(bytesReclaimed)} of weights for ${modelId}`); reloadModelStatus(); }}
                 />
               )}
               {state.activeView === "access" && (

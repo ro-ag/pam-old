@@ -25,7 +25,7 @@ pub use endpoint::{
 pub use error::{TransportError, TransportErrorKind};
 pub use identity::{
     CallerKind, IdentityError, IdentityErrorKind, ProjectIdentity, caller_id, discover_project,
-    discover_project_id, flow_library_root, user_data_dir,
+    discover_project_id, flow_library_root, user_data_dir, user_home_dir,
 };
 pub use network::{
     CertificateTrust, CorporateHttpClientError, CorporateHttpClientFactory,

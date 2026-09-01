@@ -754,6 +754,111 @@ impl RequestEnvelope {
         })
     }
 
+    /// Creates an authenticated, policy-gated registry verification request.
+    ///
+    /// Verification re-reads the registered weights and compares them against
+    /// the registration record: the path still resolves, the size still
+    /// matches, the SHA-256 still matches, the GGUF header still matches.
+    /// Naming a model verifies that one row; omitting it verifies the whole
+    /// registered catalog.
+    ///
+    /// This is not the loaded model answering a prompt. It asks whether the
+    /// bytes on disk are still the bytes the registry recorded, and it needs
+    /// no model to be loaded at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a model identity that is not a bounded
+    /// `vendor/name` pair.
+    pub fn model_verify(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        model: Option<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        if let Some(model) = model.as_deref() {
+            validate_model_id(model)?;
+        }
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelVerify,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelVerify { model },
+        })
+    }
+
+    /// Creates an authenticated, policy-gated models-directory sweep request.
+    ///
+    /// The sweep reconciles the registry against the models directory in both
+    /// directions — registry rows whose path no longer resolves, and `.gguf`
+    /// files no row points at — and reports what the directory costs. It
+    /// reports only: nothing is removed by a sweep.
+    #[must_use]
+    pub fn model_sweep(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelSweep,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelSweep,
+        }
+    }
+
+    /// Creates an authenticated, policy-gated weights deletion request.
+    ///
+    /// Deleting weights and unregistering are two different effects, and this
+    /// is the only one that removes bytes. The daemon gates it on provenance:
+    /// it deletes only an artifact PAM itself downloaded that still sits
+    /// inside the models directory in effect right now. A GGUF `pam model
+    /// import` verified in place belongs to its owner and is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a model identity that is not a bounded
+    /// `vendor/name` pair.
+    pub fn model_delete_weights(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        model: impl Into<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        let model = model.into();
+        validate_model_id(&model)?;
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelDeleteWeights,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelDeleteWeights { model },
+        })
+    }
+
     /// Creates an authenticated request that revokes every active grant this
     /// envelope's caller holds for one capability in this envelope's project.
     ///
@@ -857,7 +962,11 @@ impl RequestEnvelope {
             RequestPayload::ModelRegister { registration } => {
                 validate_model_registration(registration)
             }
-            RequestPayload::ModelUnregister { model } => validate_model_id(model),
+            RequestPayload::ModelUnregister { model }
+            | RequestPayload::ModelDeleteWeights { model } => validate_model_id(model),
+            RequestPayload::ModelVerify { model } => {
+                model.as_deref().map_or(Ok(()), validate_model_id)
+            }
             _ => Ok(()),
         }
     }
@@ -1140,6 +1249,9 @@ pub enum Capability {
     ModelStatus,
     ModelRegister,
     ModelUnregister,
+    ModelVerify,
+    ModelSweep,
+    ModelDeleteWeights,
     GrantRevoke,
     FlowRun,
     ConnectorList,
@@ -1179,6 +1291,9 @@ impl Capability {
             Self::ModelStatus => "model.status",
             Self::ModelRegister => "model.register",
             Self::ModelUnregister => "model.unregister",
+            Self::ModelVerify => "model.verify",
+            Self::ModelSweep => "model.sweep",
+            Self::ModelDeleteWeights => "model.delete-weights",
             Self::GrantRevoke => "grant.revoke",
             Self::FlowRun => "flow.run",
             Self::ConnectorList => "connector.list",
@@ -1434,6 +1549,14 @@ pub enum RequestPayload {
     ModelUnregister {
         model: String,
     },
+    ModelVerify {
+        /// One `vendor/name` identity, or `None` for the whole catalog.
+        model: Option<String>,
+    },
+    ModelSweep,
+    ModelDeleteWeights {
+        model: String,
+    },
     GrantRevoke {
         capability: String,
     },
@@ -1626,6 +1749,9 @@ pub enum ResultPayload {
     ModelStatus(ModelStatusResult),
     ModelRegister(ModelRegisterResult),
     ModelUnregister(ModelUnregisterResult),
+    ModelVerify(ModelVerifyResult),
+    ModelSweep(ModelSweepResult),
+    ModelDeleteWeights(ModelDeleteWeightsResult),
     GrantRevoke(GrantRevokeResult),
     FlowRun(pam_flow::FlowRunResult),
     ConnectorList(ConnectorListResult),
@@ -1691,6 +1817,87 @@ pub struct ModelUnregisterResult {
     pub size_bytes: u64,
     /// Canonical `sha256:<hex>` digest the removed row carried.
     pub digest: String,
+}
+
+/// One registered model's current health against its registration record.
+///
+/// A verification never answers a bare boolean: `health` names the exact thing
+/// that stopped matching, so a user reading the screen knows whether the file
+/// moved, was truncated, or drifted.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelVerification {
+    /// Stable `vendor/name` identity of the verified registration.
+    pub model: String,
+    /// The path the registration records, exactly as stored.
+    pub path: String,
+    /// The size the registration records.
+    pub size_bytes: u64,
+    /// `ok`, or the specific failure: `path_missing`, `size_mismatch`,
+    /// `digest_mismatch`, `metadata_mismatch`, `unsafe_path`, `unreadable`.
+    pub health: String,
+    /// The failure's own sentence, absent when the model verified.
+    pub detail: Option<String>,
+    /// Provenance the registry recorded: `local` for a GGUF verified in
+    /// place, `https` for one PAM downloaded.
+    pub source: String,
+    /// True only when PAM downloaded this artifact and it still sits inside
+    /// the models directory in effect right now — the exact gate
+    /// `model.delete-weights` applies. Computed by the daemon so no caller
+    /// has to re-derive the rule.
+    pub weights_deletable: bool,
+}
+
+/// One verification pass over one model or the whole registered catalog.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelVerifyResult {
+    pub models: Vec<ModelVerification>,
+}
+
+/// A registry row whose recorded path no longer resolves to a regular file.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DanglingRegistrationSummary {
+    pub model: String,
+    pub path: String,
+    /// The size the registration recorded; there are no bytes left to measure.
+    pub size_bytes: u64,
+}
+
+/// A `.gguf` file under the models directory that no registry row names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OrphanWeightsSummary {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+/// One reconciliation of the registry against the models directory.
+///
+/// Reporting is separate from acting: a sweep removes nothing. A dangling row
+/// is cleared with `model.unregister`, and an orphaned file is removed by its
+/// owner or, when PAM downloaded it, through `model.delete-weights`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelSweepResult {
+    /// The models directory the sweep looked at, resolved.
+    pub models_dir: String,
+    pub dangling: Vec<DanglingRegistrationSummary>,
+    pub orphans: Vec<OrphanWeightsSummary>,
+    /// Every regular file under the models directory, summed — the honest
+    /// cost of the directory, not only of registered weights.
+    pub total_bytes: u64,
+}
+
+/// Acknowledgement of one weights deletion.
+///
+/// Deleting weights unregisters the model in the same operation: a registry
+/// row pointing at a file that was just removed is exactly the dangling row a
+/// sweep would report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelDeleteWeightsResult {
+    /// Stable `vendor/name` identity that left the registry with the file.
+    pub model: String,
+    /// The path that was removed.
+    pub path: String,
+    /// Bytes the removal returned to the disk.
+    pub bytes_reclaimed: u64,
 }
 
 /// Acknowledgement of one capability revocation for the requesting caller.

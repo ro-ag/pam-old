@@ -8,10 +8,11 @@ use pam_gui::{
     DesktopErrorDto, DesktopErrorKind, EvidenceDto, EvidenceHandleDto, FlowComposeDto,
     FlowDefinitionHandle, FlowDocumentDto, FlowDocumentHandle, FlowGraphDto, FlowReviewDto,
     FlowRunCancelDto, FlowRunDto, FlowRunHistoryDto, FlowRunProgressDto, FlowSaveDto,
-    FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDownloadDto,
-    ModelDownloadStatusDto, ModelImportDto, ModelImportParams, ModelImportStatusDto, ModelInferDto,
-    ModelInspectDto, ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
-    ModelUnregisterDto, OperationId, ProjectHandle, ResetDto, ResetTier, SkillAuditDto,
+    FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDeleteWeightsDto,
+    ModelDownloadDto, ModelDownloadStatusDto, ModelImportDto, ModelImportParams,
+    ModelImportStatusDto, ModelInferDto, ModelInspectDto, ModelLicenseDiscoveryDto,
+    ModelMessageDto, ModelPresetsDto, ModelStatusDto, ModelSweepDto, ModelUnregisterDto,
+    ModelVerifyDto, OperationId, ProjectHandle, ResetDto, ResetTier, SkillAuditDto,
     SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -251,6 +252,32 @@ pub(crate) struct ModelInferRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ModelUnregisterRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    model: String,
+}
+
+/// Verifying one model names it; verifying the whole catalog names none.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelVerifyRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelDeleteWeightsRequest {
     #[serde(deserialize_with = "canonical_uuid")]
     project_handle: ProjectHandle,
     #[serde(deserialize_with = "canonical_uuid")]
@@ -701,6 +728,50 @@ pub(crate) async fn model_unregister(
     state
         .core
         .model_unregister(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_verify(
+    state: State<'_, DesktopState>,
+    request: ModelVerifyRequest,
+) -> Result<ModelVerifyDto, DesktopErrorDto> {
+    state
+        .core
+        .model_verify(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_sweep(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelSweepDto, DesktopErrorDto> {
+    state.core.model_sweep(request.into_fence()).await
+}
+
+#[tauri::command]
+pub(crate) async fn model_delete_weights(
+    state: State<'_, DesktopState>,
+    request: ModelDeleteWeightsRequest,
+) -> Result<ModelDeleteWeightsDto, DesktopErrorDto> {
+    state
+        .core
+        .model_delete_weights(
             fence(
                 request.project_handle,
                 request.generation,

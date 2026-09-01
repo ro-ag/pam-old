@@ -1,4 +1,4 @@
-import { Brain, CaretDown, CaretRight, Check, Power, Trash } from "@phosphor-icons/react";
+import { Brain, CaretDown, CaretRight, Check, FolderOpen, Power, Stethoscope, Trash } from "@phosphor-icons/react";
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { withDaemonOperation } from "../bridge";
@@ -6,10 +6,12 @@ import { PanelEmpty, PanelLoading } from "../components/PanelState";
 import type {
   DaemonStartupProgressDto,
   HostMemoryDto,
+  ModelHealthDto,
   ModelImportParams,
   ModelInspectDto,
   ModelPresetDto,
   ModelStatusDto,
+  ModelSweepDto,
   PamBridge,
 } from "../domain";
 import type { DaemonView } from "../selectors";
@@ -903,6 +905,20 @@ export function formatElapsed(seconds: number): string {
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
+// What a weights check found, in the words a person reading the screen needs.
+// The registry recorded a path, a size, a SHA-256 and a GGUF header; each label
+// names exactly which of those stopped matching, so a failing row is never
+// just "bad".
+const WEIGHTS_HEALTH_LABELS: Record<ModelHealthDto["health"], string> = {
+  ok: "Weights match the registry",
+  path_missing: "Weights missing — nothing at the registered path",
+  size_mismatch: "Weights resized since registration",
+  digest_mismatch: "Weights changed since registration",
+  metadata_mismatch: "Weights are no longer the registered GGUF",
+  unsafe_path: "Weights path is no longer a plain file PAM can read",
+  unreadable: "Weights could not be read",
+};
+
 export interface ModelPanelProps {
   bridge: PamBridge;
   daemon: DaemonView;
@@ -914,6 +930,8 @@ export interface ModelPanelProps {
   onModelImported: () => void;
   /** A registration left the registry: the catalog needs re-reading. */
   onModelUnregistered: (modelId: string) => void;
+  /** Weights were deleted, which also unregistered the model. */
+  onModelWeightsDeleted: (modelId: string, bytesReclaimed: number) => void;
   /** Bumped by ⌘R; forwarded to the setup form's mount-time loaders. */
   refreshTick?: number;
 }
@@ -929,6 +947,7 @@ export function ModelPanel({
   onStartWithModel,
   onModelImported,
   onModelUnregistered,
+  onModelWeightsDeleted,
   refreshTick = 0,
 }: ModelPanelProps) {
   const [verify, setVerify] = useState<VerifyState>({ state: "idle" });
@@ -1048,6 +1067,97 @@ export function ModelPanel({
     }
   };
 
+  // Registry health is a different question from the model check above: that
+  // one asks the loaded model to answer, this one asks whether the weights on
+  // disk are still the bytes the registry recorded. It re-hashes the whole
+  // artifact, so it never runs on its own — a row is checked when asked.
+  const [weightsHealth, setWeightsHealth] = useState<Record<string, ModelHealthDto>>({});
+  const [weightsBusy, setWeightsBusy] = useState<string | null>(null);
+  const [weightsFailure, setWeightsFailure] = useState<{ modelId: string | null; detail: string } | null>(null);
+  const [sweep, setSweep] = useState<ModelSweepDto | null>(null);
+
+  const checkWeights = async (modelId?: string) => {
+    setWeightsBusy(modelId ?? "*");
+    setWeightsFailure(null);
+    try {
+      const response = await bridge.modelVerify(withDaemonOperation(), modelId);
+      if (response.status === "ok") {
+        setWeightsHealth((previous) => {
+          const next = { ...previous };
+          for (const model of response.models) next[model.model] = model;
+          return next;
+        });
+      } else {
+        setWeightsFailure({
+          modelId: modelId ?? null,
+          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+        });
+      }
+    } catch (error) {
+      setWeightsFailure({ modelId: modelId ?? null, detail: presentError(error) });
+    } finally {
+      setWeightsBusy(null);
+    }
+  };
+
+  // The sweep only stats the models directory, so unlike a weights check it is
+  // cheap enough to run whenever this panel opens.
+  useEffect(() => {
+    if (offline) {
+      setSweep(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await bridge.modelSweep(withDaemonOperation());
+        if (!cancelled) setSweep(response);
+      } catch {
+        // A sweep that cannot run leaves the section out rather than
+        // replacing the catalog with an error.
+        if (!cancelled) setSweep(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, offline, refreshTick]);
+
+  // Deleting weights removes bytes and unregisters in one operation, so it is
+  // confirmed in the row exactly like unregistering, and only ever offered for
+  // a row PAM has just re-read and found to be its own download.
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+
+  const deleteWeights = async (modelId: string) => {
+    setConfirmingDelete(null);
+    setDeleteBusy(modelId);
+    setWeightsFailure(null);
+    try {
+      const response = await bridge.modelDeleteWeights(withDaemonOperation(), modelId);
+      if (response.status === "ok") {
+        onModelWeightsDeleted(response.model, response.bytesReclaimed);
+      } else {
+        setWeightsFailure({
+          modelId,
+          detail: [response.failure.detail, response.failure.recovery].filter(Boolean).join(" "),
+        });
+      }
+    } catch (error) {
+      setWeightsFailure({ modelId, detail: presentError(error) });
+    } finally {
+      setDeleteBusy(null);
+    }
+  };
+
+  const revealWeights = async (path: string) => {
+    try {
+      await bridge.revealPath(withDaemonOperation(), path);
+    } catch (error) {
+      setWeightsFailure({ modelId: null, detail: presentError(error) });
+    }
+  };
+
   const pill = loading
     ? { label: "loading", tone: "elevated" }
     : offline || !modelStatus || modelStatus.status !== "ok"
@@ -1058,61 +1168,195 @@ export function ModelPanel({
         ? { label: "on deck", tone: "observed" }
         : { label: "none", tone: "not-reported" };
 
-  // One catalog row, and the home of every per-model action. Actions live in
-  // their own container so later ones (verify, sweep, delete weights) sit
-  // beside these without reshaping the row.
-  const restartRow = (model: { modelId: string; sizeBytes: number }) => (
-    <article key={model.modelId}>
-      <span className="access-icon"><Brain size={21} /></span>
-      <div>
-        <strong title={model.modelId}>{model.modelId}</strong>
-        <p>{formatModelSize(model.sizeBytes)} on disk</p>
-        {unregisterError?.modelId === model.modelId && (
-          <p className="model-verify is-fail" role="alert">{unregisterError.detail}</p>
-        )}
-      </div>
-      <div className="model-row-actions">
-        <button
-          type="button"
-          className="button button--secondary button--small"
-          disabled={modelBusy}
-          onClick={() => onStartWithModel(model.modelId)}
-        >
-          <Power size={17} /> {restartLabel}
-        </button>
-        {confirmingUnregister === model.modelId ? (
-          <span className="connector-confirm">
-            Remove {model.modelId} from PAM&apos;s registry? The GGUF file stays on disk.
+  // One catalog row, and the home of every per-model action: start, the
+  // weights check, whichever disposal the provenance gate allows, and
+  // unregistering.
+  const restartRow = (model: { modelId: string; sizeBytes: number }) => {
+    const health = weightsHealth[model.modelId];
+    const rowFailure = weightsFailure?.modelId === model.modelId ? weightsFailure.detail : null;
+    return (
+      <article key={model.modelId}>
+        <span className="access-icon"><Brain size={21} /></span>
+        <div>
+          <strong title={model.modelId}>{model.modelId}</strong>
+          <p>{formatModelSize(model.sizeBytes)} on disk</p>
+          {health && (
+            health.health === "ok" ? (
+              <p className="model-verify is-pass" role="status">
+                <Check size={16} aria-hidden="true" /> {WEIGHTS_HEALTH_LABELS.ok}
+              </p>
+            ) : (
+              <p className="model-verify is-fail" role="alert">
+                {WEIGHTS_HEALTH_LABELS[health.health]}
+                {health.detail ? ` — ${health.detail}` : ""}
+              </p>
+            )
+          )}
+          {unregisterError?.modelId === model.modelId && (
+            <p className="model-verify is-fail" role="alert">{unregisterError.detail}</p>
+          )}
+          {rowFailure && <p className="model-verify is-fail" role="alert">{rowFailure}</p>}
+        </div>
+        <div className="model-row-actions">
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            disabled={modelBusy}
+            onClick={() => onStartWithModel(model.modelId)}
+          >
+            <Power size={17} /> {restartLabel}
+          </button>
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            disabled={weightsBusy !== null}
+            onClick={() => void checkWeights(model.modelId)}
+          >
+            <Stethoscope size={17} /> {weightsBusy === model.modelId ? "Checking weights…" : "Check weights"}
+          </button>
+          {/* Deleting weights is offered only for a file PAM downloaded into its
+              own models directory, and only after the check that proved it. A
+              GGUF PAM verified in place belongs to whoever put it there: the
+              honest offer for that row is to show them where it is. */}
+          {health && health.weightsDeletable && (
+            confirmingDelete === model.modelId ? (
+              <span className="connector-confirm">
+                Delete {formatModelSize(health.sizeBytes)} of weights at {health.path} and unregister {model.modelId}?
+                <button
+                  type="button"
+                  className="button button--secondary button--small"
+                  disabled={deleteBusy === model.modelId}
+                  onClick={() => void deleteWeights(model.modelId)}
+                >
+                  Delete weights
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary button--small"
+                  onClick={() => setConfirmingDelete(null)}
+                >
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                disabled={deleteBusy === model.modelId}
+                onClick={() => { setWeightsFailure(null); setConfirmingDelete(model.modelId); }}
+              >
+                <Trash size={17} /> Delete weights
+              </button>
+            )
+          )}
+          {health && !health.weightsDeletable && (
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={() => void revealWeights(health.path)}
+            >
+              <FolderOpen size={17} /> Reveal in Finder
+            </button>
+          )}
+          {confirmingUnregister === model.modelId ? (
+            <span className="connector-confirm">
+              Remove {model.modelId} from PAM&apos;s registry? The GGUF file stays on disk.
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                disabled={unregisterBusy === model.modelId}
+                onClick={() => void unregisterModel(model.modelId)}
+              >
+                Unregister
+              </button>
+              <button
+                type="button"
+                className="button button--secondary button--small"
+                onClick={() => setConfirmingUnregister(null)}
+              >
+                Keep
+              </button>
+            </span>
+          ) : (
             <button
               type="button"
               className="button button--secondary button--small"
               disabled={unregisterBusy === model.modelId}
-              onClick={() => void unregisterModel(model.modelId)}
+              onClick={() => { setUnregisterError(null); setConfirmingUnregister(model.modelId); }}
             >
-              Unregister
+              <Trash size={17} /> Unregister
             </button>
-            <button
-              type="button"
-              className="button button--secondary button--small"
-              onClick={() => setConfirmingUnregister(null)}
-            >
-              Keep
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            className="button button--secondary button--small"
-            disabled={unregisterBusy === model.modelId}
-            onClick={() => { setUnregisterError(null); setConfirmingUnregister(model.modelId); }}
-          >
-            <Trash size={17} /> Unregister
-          </button>
-        )}
+          )}
+        </div>
+      </article>
+    );
+  };
+
+  // What the models directory holds that the registry cannot account for, and
+  // the other way round. Reporting only: clearing a dangling row is
+  // unregistering it, and an orphaned file is the user's to remove unless PAM
+  // downloaded it, in which case its own row offers Delete weights.
+  const weightsOnDisk = sweep?.status === "ok" ? sweep : null;
+  const sweepSection = weightsOnDisk && (
+    <section className="model-runtime" aria-labelledby="model-sweep-heading">
+      <div className="model-identity">
+        <strong id="model-sweep-heading">Weights on disk</strong>
+        <small>
+          {weightsOnDisk.modelsDir} · {formatModelSize(weightsOnDisk.totalBytes)} in this directory
+        </small>
       </div>
-    </article>
+      {weightsOnDisk.dangling.length === 0 && weightsOnDisk.orphans.length === 0 ? (
+        <p className="model-note">
+          Every registered model points at a file that is there, and every GGUF in this directory is
+          registered.
+        </p>
+      ) : (
+        <div className="access-list model-rows">
+          {weightsOnDisk.dangling.map((row) => (
+            <article key={`dangling-${row.model}`}>
+              <span className="access-icon"><Brain size={21} /></span>
+              <div>
+                <strong title={row.model}>{row.model}</strong>
+                <p>
+                  Registered at {row.path}, but nothing is there ·{" "}
+                  {formatModelSize(row.sizeBytes)} recorded
+                </p>
+              </div>
+              <div className="model-row-actions">
+                <button
+                  type="button"
+                  className="button button--secondary button--small"
+                  disabled={unregisterBusy === row.model}
+                  onClick={() => void unregisterModel(row.model)}
+                >
+                  <Trash size={17} /> Unregister
+                </button>
+              </div>
+            </article>
+          ))}
+          {weightsOnDisk.orphans.map((orphan) => (
+            <article key={`orphan-${orphan.path}`}>
+              <span className="access-icon"><Brain size={21} /></span>
+              <div>
+                <strong title={orphan.path}>{orphan.path}</strong>
+                <p>No registry entry points at this file · {formatModelSize(orphan.sizeBytes)}</p>
+              </div>
+              <div className="model-row-actions">
+                <span className="state-pill state-pill--not-reported">not registered</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {weightsFailure?.modelId === null && (
+        <p className="model-verify is-fail" role="alert">{weightsFailure.detail}</p>
+      )}
+    </section>
   );
 
+  const sweepFailure = sweep && sweep.status !== "ok"
+    ? [sweep.failure.detail, sweep.failure.recovery].filter(Boolean).join(" ")
+    : null;
   return (
     <section className="panel model-panel" aria-labelledby="model-panel-heading">
       <div className="panel-title">
@@ -1219,6 +1463,12 @@ export function ModelPanel({
           <div className="access-list model-rows">{registered.map(restartRow)}</div>
         </div>
       ) : null}
+      {sweepFailure && (
+        <div className="model-runtime">
+          <p className="model-verify is-fail" role="alert">{sweepFailure}</p>
+        </div>
+      )}
+      {sweepSection}
       {/* The curated picker and the manual import stay reachable whatever is
           registered or loaded: a user on a small quant needs a route to a
           larger one without leaving the app. */}

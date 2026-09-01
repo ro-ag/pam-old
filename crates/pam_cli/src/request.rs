@@ -183,6 +183,46 @@ impl RequestContext {
         .map(|request| self.authenticate(request))
     }
 
+    pub(crate) fn model_verify(
+        &self,
+        model: Option<String>,
+    ) -> Result<RequestEnvelope, ProtocolContractError> {
+        let (request_id, idempotency_key) = operation_ids("model-verify");
+        RequestEnvelope::model_verify(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+            model,
+        )
+        .map(|request| self.authenticate(request))
+    }
+
+    pub(crate) fn model_sweep(&self) -> RequestEnvelope {
+        let (request_id, idempotency_key) = operation_ids("model-sweep");
+        self.authenticate(RequestEnvelope::model_sweep(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+        ))
+    }
+
+    pub(crate) fn model_delete_weights(
+        &self,
+        model: String,
+    ) -> Result<RequestEnvelope, ProtocolContractError> {
+        let (request_id, idempotency_key) = operation_ids("model-delete-weights");
+        RequestEnvelope::model_delete_weights(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+            model,
+        )
+        .map(|request| self.authenticate(request))
+    }
+
     pub(crate) fn wait(&self, target_request_id: RequestId, after: u64) -> RequestEnvelope {
         let (request_id, idempotency_key) = operation_ids("wait");
         self.authenticate(RequestEnvelope::wait_for_result(

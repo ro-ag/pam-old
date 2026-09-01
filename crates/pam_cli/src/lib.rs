@@ -191,6 +191,17 @@ async fn run_async() -> i32 {
             yes,
             approval_id,
         } => app::model_unregister(model, yes, approval_id).await,
+        Mode::ModelVerify {
+            model,
+            json,
+            approval_id,
+        } => app::model_verify(model, json, approval_id).await,
+        Mode::ModelSweep { json, approval_id } => app::model_sweep(json, approval_id).await,
+        Mode::ModelDeleteWeights {
+            model,
+            yes,
+            approval_id,
+        } => app::model_delete_weights(model, yes, approval_id).await,
         Mode::ModelList { json } => app::model_list(json).await,
         Mode::ModelStatus { approval_id } => app::model_status(approval_id).await,
         Mode::ModelGenerate {

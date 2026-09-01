@@ -41,7 +41,10 @@ import type {
   ModelInferDto,
   ModelPresetsDto,
   ModelStatusDto,
+  ModelDeleteWeightsDto,
+  ModelSweepDto,
   ModelUnregisterDto,
+  ModelVerifyDto,
   ResetDto,
   PamBridge,
   SkillAuditDto,
@@ -173,6 +176,18 @@ export function createTauriBridge(invokeCommand: Invoke = invoke): PamBridge {
       })),
     modelUnregister: (fence, model) =>
       invokeCommand<ModelUnregisterDto>("model_unregister", request({
+        ...flatFence(fence),
+        model,
+      })),
+    modelVerify: (fence, model) =>
+      invokeCommand<ModelVerifyDto>("model_verify", request({
+        ...flatFence(fence),
+        model: model ?? null,
+      })),
+    modelSweep: (fence) =>
+      invokeCommand<ModelSweepDto>("model_sweep", request(flatFence(fence))),
+    modelDeleteWeights: (fence, model) =>
+      invokeCommand<ModelDeleteWeightsDto>("model_delete_weights", request({
         ...flatFence(fence),
         model,
       })),

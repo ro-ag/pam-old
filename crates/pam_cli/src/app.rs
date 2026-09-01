@@ -27,7 +27,10 @@ use pam_policy::{
     ApprovalRequirement, CapabilityName, Effect, Grant, ResourceName, ResourceScope,
     redact_audit_detail,
 };
-use pam_protocol::{ModelMessage, ModelRole, ResetTier, ResultBody, ResultPayload};
+use pam_protocol::{
+    ModelMessage, ModelRole, ModelSweepResult, ModelVerifyResult, OperationTruth, ResetTier,
+    ResultBody, ResultPayload,
+};
 use pam_store::{
     AppendAuditEvent, ApprovalDecision, ApprovalDecisionOutcome, AuditPruneOutcome,
     AuthorizationAudit, AuthorizationOutcome, AuthorizationRequest, CallerAuthentication,
@@ -44,7 +47,7 @@ use crate::{
     flow::{FlowCatalog, FlowCatalogError},
     render::{
         EXIT_OK, EXIT_OPERATION_FAILED, EXIT_PENDING, Presentation, escape_text, present_result,
-        render_events, render_reset,
+        render_events, render_reset, truth_label,
     },
     request::{
         NativeCredentialError, RequestContext, RequestContextError, delete_native_credential,
@@ -828,6 +831,288 @@ pub(crate) fn render_model_catalog(
 }
 
 const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
+
+/// Verification re-reads and re-hashes every registered artifact, which for a
+/// multi-gigabyte catalog is minutes of disk work, not a status read.
+const MODEL_VERIFY_TIMEOUT: Duration = Duration::from_mins(10);
+
+/// Re-reads the registered weights and reports what still matches the registry.
+///
+/// This is the standalone form of the check the runtime already runs before it
+/// maps a model, so a rotted registration is discoverable without booting the
+/// daemon on it. It is not the loaded model answering a prompt.
+pub(crate) async fn model_verify(
+    model: Option<ModelKey>,
+    json: bool,
+    approval_id: Option<ApprovalId>,
+) -> i32 {
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    let request = match context.model_verify(model.map(|model| model.id())) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("{}", escape_text(&error.to_string()));
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    match exchange(&request, MODEL_VERIFY_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model verification"),
+        Ok(exchange) => match exchange.result.body {
+            ResultBody::Success {
+                truth,
+                payload: ResultPayload::ModelVerify(report),
+            } => match render_model_verification(&report, &truth, json) {
+                Ok(rendered) => {
+                    print!("{rendered}");
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("{}", escape_text(&error.to_string()));
+                    EXIT_OPERATION_FAILED
+                }
+            },
+            body @ ResultBody::Failure(_) => emit(present_result(&body)),
+            _ => unexpected_result("model verification"),
+        },
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Reconciles the registry against the models directory, in both directions.
+///
+/// The sweep reports and never acts: clearing a dangling row is
+/// `pam model unregister`, and removing an orphaned file PAM downloaded is
+/// `pam model delete-weights`.
+pub(crate) async fn model_sweep(json: bool, approval_id: Option<ApprovalId>) -> i32 {
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    match exchange(&context.model_sweep(), READ_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("model sweep"),
+        Ok(exchange) => match exchange.result.body {
+            ResultBody::Success {
+                payload: ResultPayload::ModelSweep(report),
+                ..
+            } => match render_model_sweep(&report, json) {
+                Ok(rendered) => {
+                    print!("{rendered}");
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("{}", escape_text(&error.to_string()));
+                    EXIT_OPERATION_FAILED
+                }
+            },
+            body @ ResultBody::Failure(_) => emit(present_result(&body)),
+            _ => unexpected_result("model sweep"),
+        },
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+/// Deletes one PAM-downloaded model's weights and unregisters it.
+///
+/// Unregistering and deleting weights are two different effects and stay two
+/// commands. This one removes bytes, so it needs explicit consent, and the
+/// daemon still refuses any artifact PAM did not download into its own models
+/// directory.
+pub(crate) async fn model_delete_weights(
+    model: ModelKey,
+    yes: bool,
+    approval_id: Option<ApprovalId>,
+) -> i32 {
+    if !yes {
+        eprintln!(
+            "Deleting the weights for {model} removes the file from disk and unregisters it. Re-run with --yes to confirm. PAM refuses any model it did not download into its own models directory."
+        );
+        return EXIT_OPERATION_FAILED;
+    }
+    let Some(context) = discover_context(approval_id).await else {
+        return EXIT_OPERATION_FAILED;
+    };
+    let request = match context.model_delete_weights(model.id()) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("{}", escape_text(&error.to_string()));
+            return EXIT_OPERATION_FAILED;
+        }
+    };
+    match exchange(&request, READ_TIMEOUT).await {
+        Ok(exchange) if !exchange.events.is_empty() => unexpected_events("weights deletion"),
+        Ok(exchange)
+            if matches!(
+                exchange.result.body,
+                ResultBody::Success {
+                    payload: ResultPayload::ModelDeleteWeights(_),
+                    ..
+                } | ResultBody::Failure(_)
+            ) =>
+        {
+            emit(present_result(&exchange.result.body))
+        }
+        Ok(_) => unexpected_result("weights deletion"),
+        Err(error) => report_exchange_error(&error),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonModelVerification {
+    schema_version: u32,
+    truth: &'static str,
+    models: Vec<JsonModelHealth>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonModelHealth {
+    model: String,
+    health: String,
+    detail: Option<String>,
+    size_bytes: u64,
+    source: String,
+    weights_deletable: bool,
+    path: String,
+}
+
+pub(crate) fn render_model_verification(
+    report: &ModelVerifyResult,
+    truth: &OperationTruth,
+    json: bool,
+) -> Result<String, serde_json::Error> {
+    if json {
+        return serde_json::to_string_pretty(&JsonModelVerification {
+            schema_version: MODEL_HEALTH_SCHEMA_VERSION,
+            truth: truth_label(truth),
+            models: report
+                .models
+                .iter()
+                .map(|model| JsonModelHealth {
+                    model: model.model.clone(),
+                    health: model.health.clone(),
+                    detail: model.detail.clone(),
+                    size_bytes: model.size_bytes,
+                    source: model.source.clone(),
+                    weights_deletable: model.weights_deletable,
+                    path: model.path.clone(),
+                })
+                .collect(),
+        })
+        .map(|rendered| format!("{rendered}\n"));
+    }
+    let failed = report
+        .models
+        .iter()
+        .filter(|model| model.health != "ok")
+        .count();
+    let mut rendered = format!(
+        "models={} failed={failed} truth={}\n",
+        report.models.len(),
+        truth_label(truth)
+    );
+    for model in &report.models {
+        let _ = writeln!(
+            rendered,
+            "model={} health={} size_bytes={} source={} weights_deletable={} path={}",
+            escape_text(&model.model),
+            escape_text(&model.health),
+            model.size_bytes,
+            escape_text(&model.source),
+            model.weights_deletable,
+            escape_text(&model.path)
+        );
+        // The failure's own sentence sits under the row it belongs to, so a
+        // health label is never the only thing a reader gets.
+        if let Some(detail) = &model.detail {
+            let _ = writeln!(rendered, "  {}", escape_text(detail));
+        }
+    }
+    Ok(rendered)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonModelSweep {
+    schema_version: u32,
+    models_dir: String,
+    total_bytes: u64,
+    dangling: Vec<JsonDanglingRow>,
+    orphans: Vec<JsonOrphanFile>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonDanglingRow {
+    model: String,
+    size_bytes: u64,
+    path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonOrphanFile {
+    size_bytes: u64,
+    path: String,
+}
+
+pub(crate) fn render_model_sweep(
+    report: &ModelSweepResult,
+    json: bool,
+) -> Result<String, serde_json::Error> {
+    if json {
+        return serde_json::to_string_pretty(&JsonModelSweep {
+            schema_version: MODEL_HEALTH_SCHEMA_VERSION,
+            models_dir: report.models_dir.clone(),
+            total_bytes: report.total_bytes,
+            dangling: report
+                .dangling
+                .iter()
+                .map(|row| JsonDanglingRow {
+                    model: row.model.clone(),
+                    size_bytes: row.size_bytes,
+                    path: row.path.clone(),
+                })
+                .collect(),
+            orphans: report
+                .orphans
+                .iter()
+                .map(|orphan| JsonOrphanFile {
+                    size_bytes: orphan.size_bytes,
+                    path: orphan.path.clone(),
+                })
+                .collect(),
+        })
+        .map(|rendered| format!("{rendered}\n"));
+    }
+    let mut rendered = format!(
+        "dangling={} orphans={} total_bytes={} truth=observed models_dir={}\n",
+        report.dangling.len(),
+        report.orphans.len(),
+        report.total_bytes,
+        escape_text(&report.models_dir)
+    );
+    for row in &report.dangling {
+        let _ = writeln!(
+            rendered,
+            "dangling model={} size_bytes={} path={}",
+            escape_text(&row.model),
+            row.size_bytes,
+            escape_text(&row.path)
+        );
+    }
+    for orphan in &report.orphans {
+        let _ = writeln!(
+            rendered,
+            "orphan size_bytes={} path={}",
+            orphan.size_bytes,
+            escape_text(&orphan.path)
+        );
+    }
+    Ok(rendered)
+}
+
+const MODEL_HEALTH_SCHEMA_VERSION: u32 = 1;
 
 pub(crate) async fn model_generate(
     model: ModelKey,
@@ -1674,7 +1959,7 @@ pub(crate) async fn evidence_show(handle: EvidenceHandle, raw: bool, output: Opt
             "Wrote {} verified bytes to {} (truth={})",
             download.bytes.len(),
             escape_text(&path.display().to_string()),
-            crate::render::truth_label(&download.truth)
+            truth_label(&download.truth)
         );
         return 0;
     }
