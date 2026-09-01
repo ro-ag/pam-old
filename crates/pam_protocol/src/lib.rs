@@ -26,13 +26,14 @@ pub use contract::{
     MAX_FLOW_PROJECT_ROOT_BYTES, MAX_GRANT_CAPABILITY_BYTES, MAX_MODEL_LICENSE_ID_BYTES,
     MAX_MODEL_PATH_BYTES, MAX_MODEL_URL_BYTES, MAX_PROJECT_CURRENT_QUEUED,
     MAX_PROJECT_OPERATION_KIND_BYTES, ModelDeleteWeightsResult, ModelFinishReason,
-    ModelGenerationResult, ModelMessage, ModelRegisterResult, ModelRegistration, ModelRole,
-    ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnregisterResult, ModelUsage,
-    ModelVerification, ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth,
-    OrphanWeightsSummary, PacState, ProjectCurrentResult, ProjectRequestState,
-    ProjectRequestSummary, ProjectUsageSummary, ProtocolContractError, ReplayResult,
-    RequestEnvelope, RequestPayload, ResetItem, ResetResult, ResetTier, ResultBody, ResultEnvelope,
-    ResultPayload, ServerMessage, SourceAvailability, StatusResult,
+    ModelGenerationResult, ModelLoadResult, ModelMessage, ModelRegisterResult, ModelRegistration,
+    ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult, ModelTransition,
+    ModelTransitionPhase, ModelUnloadResult, ModelUnregisterResult, ModelUsage, ModelVerification,
+    ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth, OrphanWeightsSummary, PacState,
+    ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary,
+    ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload, ResetItem, ResetResult,
+    ResetTier, ResultBody, ResultEnvelope, ResultPayload, ServerMessage, SourceAvailability,
+    StatusResult,
 };
 
 pub const PROTOCOL_VERSION: u16 = 9;

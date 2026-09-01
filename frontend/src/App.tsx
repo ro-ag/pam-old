@@ -478,13 +478,30 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
       await bridge.startDaemon(withDaemonOperation());
     }, "PAM restarted");
   };
-  // Loading a model means restarting the daemon with --model: stop if needed,
-  // start carrying the key, then re-read the model surface.
+  // A running PAM loads the model in place: the daemon swaps it without ever
+  // going down, so nothing is stopped and nothing is restarted. Only a paused
+  // PAM still needs starting, and then the start carries the key. A refusal
+  // renders in the Models view next to the row that asked for it; only a
+  // thrown error reaches the toast here.
   const startWithModel = (modelId: string) => {
-    void runDaemonLifecycle(async () => {
-      if (daemon.state === "running") await bridge.stopDaemon(withDaemonOperation());
-      await bridge.startDaemon(withDaemonOperation(), modelId);
-    }, "PAM is on watch with the model").then(() => void loadModelStatus());
+    const running = daemon.state === "running";
+    void runDaemonLifecycle(
+      async () => {
+        if (running) {
+          const response = await bridge.modelLoad(withDaemonOperation(), modelId);
+          if (response.status !== "ok") {
+            throw new Error([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+          }
+          return;
+        }
+        await bridge.startDaemon(withDaemonOperation(), modelId);
+      },
+      running ? `Loaded ${modelId}` : "PAM is on watch with the model",
+    ).then(() => void loadModelStatus());
+  };
+  const unloadModel = (modelId: string) => {
+    showToast(`Unloaded ${modelId}`);
+    reloadModelStatus();
   };
   const registerGuiCaller = () => {
     const fence = withOperation(state.activeFence!);
@@ -684,6 +701,7 @@ export function App({ bridge, initialView = "overview", initialTheme, initialThe
                   modelBusy={busy}
                   onOpenModelChat={openModelChat}
                   onStartWithModel={startWithModel}
+                  onModelUnloaded={unloadModel}
                   onModelImported={() => { showToast("Model registered"); reloadModelStatus(); }}
                   onModelUnregistered={(modelId) => { showToast(`Unregistered ${modelId}`); reloadModelStatus(); }}
                   onModelWeightsDeleted={(modelId, bytesReclaimed) => { showToast(`Deleted ${formatModelSize(bytesReclaimed)} of weights for ${modelId}`); reloadModelStatus(); }}

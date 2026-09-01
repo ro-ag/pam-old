@@ -717,6 +717,70 @@ impl RequestEnvelope {
         })
     }
 
+    /// Creates an authenticated, policy-gated model load request.
+    ///
+    /// Loading brings one registered model into the running daemon's embedded
+    /// runtime without restarting it. A daemon that already holds a model
+    /// swaps: the model it is serving is drained and dropped before the new
+    /// one is admitted, so the host never carries two mapped artifacts at once
+    /// and no in-flight request ever observes a half-swapped runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for a model identity that is not a bounded
+    /// `vendor/name` pair.
+    pub fn model_load(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+        model: impl Into<String>,
+    ) -> Result<Self, ProtocolContractError> {
+        let model = model.into();
+        validate_model_id(&model)?;
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelLoad,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelLoad { model },
+        })
+    }
+
+    /// Creates an authenticated, policy-gated model unload request.
+    ///
+    /// Unloading drops the model the daemon holds and returns its memory,
+    /// leaving the daemon serving everything else. Inference afterwards
+    /// answers the same not-loaded failure it answers before any model is
+    /// loaded at all: there is one "no model" state, never two.
+    #[must_use]
+    pub fn model_unload(
+        request_id: RequestId,
+        caller_id: CallerId,
+        project_id: ProjectId,
+        idempotency_key: IdempotencyKey,
+    ) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id,
+            caller_id,
+            authentication: None,
+            approval_id: None,
+            project_root: None,
+            project_id,
+            capability: Capability::ModelUnload,
+            idempotency_key,
+            deadline_unix_ms: None,
+            payload: RequestPayload::ModelUnload,
+        }
+    }
+
     /// Creates an authenticated, policy-gated model unregistration request.
     ///
     /// Attach the caller credential with [`Self::authenticated`] before sending
@@ -962,7 +1026,8 @@ impl RequestEnvelope {
             RequestPayload::ModelRegister { registration } => {
                 validate_model_registration(registration)
             }
-            RequestPayload::ModelUnregister { model }
+            RequestPayload::ModelLoad { model }
+            | RequestPayload::ModelUnregister { model }
             | RequestPayload::ModelDeleteWeights { model } => validate_model_id(model),
             RequestPayload::ModelVerify { model } => {
                 model.as_deref().map_or(Ok(()), validate_model_id)
@@ -1248,6 +1313,8 @@ pub enum Capability {
     ModelInfer,
     ModelStatus,
     ModelRegister,
+    ModelLoad,
+    ModelUnload,
     ModelUnregister,
     ModelVerify,
     ModelSweep,
@@ -1290,6 +1357,8 @@ impl Capability {
             Self::ModelInfer => "model.infer",
             Self::ModelStatus => "model.status",
             Self::ModelRegister => "model.register",
+            Self::ModelLoad => "model.load",
+            Self::ModelUnload => "model.unload",
             Self::ModelUnregister => "model.unregister",
             Self::ModelVerify => "model.verify",
             Self::ModelSweep => "model.sweep",
@@ -1546,6 +1615,10 @@ pub enum RequestPayload {
     ModelRegister {
         registration: ModelRegistration,
     },
+    ModelLoad {
+        model: String,
+    },
+    ModelUnload,
     ModelUnregister {
         model: String,
     },
@@ -1748,6 +1821,8 @@ pub enum ResultPayload {
     ModelGeneration(ModelGenerationResult),
     ModelStatus(ModelStatusResult),
     ModelRegister(ModelRegisterResult),
+    ModelLoad(ModelLoadResult),
+    ModelUnload(ModelUnloadResult),
     ModelUnregister(ModelUnregisterResult),
     ModelVerify(ModelVerifyResult),
     ModelSweep(ModelSweepResult),
@@ -1802,6 +1877,37 @@ pub struct ModelRegisterResult {
     /// Stable `vendor/name` identity now present in the registry.
     pub model: String,
     pub registered_at_ms: u64,
+}
+
+/// Acknowledgement of one model brought into the running daemon's runtime.
+///
+/// `previous` names the model this load displaced, when the daemon was
+/// already serving one: a swap drains and drops the old runtime before the
+/// new one is admitted, and saying which model left is how the caller can
+/// report the whole effect.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelLoadResult {
+    /// Stable `vendor/name` identity now serving in this daemon.
+    pub model: String,
+    /// Size of the artifact the runtime mapped.
+    pub size_bytes: u64,
+    /// The model this load displaced, or `None` when nothing was loaded.
+    pub previous: Option<String>,
+    /// True when the daemon was already serving this exact model, so nothing
+    /// was reloaded and no memory moved.
+    pub already_loaded: bool,
+}
+
+/// Acknowledgement of one model dropped from the running daemon's runtime.
+///
+/// The registry is untouched: the row stays, the weights stay, and the model
+/// can be loaded again without re-importing anything.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelUnloadResult {
+    /// Stable `vendor/name` identity this daemon is no longer serving.
+    pub model: String,
+    /// Size of the artifact whose memory the unload returned.
+    pub size_bytes: u64,
 }
 
 /// Acknowledgement of one durable model removal from the registry.
@@ -2767,10 +2873,47 @@ pub struct ModelStatusResult {
     pub loaded: Option<ModelSummary>,
     pub registered: Vec<ModelSummary>,
     /// Why the requested model is not loaded, when this daemon attempted a
-    /// load at startup and it failed. `None` when no model was requested, the
-    /// load succeeded, or the peer predates this field. Carries the runtime's
-    /// own reason text only — never a path, digest, or license.
+    /// load and it failed. `None` when no model was requested, the load
+    /// succeeded, or the peer predates this field. Carries the runtime's own
+    /// reason text only — never a path, digest, or license.
     pub load_failure: Option<String>,
+    /// The load or unload running in this daemon right now, when one is.
+    /// `None` when the model surface is settled, so `loaded` alone tells the
+    /// whole story. A loaded model and a transition can both be present: an
+    /// unload reports the model it is dropping while it drains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<ModelTransition>,
+}
+
+/// Which half of a model change is running, and on which model.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTransitionPhase {
+    Loading,
+    Unloading,
+}
+
+impl ModelTransitionPhase {
+    /// The stable lowercase label this phase is reported and rendered under.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Loading => "loading",
+            Self::Unloading => "unloading",
+        }
+    }
+}
+
+/// One model change in flight in the daemon that reported it.
+///
+/// A transition is transient by construction: it lives only for as long as
+/// the daemon is moving a model in or out, and a status read taken after it
+/// finishes reports the settled surface instead.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelTransition {
+    pub phase: ModelTransitionPhase,
+    /// The `vendor/name` identity being loaded, or being dropped.
+    pub model: String,
 }
 
 /// One registered model identified only by its `vendor/name` ID and size.

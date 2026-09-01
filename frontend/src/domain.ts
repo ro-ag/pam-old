@@ -574,6 +574,12 @@ export interface ModelFailureDto {
   recovery: string | null;
 }
 
+/** One model change in flight in the running daemon. */
+export interface ModelTransitionDto {
+  phase: "loading" | "unloading";
+  model: string;
+}
+
 export type ModelStatusDto =
   | {
       status: "ok";
@@ -587,6 +593,11 @@ export type ModelStatusDto =
        * is still hashing and mapping its model. A loading daemon cannot say
        * so itself — it only starts accepting once the load is in. */
       loading: boolean;
+      /** The load or unload the running daemon is doing right now, in its own
+       * words. Null when the surface is settled. Distinct from `loading`
+       * above, which is this GUI inferring a startup load from a daemon that
+       * cannot answer yet. */
+      transition: ModelTransitionDto | null;
     }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
@@ -627,6 +638,25 @@ export type ModelImportDto =
 // Removing a registration acknowledges exactly the row that left. The GGUF on
 // disk is never deleted: unregistering is a registry operation only.
 export type ModelUnregisterDto =
+  | { status: "ok"; model: string; sizeBytes: number }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+/** Acknowledgement of one model brought into the running daemon. `previous`
+ *  names the model this load displaced, so a row can say what left as well as
+ *  what arrived; `alreadyLoaded` marks the no-op where nothing moved. */
+export type ModelLoadDto =
+  | {
+      status: "ok";
+      model: string;
+      sizeBytes: number;
+      previous: string | null;
+      alreadyLoaded: boolean;
+    }
+  | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
+
+/** Acknowledgement of one model dropped from the running daemon. The registry
+ *  row and the weights both stay: only the mapping goes. */
+export type ModelUnloadDto =
   | { status: "ok"; model: string; sizeBytes: number }
   | { status: "blocked" | "unavailable"; failure: ModelFailureDto };
 
@@ -807,6 +837,11 @@ export interface HostMemoryDto {
 export interface AppSettingsDto {
   modelsDir: string;
   modelsDirIsDefault: boolean;
+  /** The vendor/name a daemon start loads when the GUI asks for no specific
+   *  model, or null when PAM starts with no model. A pin, not a promise: a
+   *  model that is later unregistered stays pinned until it is changed, and
+   *  the daemon says plainly that it is gone. */
+  defaultModel: string | null;
   dataDir: string;
   flowsDir: string;
   logsDir: string;
@@ -911,6 +946,12 @@ export interface PamBridge {
   modelStatus(fence: CommandFence): Promise<ModelStatusDto>;
   modelInfer(fence: CommandFence, model: string, messages: ChatMessageDto[], maxOutputTokens?: number): Promise<ModelInferDto>;
   modelImport(fence: CommandFence, params: ModelImportParams): Promise<ModelImportDto>;
+  /** Brings a registered model into the running daemon. No restart: the
+   *  daemon drains and drops whatever it was serving before the new runtime
+   *  is built. */
+  modelLoad(fence: CommandFence, model: string): Promise<ModelLoadDto>;
+  /** Drops the loaded model and frees its memory; PAM keeps serving. */
+  modelUnload(fence: CommandFence): Promise<ModelUnloadDto>;
   modelUnregister(fence: CommandFence, model: string): Promise<ModelUnregisterDto>;
   /** Registry health: re-reads registered weights. Not the loaded-model check. */
   modelVerify(fence: CommandFence, model?: string): Promise<ModelVerifyDto>;
@@ -926,6 +967,9 @@ export interface PamBridge {
   hostMemory(fence: CommandFence): Promise<HostMemoryDto>;
   appSettings(fence: CommandFence): Promise<AppSettingsDto>;
   settingsUpdate(fence: CommandFence, modelsDir: string | null): Promise<AppSettingsDto>;
+  /** Pins the model a daemon start loads by default, or clears the pin with
+   *  null so PAM starts with no model. */
+  settingsSetDefaultModel(fence: CommandFence, model: string | null): Promise<AppSettingsDto>;
   logsDelete(fence: CommandFence): Promise<AppSettingsDto>;
   resetAccess(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;
   resetIdentity(fence: CommandFence, dryRun: boolean): Promise<ResetDto>;

@@ -7,6 +7,7 @@ mod lifecycle;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_admission;
+mod model_cell;
 mod model_service;
 mod ptrack;
 mod reset;
@@ -21,6 +22,8 @@ mod lifecycle_test;
 mod logging_test;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_admission_test;
+#[cfg(test)]
+mod model_cell_test;
 #[cfg(test)]
 mod model_service_test;
 #[cfg(test)]

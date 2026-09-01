@@ -186,6 +186,8 @@ async fn run_async() -> i32 {
             )
             .await
         }
+        Mode::ModelLoad { model, approval_id } => app::model_load(model, approval_id).await,
+        Mode::ModelUnload { yes, approval_id } => app::model_unload(yes, approval_id).await,
         Mode::ModelUnregister {
             model,
             yes,

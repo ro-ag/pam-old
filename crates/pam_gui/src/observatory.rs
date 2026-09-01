@@ -6,10 +6,10 @@ use pam_platform::LocalEndpoint;
 use pam_protocol::{
     ActivityResult, CallerListResult, ConnectorConfigureResult, ConnectorCredentialAction,
     ConnectorListResult, ConnectorTestResult, DaemonLogsResult, DaemonStatsResult, Failure,
-    FailureCode, GrantRevokeResult, ModelDeleteWeightsResult, ModelGenerationResult, ModelMessage,
-    ModelRegisterResult, ModelRegistration, ModelStatusResult, ModelSweepResult,
-    ModelUnregisterResult, ModelVerifyResult, ProtocolContractError, RequestEnvelope, ResetResult,
-    ResetTier, ResultBody, ResultPayload,
+    FailureCode, GrantRevokeResult, ModelDeleteWeightsResult, ModelGenerationResult,
+    ModelLoadResult, ModelMessage, ModelRegisterResult, ModelRegistration, ModelStatusResult,
+    ModelSweepResult, ModelUnloadResult, ModelUnregisterResult, ModelVerifyResult,
+    ProtocolContractError, RequestEnvelope, ResetResult, ResetTier, ResultBody, ResultPayload,
 };
 
 use crate::current::{unique_idempotency, unique_request_id};
@@ -28,6 +28,14 @@ const MODEL_REGISTER_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const GRANT_REVOKE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL_REGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.register capability in Access, or approve the pending registration.";
 const MODEL_UNREGISTER_BLOCKED_RECOVERY: &str = "Grant the GUI caller the model.unregister capability in Access, or approve the pending removal.";
+const MODEL_LOAD_BLOCKED_RECOVERY: &str =
+    "Grant the GUI caller the model.load capability in Access, or approve the pending load.";
+const MODEL_UNLOAD_BLOCKED_RECOVERY: &str =
+    "Grant the GUI caller the model.unload capability in Access, or approve the pending unload.";
+/// Loading hashes and maps a multi-gigabyte artifact, and unloading waits for
+/// the outgoing model to finish draining. Neither is a status read, so both
+/// get the window verification gets rather than a write's short one.
+const MODEL_LOAD_EXCHANGE_TIMEOUT: Duration = Duration::from_mins(10);
 const MODEL_VERIFY_BLOCKED_RECOVERY: &str =
     "Grant the GUI caller the model.verify capability in Access, or approve the pending check.";
 const MODEL_SWEEP_BLOCKED_RECOVERY: &str =
@@ -360,6 +368,71 @@ pub(crate) async fn run_model_register(
     .await)
 }
 
+/// Brings one registered model into the running daemon, without a restart.
+///
+/// The daemon owns the swap and does it old-before-new, so the GUI never has
+/// to stop and restart PAM to change models. A load that fails leaves the
+/// daemon serving without a model and arrives here as unavailable, carrying
+/// the daemon's own reason and recovery line.
+///
+/// # Errors
+///
+/// Returns the protocol contract error for a model identity the contract
+/// rejects, before any daemon exchange.
+pub(crate) async fn run_model_load(
+    caller_id: CallerId,
+    credential: CallerCredential,
+    model: String,
+) -> Result<ObservatoryState<ModelLoadResult>, ProtocolContractError> {
+    let request = RequestEnvelope::model_load(
+        unique_request_id("gui-model-load"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-load"),
+        model,
+    )?
+    .authenticated(credential);
+    Ok(load(
+        request,
+        "model-load",
+        MODEL_LOAD_EXCHANGE_TIMEOUT,
+        model_load_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelLoad(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await)
+}
+
+/// Drops the model the daemon holds and frees its memory, leaving it serving.
+///
+/// The registry is untouched, so the same model loads again without
+/// re-importing anything.
+pub(crate) async fn run_model_unload(
+    caller_id: CallerId,
+    credential: CallerCredential,
+) -> ObservatoryState<ModelUnloadResult> {
+    let request = RequestEnvelope::model_unload(
+        unique_request_id("gui-model-unload"),
+        caller_id,
+        ProjectId::daemon_scope(),
+        unique_idempotency("gui-model-unload"),
+    )
+    .authenticated(credential);
+    load(
+        request,
+        "model-unload",
+        MODEL_LOAD_EXCHANGE_TIMEOUT,
+        model_unload_failure_state,
+        |payload| match payload {
+            ResultPayload::ModelUnload(result) => Some(result),
+            _ => None,
+        },
+    )
+    .await
+}
+
 /// Removes one model's registration through the daemon that owns the store.
 ///
 /// The weights are never touched: this drops the registry row only.
@@ -664,6 +737,21 @@ fn model_register_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
 /// unavailable and keeps the daemon's own recovery line.
 fn model_unregister_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
     grant_failure_state(failure, MODEL_UNREGISTER_BLOCKED_RECOVERY)
+}
+
+/// `model.load` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with load recovery text. A refusal the daemon
+/// itself explains — a load already running, an unregistered model, weights
+/// that no longer map — arrives as unavailable and keeps the daemon's own
+/// recovery line.
+fn model_load_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_LOAD_BLOCKED_RECOVERY)
+}
+
+/// `model.unload` requires an explicit grant: classified exactly like
+/// [`infer_failure_state`], with unload recovery text.
+fn model_unload_failure_state<T>(failure: Failure) -> ObservatoryState<T> {
+    grant_failure_state(failure, MODEL_UNLOAD_BLOCKED_RECOVERY)
 }
 
 /// `model.verify` requires an explicit grant: classified exactly like

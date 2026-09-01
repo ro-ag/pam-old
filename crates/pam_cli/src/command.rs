@@ -469,6 +469,25 @@ enum ModelCommand {
         #[arg(long, value_parser = parse_approval_id)]
         approval_id: Option<ApprovalId>,
     },
+    /// Load a registered model into the running PAM daemon, without a restart.
+    Load {
+        /// Stable model identity.
+        #[arg(value_name = "VENDOR/NAME", value_parser = parse_model_key)]
+        model: ModelKey,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
+    /// Drop the loaded model and free its memory; PAM keeps serving.
+    Unload {
+        /// Confirm dropping the model. Any answer it is generating right now
+        /// is cancelled, and loading it again takes as long as the first load.
+        #[arg(long)]
+        yes: bool,
+        /// One-time exact-effect approval receipt, when policy requires it.
+        #[arg(long, value_parser = parse_approval_id)]
+        approval_id: Option<ApprovalId>,
+    },
     /// Remove a model's registration; the weights stay on disk.
     Unregister {
         /// Stable model identity.
@@ -820,6 +839,14 @@ pub(crate) enum Mode {
         accept_license: bool,
         approval_id: Option<ApprovalId>,
     },
+    ModelLoad {
+        model: ModelKey,
+        approval_id: Option<ApprovalId>,
+    },
+    ModelUnload {
+        yes: bool,
+        approval_id: Option<ApprovalId>,
+    },
     ModelUnregister {
         model: ModelKey,
         yes: bool,
@@ -939,6 +966,8 @@ impl fmt::Debug for ModelCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Import { .. } => formatter.write_str("Import"),
+            Self::Load { .. } => formatter.write_str("Load"),
+            Self::Unload { .. } => formatter.write_str("Unload"),
             Self::Unregister { .. } => formatter.write_str("Unregister"),
             Self::Verify { .. } => formatter.write_str("Verify"),
             Self::Sweep { .. } => formatter.write_str("Sweep"),
@@ -1012,6 +1041,8 @@ impl fmt::Debug for Mode {
             Self::CallerRegister { .. } => formatter.write_str("CallerRegister"),
             Self::CallerRevoke { .. } => formatter.write_str("CallerRevoke"),
             Self::ModelImport { .. } => formatter.write_str("ModelImport"),
+            Self::ModelLoad { .. } => formatter.write_str("ModelLoad"),
+            Self::ModelUnload { .. } => formatter.write_str("ModelUnload"),
             Self::ModelUnregister { .. } => formatter.write_str("ModelUnregister"),
             Self::ModelVerify { .. } => formatter.write_str("ModelVerify"),
             Self::ModelSweep { .. } => formatter.write_str("ModelSweep"),
@@ -1109,6 +1140,12 @@ impl Cli {
                 timeout,
                 approval_id,
             },
+            Some(Command::Model {
+                command: ModelCommand::Load { model, approval_id },
+            }) => Mode::ModelLoad { model, approval_id },
+            Some(Command::Model {
+                command: ModelCommand::Unload { yes, approval_id },
+            }) => Mode::ModelUnload { yes, approval_id },
             Some(Command::Model {
                 command:
                     ModelCommand::Unregister {

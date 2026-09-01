@@ -7,8 +7,9 @@ use crate::{
     app::{
         FlowResponseKind, audit_export, flow_recovery_cursor, flow_response_matches,
         flow_run_retry, migrate_legacy_flows, model_delete_weights, model_import,
-        model_import_resource, model_unregister, refuse_unconfirmed, render_model_catalog,
-        render_model_sweep, render_model_verification, retention_prune, select_flow,
+        model_import_resource, model_unload, model_unregister, refuse_unconfirmed,
+        render_model_catalog, render_model_sweep, render_model_verification, retention_prune,
+        select_flow,
     },
     command::{ResetConfirmation, RetentionScopeArg},
     flow::FlowCatalog,
@@ -187,6 +188,13 @@ async fn model_unregister_requires_explicit_confirmation_before_any_daemon_excha
         model_unregister(ModelKey::new("vendor", "model").unwrap(), false, None).await,
         EXIT_OPERATION_FAILED
     );
+}
+
+#[tokio::test]
+async fn model_unload_requires_explicit_confirmation_before_any_daemon_exchange() {
+    // No daemon runs in this test: reaching the exchange at all would fail
+    // differently, so the refusal proves consent is checked first.
+    assert_eq!(model_unload(false, None).await, EXIT_OPERATION_FAILED);
 }
 
 #[test]

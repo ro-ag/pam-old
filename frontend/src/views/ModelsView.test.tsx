@@ -25,6 +25,7 @@ async function modelProps(scenario: FixtureScenario = "solved") {
     modelBusy: false,
     onOpenModelChat: vi.fn(),
     onStartWithModel: vi.fn(),
+    onModelUnloaded: vi.fn(),
     onModelImported: vi.fn(),
     onModelUnregistered: vi.fn(),
     onModelWeightsDeleted: vi.fn(),
@@ -115,16 +116,88 @@ describe("model runtime panel", () => {
     );
   });
 
-  it("offers a restart with a registered model when nothing is loaded", async () => {
+  // #238: a running PAM loads in place, so the row action is a plain "Load"
+  // and the copy no longer promises a restart that will not happen.
+  it("offers a plain load with a registered model when nothing is loaded", async () => {
     const props = await modelProps("model-on-deck");
     render(<ModelsView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     expect(within(panel).getByText("on deck")).toBeInTheDocument();
-    await userEvent.click(
-      within(panel).getAllByRole("button", { name: /Restart PAM with this model/ })[0],
-    );
+    expect(
+      within(panel).queryByRole("button", { name: /Restart PAM with this model/ }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getAllByRole("button", { name: "Load" })[0]);
     expect(props.onStartWithModel).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
+  });
+
+  it("unloads the loaded model through the bridge and reports what left", async () => {
+    const props = await modelProps("solved");
+    const unload = vi.spyOn(props.bridge, "modelUnload");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Unload" }));
+
+    await waitFor(() => expect(unload).toHaveBeenCalledTimes(1));
+    expect(props.onModelUnloaded).toHaveBeenCalledWith("qwen/qwen3-14b-instruct-q4");
+  });
+
+  // An ungranted unload is a refusal, not a silent no-op: the line that fixes
+  // it renders next to the model it refused.
+  it("renders a refused unload with its recovery line", async () => {
+    const props = await modelProps("model-load-blocked");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Unload" }));
+
+    expect(
+      await within(panel).findByText(/Grant the GUI caller the model.unload capability in Access/),
+    ).toBeInTheDocument();
+    expect(props.onModelUnloaded).not.toHaveBeenCalled();
+  });
+
+  // #239: the pin decides which model a later start loads. It is set from a
+  // row, shown on that row, and taken back off from the same control.
+  it("pins a model as the one PAM starts with, and clears the pin again", async () => {
+    const props = await modelProps("model-on-deck");
+    const pin = vi.spyOn(props.bridge, "settingsSetDefaultModel");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    const row = within(panel)
+      .getAllByRole("article")
+      .find((article) => within(article).queryByTitle("qwen/qwen3-14b-instruct-q4"))!;
+
+    await userEvent.click(within(row).getByRole("button", { name: "Start with this" }));
+    expect(pin).toHaveBeenCalledWith(expect.anything(), "qwen/qwen3-14b-instruct-q4");
+    expect(await within(row).findByText("PAM starts with this model.")).toBeInTheDocument();
+
+    // The same control takes it back off, so PAM can be told to start with no
+    // model at all.
+    await userEvent.click(within(row).getByRole("button", { name: "Don't start with this" }));
+    await waitFor(() => expect(pin).toHaveBeenLastCalledWith(expect.anything(), null));
+    expect(within(row).queryByText("PAM starts with this model.")).not.toBeInTheDocument();
+  });
+
+  // The loaded model has no catalog row of its own, so its pin lives beside
+  // its identity: the model you are running is the one you most likely want
+  // back on the next start.
+  it("offers the start-with-this pin on the loaded model too", async () => {
+    const props = await modelProps("solved");
+    const pin = vi.spyOn(props.bridge, "settingsSetDefaultModel");
+    render(<ModelsView {...props} />);
+
+    const panel = screen.getByRole("region", { name: "Model runtime" });
+    // The loaded model's controls are the ones beside Unload, not a row's.
+    const loadedActions = within(panel).getByRole("button", { name: "Unload" }).parentElement!;
+    await userEvent.click(within(loadedActions).getByRole("button", { name: "Start with this" }));
+
+    await waitFor(() =>
+      expect(pin).toHaveBeenCalledWith(expect.anything(), "qwen/qwen3-14b-instruct-q4"),
+    );
+    expect(await within(panel).findByText("PAM starts with this model.")).toBeInTheDocument();
   });
 
   it("offers an unregister action on every registered catalog row", async () => {
@@ -912,6 +985,7 @@ describe("model runtime panel", () => {
       registered: [],
       loadFailure: null,
       loading: false,
+      transition: null,
     };
     rerender(<ModelsView {...props} modelStatus={restarted} />);
 
@@ -1012,21 +1086,22 @@ describe("model runtime panel", () => {
       loadFailure:
         "model load failed; the daemon will serve without a model: registered model does not match the calibrated macOS runtime profile",
       loading: false,
+      transition: null,
     };
     const { rerender } = render(<ModelsView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });
     const alert = within(panel).getByRole("alert");
     expect(alert).toHaveTextContent(/calibrated macOS runtime profile/);
-    // Still startable: the daemon is up, the catalog is reachable.
+    // Still loadable: the daemon is up, the catalog is reachable.
     expect(
-      within(panel).getAllByRole("button", { name: "Restart PAM with this model" }).length,
+      within(panel).getAllByRole("button", { name: "Load" }).length,
     ).toBeGreaterThan(0);
 
     rerender(
       <ModelsView
         {...props}
-        modelStatus={{ status: "ok", loaded: registered[0], registered, loadFailure: null, loading: false }}
+        modelStatus={{ status: "ok", loaded: registered[0], registered, loadFailure: null, loading: false, transition: null }}
       />,
     );
     expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
@@ -1043,6 +1118,7 @@ describe("model runtime panel", () => {
       registered: [{ modelId: "qwen/qwen3-14b-instruct-q4", sizeBytes: 39_200_000_000 }],
       loadFailure: null,
       loading: true,
+      transition: null,
     };
     render(<ModelsView {...props} />);
 
@@ -1112,7 +1188,7 @@ describe("model runtime panel", () => {
 
   it("marks the runtime unreachable while PAM is paused with no registered model", async () => {
     const props = await modelProps("offline");
-    props.modelStatus = { status: "ok", loaded: null, registered: [], loadFailure: null, loading: false };
+    props.modelStatus = { status: "ok", loaded: null, registered: [], loadFailure: null, loading: false, transition: null };
     render(<ModelsView {...props} />);
 
     const panel = screen.getByRole("region", { name: "Model runtime" });

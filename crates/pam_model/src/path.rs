@@ -51,12 +51,21 @@ pub fn default_models_dir(home: &Path) -> PathBuf {
     home.join("llm")
 }
 
-/// The one persisted preference that can move the models root. Only the field
-/// this crate needs is read; the GUI owns writing the file.
+/// The persisted preferences this crate reads. Only the fields it needs are
+/// named; the GUI owns writing the file.
 #[derive(Debug, Default, Deserialize)]
-struct PersistedModelsDir {
+struct PersistedModelPreferences {
     #[serde(default)]
     models_dir: Option<String>,
+    #[serde(default)]
+    default_model: Option<String>,
+}
+
+fn persisted_preferences(data_dir: &Path) -> PersistedModelPreferences {
+    fs::read_to_string(data_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 /// The effective models download directory: the Settings-persisted override
@@ -69,11 +78,24 @@ struct PersistedModelsDir {
 /// file falls back to the default rather than failing an unrelated read.
 #[must_use]
 pub fn effective_models_dir(data_dir: &Path, home: &Path) -> PathBuf {
-    fs::read_to_string(data_dir.join("settings.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<PersistedModelsDir>(&text).ok())
-        .and_then(|persisted| persisted.models_dir)
+    persisted_preferences(data_dir)
+        .models_dir
         .map_or_else(|| default_models_dir(home), PathBuf::from)
+}
+
+/// The `vendor/name` a daemon start loads when it is given no explicit model,
+/// or `None` when no default is pinned.
+///
+/// It lives beside [`effective_models_dir`] for the same reason: the GUI shows
+/// and edits the pin, and the daemon acts on it, and the two must never read
+/// the preference file differently. Infallible by design — a missing or
+/// corrupt preference file means no default rather than a failed start, and
+/// the identity is only checked against the registry by whoever loads it.
+#[must_use]
+pub fn persisted_default_model(data_dir: &Path) -> Option<ModelKey> {
+    let raw = persisted_preferences(data_dir).default_model?;
+    let (vendor, name) = raw.split_once('/')?;
+    ModelKey::new(vendor, name).ok()
 }
 
 /// Returns `<home>/llm/<vendor>/<filename>` without creating it.

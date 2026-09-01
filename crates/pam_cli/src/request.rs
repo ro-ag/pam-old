@@ -168,6 +168,31 @@ impl RequestContext {
         ))
     }
 
+    pub(crate) fn model_load(
+        &self,
+        model: String,
+    ) -> Result<RequestEnvelope, ProtocolContractError> {
+        let (request_id, idempotency_key) = operation_ids("model-load");
+        RequestEnvelope::model_load(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+            model,
+        )
+        .map(|request| self.authenticate(request))
+    }
+
+    pub(crate) fn model_unload(&self) -> RequestEnvelope {
+        let (request_id, idempotency_key) = operation_ids("model-unload");
+        self.authenticate(RequestEnvelope::model_unload(
+            request_id,
+            self.caller_id.clone(),
+            self.project_id.clone(),
+            idempotency_key,
+        ))
+    }
+
     pub(crate) fn model_unregister(
         &self,
         model: String,

@@ -24,9 +24,9 @@ use pam_policy::{
 use pam_protocol::{
     BriefProvenance, BriefResult, CancellationDisposition, Event, EvidenceRedaction,
     EvidenceRetention, ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE, MAX_FRAME_SIZE,
-    ModelMessage, ModelRole, ModelSummary, OperationTruth, ProjectRequestState, RequestEnvelope,
-    RequestPayload, ResultBody, ResultPayload, ServerMessage, SourceAvailability,
-    decode_server_message, encode,
+    ModelMessage, ModelRole, ModelSummary, ModelTransition, ModelTransitionPhase, OperationTruth,
+    ProjectRequestState, RequestEnvelope, RequestPayload, ResultBody, ResultPayload, ServerMessage,
+    SourceAvailability, decode_server_message, encode,
 };
 use pam_store::{
     AcceptRequest, ApprovalDecision, AuditEventRecord, CallerRegistration, CancelOutcome,
@@ -38,13 +38,14 @@ use tokio::sync::oneshot;
 
 use super::lifecycle::{
     BriefProvider, DaemonConfig, MODEL_DELETE_WEIGHTS_LOADED_MESSAGE,
-    MODEL_UNREGISTER_LOADED_MESSAGE, Ownership, approval_recovery, cancellation_presentation,
-    clamp_activity_limit, degrade_after_model_load_failure, grant_recovery,
-    model_delete_weights_loaded_refusal, model_runtime_result, model_status_result,
-    model_sweep_result, model_unregister_loaded_refusal, model_verification, model_verify_truth,
-    policy_resource, prepare_endpoint, protocol_activity_event, protocol_caller_summary,
-    protocol_project_current, request_audit_event_id, request_preflight, serve_until_with_delay,
-    weights_refusal_failure,
+    MODEL_TRANSITION_BUSY_MESSAGE, MODEL_UNLOAD_NONE_MESSAGE, MODEL_UNREGISTER_LOADED_MESSAGE,
+    Ownership, approval_recovery, cancellation_presentation, clamp_activity_limit,
+    degrade_after_model_load_failure, grant_recovery, missing_default_model_message,
+    model_delete_weights_loaded_refusal, model_load_failure_message, model_runtime_result,
+    model_status_result, model_sweep_result, model_transition_busy,
+    model_unregister_loaded_refusal, model_verification, model_verify_truth, policy_resource,
+    prepare_endpoint, protocol_activity_event, protocol_caller_summary, protocol_project_current,
+    request_audit_event_id, request_preflight, serve_until_with_delay, weights_refusal_failure,
 };
 use crate::DaemonError;
 use crate::logging::{DaemonLog, LogLevel};
@@ -274,7 +275,9 @@ fn unregistering_the_loaded_model_is_refused_with_its_exact_recovery_command() {
     assert_eq!(failure.message, MODEL_UNREGISTER_LOADED_MESSAGE);
     assert_eq!(
         failure.recovery.as_deref(),
-        Some("restart PAM without this model using `pam daemon`, then unregister vendor/loaded")
+        Some(
+            "run `pam model unload` (or Unload in the Models view), then unregister vendor/loaded"
+        )
     );
 
     // Any other registered model unregisters while one is loaded, and so does
@@ -284,6 +287,91 @@ fn unregistering_the_loaded_model_is_refused_with_its_exact_recovery_command() {
         model_unregister_loaded_refusal(&request, "vendor/other", &other, Some(&loaded)).is_none()
     );
     assert!(model_unregister_loaded_refusal(&request, "vendor/other", &other, None).is_none());
+}
+
+#[test]
+fn loading_names_its_model_and_unloading_names_this_daemons_one_loaded_slot() {
+    let load = RequestEnvelope::model_load(
+        RequestId::from("model-load-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-load-key"),
+        "vendor/model",
+    )
+    .unwrap();
+    let resource = policy_resource(&load).unwrap();
+    assert_eq!(resource.as_str(), "model:vendor/model");
+    assert_eq!(
+        grant_recovery(&load, &Ok(resource)),
+        "pam access grant model.load --daemon --resource model:vendor/model"
+    );
+
+    // Unloading carries no model, so its authority is the slot itself: a grant
+    // cannot be pinned to a model that was swapped out from under it.
+    let unload = RequestEnvelope::model_unload(
+        RequestId::from("model-unload-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unload-key"),
+    );
+    let resource = policy_resource(&unload).unwrap();
+    assert_eq!(resource.as_str(), "models:loaded");
+    assert_eq!(
+        grant_recovery(&unload, &Ok(resource)),
+        "pam access grant model.unload --daemon --resource models:loaded"
+    );
+
+    // Both have a CLI surface that takes --approval-id, so a challenge is
+    // retryable rather than needing a protocol client.
+    let approval = ApprovalId::from("approval-load-1");
+    assert_eq!(
+        approval_recovery(&load, &approval),
+        "pam approval approve approval-load-1, then retry the original command with --approval-id approval-load-1"
+    );
+    assert_eq!(
+        approval_recovery(&unload, &approval),
+        "pam approval approve approval-load-1, then retry the original command with --approval-id approval-load-1"
+    );
+}
+
+#[test]
+fn a_second_model_transition_is_refused_while_one_is_running() {
+    let request = RequestEnvelope::model_unload(
+        RequestId::from("model-unload-1"),
+        CallerId::from("model-caller"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unload-key"),
+    );
+    let ResultBody::Failure(failure) = model_transition_busy(&request).body else {
+        panic!("a concurrent transition must be a failure");
+    };
+    assert_eq!(failure.code, FailureCode::Busy);
+    assert_eq!(failure.message, MODEL_TRANSITION_BUSY_MESSAGE);
+    assert_eq!(
+        failure.recovery.as_deref(),
+        Some("wait for `pam model status` to stop reporting a transition, then retry")
+    );
+    assert_eq!(
+        MODEL_UNLOAD_NONE_MESSAGE,
+        "no model is loaded in this daemon"
+    );
+}
+
+#[test]
+fn a_runtime_load_failure_and_a_stale_default_both_read_as_serving_without_a_model() {
+    // A load that fails in a running daemon leaves exactly the sentence a
+    // failed startup load leaves, so `model.status` reports one shape.
+    assert_eq!(
+        model_load_failure_message(&RuntimeError::InitializationFailed("weights drifted")),
+        "model load failed; the daemon will serve without a model: model runtime initialization failed: weights drifted"
+    );
+
+    // A default pointing at a registration that is gone says the plain thing
+    // rather than surfacing a store error, and never stops the start.
+    assert_eq!(
+        missing_default_model_message("vendor/gone"),
+        "the default model vendor/gone is no longer registered; the daemon will serve without a model"
+    );
 }
 
 #[test]
@@ -507,7 +595,7 @@ fn deleting_the_loaded_models_weights_is_refused_with_its_exact_recovery_command
     assert_eq!(
         failure.recovery.as_deref(),
         Some(
-            "restart PAM without this model using `pam daemon`, then delete the weights for vendor/loaded"
+            "run `pam model unload` (or Unload in the Models view), then delete the weights for vendor/loaded"
         )
     );
 
@@ -650,6 +738,7 @@ fn stale_socket_reports_recovery_command() {
         endpoint,
         recover: false,
         model: None,
+        model_from_default: false,
         state_path: Some(runtime.join("state.sqlite3")),
         brief_provider: None,
         connector_secret_backend: None,
@@ -1133,6 +1222,7 @@ fn start_daemon_with_provider(
             endpoint,
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path),
             brief_provider,
             connector_secret_backend: None,
@@ -1165,6 +1255,7 @@ fn start_daemon_loading_for(
             endpoint,
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path),
             brief_provider: None,
             connector_secret_backend: None,
@@ -1197,6 +1288,7 @@ fn start_secure_daemon(
             endpoint,
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path),
             brief_provider: None,
             connector_secret_backend: None,
@@ -2628,6 +2720,7 @@ async fn status_reports_only_queued_project_work_without_waiting_for_active_work
             endpoint: endpoint.clone(),
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(state_path.clone()),
             brief_provider: None,
             connector_secret_backend: None,
@@ -2678,6 +2771,7 @@ async fn daemon_parallelizes_projects_but_serializes_each_project() {
             endpoint: endpoint.clone(),
             recover: false,
             model: None,
+            model_from_default: false,
             state_path: Some(runtime.join("state.sqlite3")),
             brief_provider: None,
             connector_secret_backend: None,
@@ -3165,10 +3259,28 @@ fn activity_event_summaries_drop_redacted_detail_and_retention() {
 
 #[test]
 fn model_status_reports_the_loaded_model_without_path_or_digest() {
-    let empty = model_status_result(None, Vec::new(), None).unwrap();
+    let empty = model_status_result(None, Vec::new(), None, None).unwrap();
     assert!(empty.loaded.is_none());
     assert!(empty.registered.is_empty());
     assert!(empty.load_failure.is_none());
+    assert!(empty.transition.is_none());
+
+    // A load or unload in flight is reported for as long as it runs, so the
+    // surface says "loading" rather than an unexplained empty slot.
+    let moving = model_status_result(
+        None,
+        Vec::new(),
+        None,
+        Some(ModelTransition {
+            phase: ModelTransitionPhase::Loading,
+            model: "vendor/model-a".to_owned(),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        moving.transition.map(|transition| transition.phase),
+        Some(ModelTransitionPhase::Loading)
+    );
 
     // A degraded daemon reports why nothing is loaded, and a successful load
     // reports no failure at all.
@@ -3176,6 +3288,7 @@ fn model_status_reports_the_loaded_model_without_path_or_digest() {
         None,
         Vec::new(),
         Some("model load failed: reason".to_owned()),
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -3184,7 +3297,7 @@ fn model_status_reports_the_loaded_model_without_path_or_digest() {
     );
 
     let key = ModelKey::new("vendor", "model-a").unwrap();
-    let status = model_status_result(Some((&key, 42)), Vec::new(), None).unwrap();
+    let status = model_status_result(Some((&key, 42)), Vec::new(), None, None).unwrap();
     let encoded = encode(&status).unwrap();
     for secret_field in [&b"path"[..], b"digest", b"license"] {
         assert!(
@@ -3207,7 +3320,7 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
 
     // Nothing loaded: the catalog still surfaces every registered model, so a
     // registered-but-not-loaded model stays reachable.
-    let status = model_status_result(None, vec![on_deck.clone()], None).unwrap();
+    let status = model_status_result(None, vec![on_deck.clone()], None, None).unwrap();
     assert!(status.loaded.is_none());
     assert_eq!(status.registered, vec![on_deck.clone()]);
 
@@ -3215,6 +3328,7 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
     let status = model_status_result(
         Some((&loaded_key, 42)),
         vec![loaded_entry.clone(), on_deck.clone()],
+        None,
         None,
     )
     .unwrap();
@@ -3225,7 +3339,8 @@ fn model_status_lists_the_registered_catalog_beyond_the_loaded_model() {
     );
 
     // Loaded but absent from the catalog: the serving model is never hidden.
-    let status = model_status_result(Some((&loaded_key, 42)), vec![on_deck.clone()], None).unwrap();
+    let status =
+        model_status_result(Some((&loaded_key, 42)), vec![on_deck.clone()], None, None).unwrap();
     assert_eq!(status.registered, vec![on_deck, loaded_entry]);
 }
 

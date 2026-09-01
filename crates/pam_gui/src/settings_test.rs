@@ -3,7 +3,8 @@ use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use crate::settings::{
-    delete_logs, effective_models_dir, is_known_location, snapshot, update_models_dir,
+    delete_logs, effective_models_dir, is_known_location, persisted_default_model, snapshot,
+    update_default_model, update_models_dir,
 };
 
 struct TestDirs {
@@ -41,6 +42,107 @@ fn snapshot_defaults_to_home_llm_with_no_persisted_override() {
     assert_eq!(snap.flows_dir, dirs.data_dir.join(".pam/flows"));
     assert_eq!(snap.logs_dir, dirs.data_dir.join("logs"));
     assert_eq!(snap.logs_size_bytes, 0);
+    // No pin: a daemon start with no explicit model starts with no model.
+    assert_eq!(snap.default_model, None);
+    assert_eq!(persisted_default_model(&dirs.data_dir), None);
+}
+
+/// The pin is the whole of #239: persist it, reuse it on the next start, and
+/// be able to take it back off.
+#[test]
+fn the_default_model_is_persisted_readable_and_clearable() {
+    let dirs = TestDirs::new("default-model");
+
+    let snap = update_default_model(
+        &dirs.data_dir,
+        &dirs.home,
+        Some("qwen/qwen3-4b-instruct".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(
+        snap.default_model.as_deref(),
+        Some("qwen/qwen3-4b-instruct")
+    );
+    // The daemon reads the same file through `pam_model`, so what the GUI
+    // wrote is exactly what the next start loads.
+    assert_eq!(
+        persisted_default_model(&dirs.data_dir).map(|key| key.id()),
+        Some("qwen/qwen3-4b-instruct".to_owned())
+    );
+    assert_eq!(
+        snapshot(&dirs.data_dir, &dirs.home)
+            .default_model
+            .as_deref(),
+        Some("qwen/qwen3-4b-instruct")
+    );
+
+    // Changing the pin replaces it rather than accumulating pins.
+    let snap = update_default_model(
+        &dirs.data_dir,
+        &dirs.home,
+        Some("qwen/qwen3-8b-instruct".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(
+        snap.default_model.as_deref(),
+        Some("qwen/qwen3-8b-instruct")
+    );
+
+    // Clearing it is possible: PAM starts with no model at all.
+    let cleared = update_default_model(&dirs.data_dir, &dirs.home, None).unwrap();
+    assert_eq!(cleared.default_model, None);
+    assert_eq!(persisted_default_model(&dirs.data_dir), None);
+}
+
+/// The pin and the models directory live in one file and must not clobber
+/// each other: writing either preserves the other.
+#[test]
+fn the_default_model_and_the_models_directory_persist_side_by_side() {
+    let dirs = TestDirs::new("default-model-and-dir");
+    let custom = dirs.home.join("custom-models");
+
+    update_models_dir(
+        &dirs.data_dir,
+        &dirs.home,
+        Some(custom.to_str().unwrap().to_owned()),
+    )
+    .unwrap();
+    let snap = update_default_model(
+        &dirs.data_dir,
+        &dirs.home,
+        Some("qwen/qwen3-4b-instruct".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(snap.models_dir, custom);
+    assert_eq!(
+        snap.default_model.as_deref(),
+        Some("qwen/qwen3-4b-instruct")
+    );
+
+    let snap = update_models_dir(&dirs.data_dir, &dirs.home, None).unwrap();
+    assert!(snap.models_dir_is_default);
+    assert_eq!(
+        snap.default_model.as_deref(),
+        Some("qwen/qwen3-4b-instruct")
+    );
+}
+
+#[test]
+fn a_default_model_that_is_not_a_vendor_name_pair_is_refused_and_never_persisted() {
+    let dirs = TestDirs::new("default-model-invalid");
+    for invalid in [
+        "not-a-pair",
+        "qwen/",
+        "/model",
+        "qwen/a/b",
+        "qwen/../escape",
+    ] {
+        assert!(
+            update_default_model(&dirs.data_dir, &dirs.home, Some(invalid.to_owned())).is_err(),
+            "{invalid:?} must be refused"
+        );
+    }
+    assert_eq!(persisted_default_model(&dirs.data_dir), None);
 }
 
 #[test]

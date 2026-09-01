@@ -26,9 +26,10 @@ use pam_protocol::{
     CallerSummary, ConnectorConfigureResult, ConnectorCredentialAction, ConnectorListResult,
     ConnectorSummary, ConnectorTestDisposition, ConnectorTestResult, DaemonLogsResult,
     DaemonStatsResult, FailureCode, FlowProjectRoot, LogSeverity, MAX_MODEL_OUTPUT_TOKENS,
-    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelMessage, ModelRole,
-    ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnregisterResult, ModelVerifyResult,
-    ProjectRequestState, ProjectRequestSummary, ProjectUsageSummary, ResetResult, ResetTier,
+    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelLoadResult,
+    ModelMessage, ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult, ModelUnloadResult,
+    ModelUnregisterResult, ModelVerifyResult, ProjectRequestState, ProjectRequestSummary,
+    ProjectUsageSummary, ResetResult, ResetTier,
 };
 use pam_store::Store;
 use serde::{Deserialize, Serialize};
@@ -71,8 +72,8 @@ use crate::{
     observatory::{
         ObservatoryState, load_caller_registry, load_connector_registry, load_daemon_activity,
         load_daemon_logs, load_daemon_stats, load_model_status, run_connector_configure,
-        run_connector_test, run_model_delete_weights, run_model_infer, run_model_sweep,
-        run_model_unregister, run_model_verify, run_reset,
+        run_connector_test, run_model_delete_weights, run_model_infer, run_model_load,
+        run_model_sweep, run_model_unload, run_model_unregister, run_model_verify, run_reset,
     },
     settings,
     skill_audit::{SkillAuditDto, load_persisted_skill_audit, run_skill_audit_report},
@@ -754,6 +755,16 @@ pub struct CallerDto {
     pub kind: Option<String>,
 }
 
+/// One model change in flight in the running daemon.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTransitionDto {
+    /// `loading` or `unloading`.
+    pub phase: String,
+    /// The `vendor/name` being loaded, or being dropped.
+    pub model: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "status",
@@ -772,6 +783,12 @@ pub enum ModelStatusDto {
         /// its model load is still in flight. `false` for every daemon that
         /// answered, and for one this GUI does not own a handle on.
         loading: bool,
+        /// The load or unload the daemon is running right now, as `loading`
+        /// or `unloading`, with the model it names. `None` when the surface
+        /// is settled. Distinct from `loading` above, which is this GUI
+        /// inferring a startup load from a daemon that cannot answer yet;
+        /// this is the running daemon reporting a change in its own words.
+        transition: Option<ModelTransitionDto>,
     },
     Blocked {
         failure: FailureDto,
@@ -871,6 +888,46 @@ pub struct ModelUsageDto {
 )]
 pub enum ModelImportDto {
     Ok,
+    Blocked { failure: FailureDto },
+    Unavailable { failure: FailureDto },
+}
+
+/// Acknowledgement of one model brought into the running daemon.
+///
+/// `previous` names the model this load displaced, so the view can say what
+/// left as well as what arrived. `alreadyLoaded` marks the no-op: the daemon
+/// was already serving this exact model and nothing moved.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelLoadDto {
+    Ok {
+        model: String,
+        size_bytes: u64,
+        previous: Option<String>,
+        already_loaded: bool,
+    },
+    Blocked {
+        failure: FailureDto,
+    },
+    Unavailable {
+        failure: FailureDto,
+    },
+}
+
+/// Acknowledgement of one model dropped from the running daemon. The registry
+/// row and the weights both stay: only the mapping goes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelUnloadDto {
+    Ok { model: String, size_bytes: u64 },
     Blocked { failure: FailureDto },
     Unavailable { failure: FailureDto },
 }
@@ -1197,6 +1254,11 @@ pub struct HostMemoryDto {
 pub struct AppSettingsDto {
     pub models_dir: String,
     pub models_dir_is_default: bool,
+    /// The `vendor/name` a daemon start loads when the GUI asks for no
+    /// specific model, or `null` when PAM starts with no model at all. It is
+    /// a pin, not a promise: a model that is later unregistered stays pinned
+    /// here until it is changed, and the daemon says plainly that it is gone.
+    pub default_model: Option<String>,
     pub data_dir: String,
     pub flows_dir: String,
     pub logs_dir: String,
@@ -2250,6 +2312,9 @@ impl DesktopCore {
                                     // Decided under the lock below, where the
                                     // spawned child handle lives.
                                     loading: false,
+                                    // A daemon that cannot answer cannot be
+                                    // reporting a transition either.
+                                    transition: None,
                                 },
                                 true,
                             ),
@@ -2345,6 +2410,65 @@ impl DesktopCore {
                 ),
             },
         };
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Brings one registered model into the running daemon, without stopping
+    /// and restarting it.
+    ///
+    /// This is the whole point of the capability: changing models used to mean
+    /// a stop and a start carrying `--model`, and now it is one call against
+    /// the daemon that is already serving. The daemon owns the swap and does
+    /// it old-before-new, so this never asks the Mac to hold two models at
+    /// once. Policy and approval refusals are blocked in the returned DTO with
+    /// recovery text; a load that fails — unregistered model, weights that no
+    /// longer map, another transition already running — is unavailable with
+    /// the daemon's own recovery line.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused, or
+    /// when the model identity violates the protocol contract before any
+    /// daemon exchange.
+    pub async fn model_load(
+        &self,
+        fence: CommandFence,
+        model: String,
+    ) -> DesktopResult<ModelLoadDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_load(caller, credential, model)
+                .await
+                .map_err(|error| DesktopErrorDto::invalid_input(error.to_string()))?,
+            Err(state) => state,
+        };
+        let data = model_load_dto(observed);
+        let state = self.inner.lock().await;
+        ensure_scope_matches(&state, &scope, &fence)?;
+        Ok(data)
+    }
+
+    /// Drops the loaded model and frees its memory, leaving PAM serving.
+    ///
+    /// Nothing durable goes: the registration and the weights both stay, and
+    /// [`Self::model_load`] brings the same model back. Inference afterwards
+    /// answers the same not-loaded failure it answers before any model is
+    /// loaded at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is invalid, stale, or reused.
+    pub async fn model_unload(&self, fence: CommandFence) -> DesktopResult<ModelUnloadDto> {
+        let _command = self.command_gate.lock().await;
+        let scope = self.begin_scoped(&fence).await?;
+        let observed = match observatory_credential().await {
+            Ok((caller, credential)) => run_model_unload(caller, credential).await,
+            Err(state) => state,
+        };
+        let data = model_unload_dto(observed);
         let state = self.inner.lock().await;
         ensure_scope_matches(&state, &scope, &fence)?;
         Ok(data)
@@ -2780,6 +2904,35 @@ impl DesktopCore {
         let home = settings::resolve_home()
             .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
         settings::update_models_dir(&data_dir, &home, models_dir)
+            .map(|snapshot| app_settings_dto(&snapshot))
+            .map_err(|failure| DesktopErrorDto::invalid_input(failure.detail))
+    }
+
+    /// Pins (or clears, with `model: None`) the model a daemon start loads
+    /// when the GUI asks for no specific one.
+    ///
+    /// A separate command from [`Self::settings_update`] on purpose: that one
+    /// treats `None` as "clear the override", so a single call could never
+    /// carry both preferences and still tell "leave this alone" from "clear
+    /// it". A daemon start reads the pin fresh, so nothing in memory needs
+    /// invalidating.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded error when the fence is not the exact daemon
+    /// authority, its operation UUID was replayed, or `model` is not a
+    /// bounded `vendor/name` pair.
+    pub async fn settings_set_default_model(
+        &self,
+        fence: CommandFence,
+        model: Option<String>,
+    ) -> DesktopResult<AppSettingsDto> {
+        let _command = self.command_gate.lock().await;
+        self.begin_daemon(&fence).await?;
+        let data_dir = settings_data_dir()?;
+        let home = settings::resolve_home()
+            .map_err(|failure| DesktopErrorDto::unavailable(failure.detail, failure.recovery))?;
+        settings::update_default_model(&data_dir, &home, model)
             .map(|snapshot| app_settings_dto(&snapshot))
             .map_err(|failure| DesktopErrorDto::invalid_input(failure.detail))
     }
@@ -4773,12 +4926,14 @@ fn mark_model_loading(status: ModelStatusDto, child_slot: &mut Option<Child>) ->
             loaded: None,
             registered,
             load_failure: None,
+            transition: None,
             ..
         } => ModelStatusDto::Ok {
             loaded: None,
             registered,
             load_failure: None,
             loading: daemon_child_running(child_slot),
+            transition: None,
         },
         other => other,
     }
@@ -4798,8 +4953,13 @@ fn model_status_dto(state: ObservatoryState<ModelStatusResult>) -> ModelStatusDt
             loaded: result.loaded.as_ref().map(model_summary_dto),
             registered: result.registered.iter().map(model_summary_dto).collect(),
             load_failure: result.load_failure.map(bounded_detail),
-            // A daemon that answered is past its load, whatever it reports.
+            // A daemon that answered is past its *startup* load, whatever it
+            // reports; a load it is running now arrives as a transition.
             loading: false,
+            transition: result.transition.map(|transition| ModelTransitionDto {
+                phase: transition.phase.as_str().to_owned(),
+                model: bounded_detail(transition.model),
+            }),
         },
         ObservatoryState::Blocked {
             code,
@@ -4935,6 +5095,54 @@ async fn registered_model_catalog_in(state_path: PathBuf) -> Option<Vec<ModelSum
         .ok()?;
     shutdown.ok()?;
     Some(summaries.iter().map(model_summary_dto).collect())
+}
+
+fn model_load_dto(state: ObservatoryState<ModelLoadResult>) -> ModelLoadDto {
+    match state {
+        ObservatoryState::Available(result) => ModelLoadDto::Ok {
+            model: bounded_detail(result.model),
+            size_bytes: result.size_bytes,
+            previous: result.previous.map(bounded_detail),
+            already_loaded: result.already_loaded,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelLoadDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelLoadDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
+}
+
+fn model_unload_dto(state: ObservatoryState<ModelUnloadResult>) -> ModelUnloadDto {
+    match state {
+        ObservatoryState::Available(result) => ModelUnloadDto::Ok {
+            model: bounded_detail(result.model),
+            size_bytes: result.size_bytes,
+        },
+        ObservatoryState::Blocked {
+            code,
+            detail,
+            recovery,
+        } => ModelUnloadDto::Blocked {
+            failure: failure_dto(&code, detail, recovery),
+        },
+        ObservatoryState::Unavailable {
+            code,
+            detail,
+            recovery,
+        } => ModelUnloadDto::Unavailable {
+            failure: unavailable_failure(code, detail, recovery),
+        },
+    }
 }
 
 fn model_unregister_dto(state: ObservatoryState<ModelUnregisterResult>) -> ModelUnregisterDto {
@@ -5447,6 +5655,7 @@ fn app_settings_dto(snapshot: &settings::AppSettingsSnapshot) -> AppSettingsDto 
     AppSettingsDto {
         models_dir: snapshot.models_dir.to_string_lossy().into_owned(),
         models_dir_is_default: snapshot.models_dir_is_default,
+        default_model: snapshot.default_model.clone(),
         data_dir: snapshot.data_dir.to_string_lossy().into_owned(),
         flows_dir: snapshot.flows_dir.to_string_lossy().into_owned(),
         logs_dir: snapshot.logs_dir.to_string_lossy().into_owned(),
@@ -5909,6 +6118,18 @@ pub(crate) fn model_unregister_dto_for_test(
     state: ObservatoryState<ModelUnregisterResult>,
 ) -> ModelUnregisterDto {
     model_unregister_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_load_dto_for_test(state: ObservatoryState<ModelLoadResult>) -> ModelLoadDto {
+    model_load_dto(state)
+}
+
+#[cfg(test)]
+pub(crate) fn model_unload_dto_for_test(
+    state: ObservatoryState<ModelUnloadResult>,
+) -> ModelUnloadDto {
+    model_unload_dto(state)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 //! GUI-owned Settings v1: visibility into where PAM keeps things, plus the
-//! one persisted preference so far — a custom models download directory.
+//! persisted preferences — a custom models download directory, and the model
+//! a daemon start loads when it is given no explicit one.
 //!
 //! Every function here takes its directories as parameters rather than
 //! calling `pam_platform::user_data_dir()` itself, so tests point at a
@@ -12,12 +13,14 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use pam_model::ModelKey;
 use serde::{Deserialize, Serialize};
 
-// The models root is resolved by `pam_model`, not here: the daemon's registry
-// health capabilities gate weights deletion on containment in this exact
-// directory, so the GUI and the daemon must read one implementation.
-pub(crate) use pam_model::{default_models_dir, effective_models_dir};
+// The models root and the default-model pin are resolved by `pam_model`, not
+// here: the daemon's registry health capabilities gate weights deletion on
+// containment in this exact directory, and the daemon acts on the pin at every
+// start, so the GUI and the daemon must read one implementation.
+pub(crate) use pam_model::{default_models_dir, effective_models_dir, persisted_default_model};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const LOGS_DIR_NAME: &str = "logs";
@@ -43,19 +46,28 @@ impl SettingsFailure {
     }
 }
 
-/// The one preference Settings v1 persists, read and written as small JSON
-/// next to the daemon's durable state.
+/// The preferences Settings v1 persists, read and written as small JSON next
+/// to the daemon's durable state.
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 struct PersistedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models_dir: Option<String>,
+    /// The `vendor/name` a daemon start loads when nothing explicit is asked
+    /// for. Absent means no default: PAM starts serving with no model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_model: Option<String>,
 }
 
-/// Today's complete Settings snapshot: every location the GUI shows.
+/// Today's complete Settings snapshot: every location the GUI shows, and the
+/// model a start would load.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AppSettingsSnapshot {
     pub(crate) models_dir: PathBuf,
     pub(crate) models_dir_is_default: bool,
+    /// The pinned `vendor/name`, or `None` when no default is set. Never
+    /// checked against the registry here: whether the pin still resolves is
+    /// the daemon's answer at load time, not a settings read.
+    pub(crate) default_model: Option<String>,
     pub(crate) data_dir: PathBuf,
     pub(crate) flows_dir: PathBuf,
     pub(crate) logs_dir: PathBuf,
@@ -93,8 +105,8 @@ fn flows_dir_for(data_dir: &Path) -> PathBuf {
 }
 
 /// Reads the persisted preferences, tolerating a missing or unreadable file:
-/// Settings v1 has exactly one preference, and losing it is recoverable by
-/// re-entering it — never worth failing an unrelated read for.
+/// every preference here is recoverable by re-entering it — never worth
+/// failing an unrelated read for.
 fn load_persisted(data_dir: &Path) -> PersistedSettings {
     fs::read_to_string(settings_path(data_dir))
         .ok()
@@ -140,6 +152,7 @@ pub(crate) fn snapshot(data_dir: &Path, home: &Path) -> AppSettingsSnapshot {
     AppSettingsSnapshot {
         models_dir_is_default: models_dir == default_models_dir,
         models_dir,
+        default_model: persisted_default_model(data_dir).map(|key| key.id()),
         flows_dir: flows_dir_for(data_dir),
         data_dir: data_dir.to_path_buf(),
         logs_size_bytes: logs_size_bytes(&logs_dir),
@@ -191,6 +204,47 @@ pub(crate) fn update_models_dir(
         .map(|path| path.to_string_lossy().into_owned());
     write_persisted(data_dir, &persisted)?;
     Ok(snapshot(data_dir, home))
+}
+
+/// Validates and persists the model a daemon start loads when it is given no
+/// explicit one, or clears the pin back to "start with no model" when
+/// `new_model` is `None`.
+///
+/// Validation is identity only — the same bounded `vendor/name` contract the
+/// protocol enforces — and deliberately not a registry lookup. A pin whose
+/// model is later unregistered must stay settable and clearable from here;
+/// whether it still resolves is the daemon's answer when it tries to load it,
+/// and it says so plainly instead of failing the start.
+///
+/// # Errors
+///
+/// Returns [`SettingsFailure`] when `new_model` is not a bounded
+/// `vendor/name` pair.
+pub(crate) fn update_default_model(
+    data_dir: &Path,
+    home: &Path,
+    new_model: Option<String>,
+) -> Result<AppSettingsSnapshot, SettingsFailure> {
+    let mut persisted = load_persisted(data_dir);
+    persisted.default_model = new_model
+        .map(|raw| validate_default_model(&raw))
+        .transpose()?;
+    write_persisted(data_dir, &persisted)?;
+    Ok(snapshot(data_dir, home))
+}
+
+fn validate_default_model(raw: &str) -> Result<String, SettingsFailure> {
+    let trimmed = raw.trim();
+    trimmed
+        .split_once('/')
+        .and_then(|(vendor, name)| ModelKey::new(vendor, name).ok())
+        .map(|key| key.id())
+        .ok_or_else(|| {
+            SettingsFailure::new(
+                "The default model must be a registered vendor/name pair.",
+                "Pick a model from the Models view, then retry.",
+            )
+        })
 }
 
 /// Deletes the on-disk daemon log files, if any exist. Never touches the

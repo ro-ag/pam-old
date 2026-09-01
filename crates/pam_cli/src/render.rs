@@ -598,6 +598,23 @@ fn render_success(payload: &ResultPayload, truth: &OperationTruth) -> String {
             result.registered_at_ms,
             truth_label(truth)
         ),
+        ResultPayload::ModelLoad(result) => format!(
+            "model={} size_bytes={} previous={} already_loaded={} truth={}\n",
+            escape_text(&result.model),
+            result.size_bytes,
+            result
+                .previous
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |model| escape_text(model)),
+            result.already_loaded,
+            truth_label(truth)
+        ),
+        ResultPayload::ModelUnload(result) => format!(
+            "model={} size_bytes={} truth={}\n",
+            escape_text(&result.model),
+            result.size_bytes,
+            truth_label(truth)
+        ),
         ResultPayload::ModelUnregister(result) => format!(
             "model={} size_bytes={} digest={} truth={}\n",
             escape_text(&result.model),

@@ -11,10 +11,10 @@ use pam_gui::{
     FlowWorkspaceDto, GenerationId, HealthDto, HostMemoryDto, ModelDeleteWeightsDto,
     ModelDownloadDto, ModelDownloadSourceParams, ModelDownloadStatusDto, ModelImportDto,
     ModelImportParams, ModelImportStatusDto, ModelInferDto, ModelInspectDto,
-    ModelLicenseDiscoveryDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto, ModelSweepDto,
-    ModelUnregisterDto, ModelUrlDownloadParams, ModelVerifyDto, OperationId, ProjectHandle,
-    ResetDto, ResetTier, SkillAuditDto, SkillInventoryDto, SkillLibraryDto, SkillLibraryRequest,
-    SnapshotDto,
+    ModelLicenseDiscoveryDto, ModelLoadDto, ModelMessageDto, ModelPresetsDto, ModelStatusDto,
+    ModelSweepDto, ModelUnloadDto, ModelUnregisterDto, ModelUrlDownloadParams, ModelVerifyDto,
+    OperationId, ProjectHandle, ResetDto, ResetTier, SkillAuditDto, SkillInventoryDto,
+    SkillLibraryDto, SkillLibraryRequest, SnapshotDto,
 };
 use serde::{Deserialize, Deserializer, de::Error as _};
 use tauri::State;
@@ -248,6 +248,32 @@ pub(crate) struct ModelInferRequest {
     messages: Vec<ModelMessageDto>,
     #[serde(default)]
     max_output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelLoadRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    model: String,
+}
+
+/// Pinning the default model names it; clearing the pin names none.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SettingsDefaultModelRequest {
+    #[serde(deserialize_with = "canonical_uuid")]
+    project_handle: ProjectHandle,
+    #[serde(deserialize_with = "canonical_uuid")]
+    generation: GenerationId,
+    #[serde(deserialize_with = "canonical_uuid")]
+    operation_id: OperationId,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -775,6 +801,32 @@ pub(crate) async fn model_import(
 }
 
 #[tauri::command]
+pub(crate) async fn model_load(
+    state: State<'_, DesktopState>,
+    request: ModelLoadRequest,
+) -> Result<ModelLoadDto, DesktopErrorDto> {
+    state
+        .core
+        .model_load(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn model_unload(
+    state: State<'_, DesktopState>,
+    request: FencedRequest,
+) -> Result<ModelUnloadDto, DesktopErrorDto> {
+    state.core.model_unload(request.into_fence()).await
+}
+
+#[tauri::command]
 pub(crate) async fn model_unregister(
     state: State<'_, DesktopState>,
     request: ModelUnregisterRequest,
@@ -952,6 +1004,24 @@ pub(crate) async fn settings_update(
                 request.operation_id,
             ),
             request.models_dir,
+        )
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn settings_set_default_model(
+    state: State<'_, DesktopState>,
+    request: SettingsDefaultModelRequest,
+) -> Result<AppSettingsDto, DesktopErrorDto> {
+    state
+        .core
+        .settings_set_default_model(
+            fence(
+                request.project_handle,
+                request.generation,
+                request.operation_id,
+            ),
+            request.model,
         )
         .await
 }

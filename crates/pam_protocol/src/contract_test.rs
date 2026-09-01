@@ -13,13 +13,13 @@ use super::{
     EvidenceRedaction, EvidenceRetention, ExpectedTargetKind, FailureCode, MAX_EVIDENCE_CHUNK_SIZE,
     MAX_FLOW_PROJECT_ROOT_BYTES, MAX_FRAME_SIZE, MAX_MODEL_MESSAGE_BYTES, MAX_MODEL_OUTPUT_BYTES,
     MAX_MODEL_OUTPUT_TOKENS, MAX_PROJECT_CURRENT_QUEUED, MAX_PROJECT_OPERATION_KIND_BYTES,
-    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelMessage,
-    ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult,
-    ModelUnregisterResult, ModelUsage, ModelVerification, ModelVerifyResult,
-    NetworkDiagnosticsResult, OperationTruth, OrphanWeightsSummary, PROTOCOL_VERSION, PacState,
-    ProjectCurrentResult, ProjectRequestState, ProjectRequestSummary, ProtocolContractError,
-    ReplayResult, RequestEnvelope, RequestPayload, ResultBody, ResultEnvelope, ResultPayload,
-    SourceAvailability, StatusResult,
+    ModelDeleteWeightsResult, ModelFinishReason, ModelGenerationResult, ModelLoadResult,
+    ModelMessage, ModelRegistration, ModelRole, ModelStatusResult, ModelSummary, ModelSweepResult,
+    ModelTransition, ModelTransitionPhase, ModelUnloadResult, ModelUnregisterResult, ModelUsage,
+    ModelVerification, ModelVerifyResult, NetworkDiagnosticsResult, OperationTruth,
+    OrphanWeightsSummary, PROTOCOL_VERSION, PacState, ProjectCurrentResult, ProjectRequestState,
+    ProjectRequestSummary, ProtocolContractError, ReplayResult, RequestEnvelope, RequestPayload,
+    ResultBody, ResultEnvelope, ResultPayload, SourceAvailability, StatusResult,
 };
 
 const PROJECT_ROOT: &str = "/canonical/project";
@@ -178,6 +178,7 @@ fn model_status_is_authenticated_policy_named_and_free_of_path_or_digest_fields(
         loaded: Some(summary.clone()),
         registered: vec![summary],
         load_failure: None,
+        transition: None,
     });
     let encoded = rmp_serde::to_vec_named(&result).unwrap();
     let rendered = String::from_utf8_lossy(&encoded).into_owned();
@@ -1349,6 +1350,153 @@ fn model_register_rejects_registrations_the_registry_could_not_hold() {
 
         assert_eq!(error, ProtocolContractError::InvalidModelRegistration);
     }
+}
+
+#[test]
+fn model_load_and_unload_are_separate_policy_names_and_payloads() {
+    let load = RequestEnvelope::model_load(
+        RequestId::from("model-load-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-load-key"),
+        "qwen/qwen3-4b",
+    )
+    .unwrap();
+
+    assert_eq!(load.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(load.capability, Capability::ModelLoad);
+    assert_eq!(load.capability.policy_name(), "model.load");
+    assert_eq!(
+        load.payload,
+        RequestPayload::ModelLoad {
+            model: "qwen/qwen3-4b".to_owned()
+        }
+    );
+    assert!(load.validate_model_request().is_ok());
+
+    let unload = RequestEnvelope::model_unload(
+        RequestId::from("model-unload-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unload-key"),
+    );
+
+    assert_eq!(unload.capability, Capability::ModelUnload);
+    assert_eq!(unload.capability.policy_name(), "model.unload");
+    assert_eq!(unload.payload, RequestPayload::ModelUnload);
+    // Unloading names no model on the wire: it drops whatever this daemon
+    // holds, so there is no identity a caller could get wrong.
+    assert!(unload.validate_model_request().is_ok());
+}
+
+#[test]
+fn model_load_rejects_identities_the_registry_could_never_hold() {
+    for model in [
+        "not-a-vendor-name",
+        "qwen/",
+        "/qwen3-4b",
+        "qwen/../escape",
+        "",
+    ] {
+        let error = RequestEnvelope::model_load(
+            RequestId::from("model-load-1"),
+            CallerId::from("gui-1"),
+            ProjectId::daemon_scope(),
+            IdempotencyKey::from("model-load-key"),
+            model,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ProtocolContractError::InvalidModelIdentity);
+    }
+}
+
+#[test]
+fn model_load_and_unload_round_trip_their_requests_and_acknowledgements() {
+    let load = RequestEnvelope::model_load(
+        RequestId::from("model-load-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-load-key"),
+        "qwen/qwen3-4b",
+    )
+    .unwrap();
+    let encoded = crate::encode(&load).unwrap();
+    assert_eq!(crate::decode_request(&encoded).unwrap(), load);
+
+    let unload = RequestEnvelope::model_unload(
+        RequestId::from("model-unload-1"),
+        CallerId::from("gui-1"),
+        ProjectId::daemon_scope(),
+        IdempotencyKey::from("model-unload-key"),
+    );
+    let encoded = crate::encode(&unload).unwrap();
+    assert_eq!(crate::decode_request(&encoded).unwrap(), unload);
+
+    let loaded = crate::ServerMessage::Result(ResultEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: RequestId::from("model-load-1"),
+        project_id: ProjectId::daemon_scope(),
+        body: ResultBody::Success {
+            truth: OperationTruth::Changed,
+            payload: ResultPayload::ModelLoad(ModelLoadResult {
+                model: "qwen/qwen3-4b".to_owned(),
+                size_bytes: 4096,
+                previous: Some("qwen/qwen3-1.7b".to_owned()),
+                already_loaded: false,
+            }),
+        },
+    });
+    let encoded = crate::encode(&loaded).unwrap();
+    assert_eq!(crate::decode_server_message(&encoded).unwrap(), loaded);
+
+    let unloaded = crate::ServerMessage::Result(ResultEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: RequestId::from("model-unload-1"),
+        project_id: ProjectId::daemon_scope(),
+        body: ResultBody::Success {
+            truth: OperationTruth::Changed,
+            payload: ResultPayload::ModelUnload(ModelUnloadResult {
+                model: "qwen/qwen3-4b".to_owned(),
+                size_bytes: 4096,
+            }),
+        },
+    });
+    let encoded = crate::encode(&unloaded).unwrap();
+    assert_eq!(crate::decode_server_message(&encoded).unwrap(), unloaded);
+}
+
+#[test]
+fn a_model_status_transition_survives_the_wire_and_is_absent_when_settled() {
+    let moving = ModelStatusResult {
+        loaded: None,
+        registered: Vec::new(),
+        load_failure: None,
+        transition: Some(ModelTransition {
+            phase: ModelTransitionPhase::Loading,
+            model: "qwen/qwen3-4b".to_owned(),
+        }),
+    };
+    let encoded = rmp_serde::to_vec_named(&moving).unwrap();
+    assert_eq!(
+        rmp_serde::from_slice::<ModelStatusResult>(&encoded).unwrap(),
+        moving
+    );
+
+    let settled = ModelStatusResult {
+        transition: None,
+        ..moving
+    };
+    let encoded = rmp_serde::to_vec_named(&settled).unwrap();
+    // A settled surface says nothing about transitions rather than carrying an
+    // empty one, and a peer that omits the field decodes as settled.
+    assert!(!String::from_utf8_lossy(&encoded).contains("transition"));
+    assert_eq!(
+        rmp_serde::from_slice::<ModelStatusResult>(&encoded).unwrap(),
+        settled
+    );
+    assert_eq!(ModelTransitionPhase::Loading.as_str(), "loading");
+    assert_eq!(ModelTransitionPhase::Unloading.as_str(), "unloading");
 }
 
 #[test]

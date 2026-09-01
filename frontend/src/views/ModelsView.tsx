@@ -1,4 +1,4 @@
-import { Brain, CaretDown, CaretRight, Check, FolderOpen, Power, Stethoscope, Trash } from "@phosphor-icons/react";
+import { Brain, CaretDown, CaretRight, Check, Eject, FolderOpen, Power, PushPin, PushPinSlash, Stethoscope, Trash } from "@phosphor-icons/react";
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { withDaemonOperation } from "../bridge";
@@ -1265,7 +1265,12 @@ export interface ModelPanelProps {
   /** True while a daemon lifecycle command is in flight. */
   modelBusy: boolean;
   onOpenModelChat: (modelId: string, returnFocusTarget?: HTMLElement) => void;
+  /** Brings a model into PAM: a plain load when it is already running, and a
+   *  start carrying the model when it is not. */
   onStartWithModel: (modelId: string) => void;
+  /** The model was dropped from the running daemon; the surface needs
+   *  re-reading. */
+  onModelUnloaded: (modelId: string) => void;
   onModelImported: () => void;
   /** A registration left the registry: the catalog needs re-reading. */
   onModelUnregistered: (modelId: string) => void;
@@ -1284,6 +1289,7 @@ export function ModelPanel({
   modelBusy,
   onOpenModelChat,
   onStartWithModel,
+  onModelUnloaded,
   onModelImported,
   onModelUnregistered,
   onModelWeightsDeleted,
@@ -1312,7 +1318,12 @@ export function ModelPanel({
     verifySequence.current += 1;
     setVerify({ state: "idle" });
   }, [loaded?.modelId]);
-  const restartLabel = offline ? "Start PAM with this model" : "Restart PAM with this model";
+  // A running daemon loads in place; only a paused one needs starting. The
+  // copy stops promising a restart the moment there is nothing to restart.
+  const loadLabel = offline ? "Start PAM with this model" : "Load";
+  // The daemon's own load or unload, distinct from the startup load the
+  // desktop infers above: this is the running daemon changing models.
+  const transition = !offline && modelStatus?.status === "ok" ? modelStatus.transition : null;
 
   // A start holds the desktop command gate for the whole load, so every other
   // panel read is stuck behind it and the panel cannot tell a live eight-minute
@@ -1404,6 +1415,89 @@ export function ModelPanel({
     } finally {
       setUnregisterBusy(null);
     }
+  };
+
+  // Unloading frees the model's memory and leaves PAM serving. Nothing
+  // durable goes — the registration and the weights both stay — so unlike
+  // unregistering it needs no in-row confirmation, only its own busy state
+  // and a place for a refusal to land.
+  const [unloadBusy, setUnloadBusy] = useState(false);
+  const [unloadFailure, setUnloadFailure] = useState<string | null>(null);
+
+  const unloadModel = async () => {
+    setUnloadBusy(true);
+    setUnloadFailure(null);
+    try {
+      const response = await bridge.modelUnload(withDaemonOperation());
+      if (response.status === "ok") {
+        onModelUnloaded(response.model);
+      } else {
+        setUnloadFailure([response.failure.detail, response.failure.recovery].filter(Boolean).join(" "));
+      }
+    } catch (error) {
+      setUnloadFailure(presentError(error));
+    } finally {
+      setUnloadBusy(false);
+    }
+  };
+
+  // Which model a PAM start loads when nothing else is asked for. Read once
+  // per mount and after every change, from the same Settings file the daemon
+  // reads at start.
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  const [pinBusy, setPinBusy] = useState<string | null>(null);
+  const [pinFailure, setPinFailure] = useState<{ modelId: string; detail: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const settings = await bridge.appSettings(withDaemonOperation());
+        if (!cancelled) setDefaultModel(settings.defaultModel);
+      } catch {
+        // A pin that cannot be read leaves every row unpinned rather than
+        // claiming a default PAM might not actually start with.
+        if (!cancelled) setDefaultModel(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, refreshTick]);
+
+  // `modelId` is the row that asked, so a refusal lands next to it; `pin` is
+  // what to persist, which is null when that row is clearing its own pin.
+  const setDefault = async (modelId: string, pin: string | null) => {
+    setPinBusy(modelId);
+    setPinFailure(null);
+    try {
+      const settings = await bridge.settingsSetDefaultModel(withDaemonOperation(), pin);
+      setDefaultModel(settings.defaultModel);
+    } catch (error) {
+      setPinFailure({ modelId, detail: presentError(error) });
+    } finally {
+      setPinBusy(null);
+    }
+  };
+
+  // The pin decides which model a later PAM start loads. It is the same
+  // control wherever a model appears — a catalog row, or the loaded identity
+  // above it — because the model you are running is the one you are most
+  // likely to want back next time.
+  const defaultModelPin = (modelId: string) => {
+    const pinned = defaultModel === modelId;
+    return (
+      <button
+        type="button"
+        className="button button--secondary button--small"
+        aria-pressed={pinned}
+        disabled={pinBusy !== null}
+        onClick={() => void setDefault(modelId, pinned ? null : modelId)}
+      >
+        {pinned ? <PushPinSlash size={17} /> : <PushPin size={17} />}{" "}
+        {pinned ? "Don't start with this" : "Start with this"}
+      </button>
+    );
   };
 
   // Registry health is a different question from the model check above: that
@@ -1507,18 +1601,28 @@ export function ModelPanel({
         ? { label: "on deck", tone: "observed" }
         : { label: "none", tone: "not-reported" };
 
-  // One catalog row, and the home of every per-model action: start, the
-  // weights check, whichever disposal the provenance gate allows, and
-  // unregistering.
-  const restartRow = (model: { modelId: string; sizeBytes: number }) => {
+  // One catalog row, and the home of every per-model action: loading it, the
+  // "start with this" pin, the weights check, whichever disposal the
+  // provenance gate allows, and unregistering.
+  const catalogRow = (model: { modelId: string; sizeBytes: number }) => {
     const health = weightsHealth[model.modelId];
     const rowFailure = weightsFailure?.modelId === model.modelId ? weightsFailure.detail : null;
+    const pinned = defaultModel === model.modelId;
     return (
       <article key={model.modelId}>
         <span className="access-icon"><Brain size={21} /></span>
         <div>
           <strong title={model.modelId}>{model.modelId}</strong>
           <p>{formatModelSize(model.sizeBytes)} on disk</p>
+          {pinned && <p className="model-note">PAM starts with this model.</p>}
+          {transition?.model === model.modelId && (
+            <p className="model-note" role="status">
+              {transition.phase === "loading" ? "Loading…" : "Unloading…"}
+            </p>
+          )}
+          {pinFailure?.modelId === model.modelId && (
+            <p className="model-verify is-fail" role="alert">{pinFailure.detail}</p>
+          )}
           {health && (
             health.health === "ok" ? (
               <p className="model-verify is-pass" role="status">
@@ -1540,11 +1644,15 @@ export function ModelPanel({
           <button
             type="button"
             className="button button--secondary button--small"
-            disabled={modelBusy}
+            disabled={modelBusy || transition !== null}
             onClick={() => onStartWithModel(model.modelId)}
           >
-            <Power size={17} /> {restartLabel}
+            <Power size={17} /> {loadLabel}
           </button>
+          {/* The pin is a preference, not an action on the daemon: clicking a
+              pinned row clears it, so PAM can be told to start with no model
+              at all. */}
+          {defaultModelPin(model.modelId)}
           <button
             type="button"
             className="button button--secondary button--small"
@@ -1743,7 +1851,7 @@ export function ModelPanel({
               PAM is paused, so nothing is loaded right now. Start it with a registered model to
               chat and verify.
             </p>
-            <div className="access-list model-rows">{registered.map(restartRow)}</div>
+            <div className="access-list model-rows">{registered.map(catalogRow)}</div>
           </div>
         ) : (
           <PanelEmpty>PAM is paused, so the local model runtime is not reachable. Start PAM to check on it.</PanelEmpty>
@@ -1781,7 +1889,27 @@ export function ModelPanel({
             >
               Chat
             </button>
+            {/* Unloading returns the model's memory and leaves PAM serving.
+                The registration and the weights both stay, so this is not a
+                disposal: the same model loads again from its catalog row. */}
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              disabled={unloadBusy || transition !== null}
+              onClick={() => void unloadModel()}
+            >
+              <Eject size={17} /> {unloadBusy ? "Unloading…" : "Unload"}
+            </button>
+            {/* The loaded model has no catalog row of its own below, so its
+                pin lives here: the model you are running is the one you are
+                most likely to want back on the next start. */}
+            {defaultModelPin(loaded.modelId)}
           </div>
+          {defaultModel === loaded.modelId && <p className="model-note">PAM starts with this model.</p>}
+          {unloadFailure && <p className="model-verify is-fail" role="alert">{unloadFailure}</p>}
+          {pinFailure?.modelId === loaded.modelId && (
+            <p className="model-verify is-fail" role="alert">{pinFailure.detail}</p>
+          )}
           {verify.state === "pass" && (
             <p className="model-verify is-pass" role="status">
               <Check size={16} aria-hidden="true" /> Verified · {verify.ms} ms · {verify.tokens} token{verify.tokens === 1 ? "" : "s"} back
@@ -1792,14 +1920,14 @@ export function ModelPanel({
           )}
           {registered.some((model) => model.modelId !== loaded.modelId) && (
             <div className="access-list model-rows">
-              {registered.filter((model) => model.modelId !== loaded.modelId).map(restartRow)}
+              {registered.filter((model) => model.modelId !== loaded.modelId).map(catalogRow)}
             </div>
           )}
         </div>
       ) : registered.length > 0 ? (
         <div className="model-runtime">
           <p className="model-note">A model is registered but not loaded. Bring it into memory to chat and verify.</p>
-          <div className="access-list model-rows">{registered.map(restartRow)}</div>
+          <div className="access-list model-rows">{registered.map(catalogRow)}</div>
         </div>
       ) : null}
       {sweepFailure && (
